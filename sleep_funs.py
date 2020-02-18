@@ -32,12 +32,17 @@ class PinkNoise():
         cols[cols >= ncols] = 0
         rows = np.random.randint(nrows, size=n)
         array[rows, cols] = np.random.random(n)
-    
+        
+        flank_samples = int(0.005*fs)
+        rising = np.linspace(0,1,flank_samples)
+        falling = np.linspace(1,0,flank_samples)
+        plateau = np.ones(nrows-2*flank_samples)
+        window = np.concatenate((rising,plateau,falling))
         df = pd.DataFrame(array)
         df.fillna(method='ffill', axis=0, inplace=True)
         total = df.sum(axis=1)
     
-        return total.values
+        return total.values*window
     
     
     def play(self):    
