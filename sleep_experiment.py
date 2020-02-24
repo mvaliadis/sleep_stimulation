@@ -5,9 +5,10 @@ Created on Mon Feb 17 09:36:25 2020
 @author: neuro
 """
 from os import chdir
-chdir('C:/Users/neuro/Documents')
+chdir('C:/Users/neuro/Documents/sleep_stimulation')
 import liesl
 from sleep_funs import PinkNoise
+import matplotlib.pyplot as plt
 #from reiz import clock
 #%% set parameters
 thresh = 0.9 #threshold to detect SO, should be set to -35 later
@@ -33,6 +34,30 @@ t = bfr.get_data()[:,0] #pick one of the mock channels
 #set up a pink noise burst generator
 n = PinkNoise()
 #play sound burst
-n.play()
+tm = np.zeros(100)
+for tr in range(100):
+    tm[tr] = n.play()
 
-
+#    
+#import wave, struct, math, random
+#sampleRate = 44100.0 # hertz
+#duration = 1.0 # seconds
+#frequency = 440.0 # hertz
+#obj = wave.open('sound.wav','w')
+#obj.setnchannels(1) # mono
+#obj.setsampwidth(2)
+#obj.setframerate(sampleRate)
+#for i in range(40000):
+#   value = random.randint(-32767, 32767)
+#   data = struct.pack('<h', value)
+#   obj.writeframesraw( data )
+#obj.close()
+##
+#import pyglet
+#explosion = pyglet.media.load('sound.wav', streaming=False)
+#p = pyglet.media.Player()
+#p.queue(explosion)
+#
+#p.queue([])
+#p.play()
+#p.pause()

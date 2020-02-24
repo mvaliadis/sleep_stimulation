@@ -10,6 +10,8 @@ Created on Mon Feb 17 13:58:01 2020
 import pyaudio
 import numpy as np
 import pandas as pd
+from reiz import clock
+import threading
 
 class PinkNoise():
     def generate_noise(self,duration_in_s = 0.05, fs = 44100, ncols=16):
@@ -41,30 +43,32 @@ class PinkNoise():
         df = pd.DataFrame(array)
         df.fillna(method='ffill', axis=0, inplace=True)
         total = df.sum(axis=1)
+        noise = total.values
+        noise /= max(noise)
+        return noise*window
     
-        return total.values*window
     
-    
-    def play(self):    
+    def open_stream(self):  
         fs = 44100
-        volume = 1     # range [0.0, 1.0]
-                
-        # for paFloat32 sample values must be in range [-1.0, 1.0]
-        stream = self.p.open(format=pyaudio.paFloat32,
+        self.stream = self.p.open(format=pyaudio.paFloat32,
                         channels=1,
                         rate=fs,
                         output=True)
         
-        # play. May repeat with different volume values (if done interactively) 
-        stream.write(volume*self.samples)
-        
-        stream.stop_stream()
-        stream.close()
-        
+    def play(self):
+        volume = 1     # range [0.0, 1.0]
+
+        self.stream.write(volume*self.samples)
+#        t=clock.tick()
+        self.stream.stop_stream()
+        self.stream.start_stream()
+#        stream.close()
+#        return t
 #        self.p.terminate()
         
     def __init__(self):
+#        threading.Thread.__init__(self)
         self.samples = self.generate_noise()
         self.p = pyaudio.PyAudio()
-        
+        self.open_stream()
     
