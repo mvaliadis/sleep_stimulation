@@ -11,10 +11,11 @@ import pyaudio
 import numpy as np
 import pandas as pd
 from reiz import clock
+import reiz
 import threading
 
 class PinkNoise():
-    def generate_noise(self,duration_in_s = 0.05, fs = 44100, ncols=16):
+    def generate_noise(self,duration_in_s = 0.05, fs = 48000, ncols=16):
         """Generates pink noise using the Voss-McCartney algorithm.
         
         nrows: number of values to generate
@@ -49,7 +50,7 @@ class PinkNoise():
     
     
     def open_stream(self):  
-        fs = 44100
+        fs = 48000
         self.stream = self.p.open(format=pyaudio.paFloat32,
                         channels=1,
                         rate=fs,
@@ -57,18 +58,23 @@ class PinkNoise():
         
     def play(self):
         volume = 1     # range [0.0, 1.0]
-
+        if self.reizmarker:
+            reiz.marker.push('pinknoise')
         self.stream.write(volume*self.samples)
-#        t=clock.tick()
         self.stream.stop_stream()
         self.stream.start_stream()
+
 #        stream.close()
 #        return t
 #        self.p.terminate()
         
     def __init__(self):
-#        threading.Thread.__init__(self)
+        threading.Thread.__init__(self)
         self.samples = self.generate_noise()
         self.p = pyaudio.PyAudio()
         self.open_stream()
+        self.reizmarker = True
+        if not reiz.marker.available():
+            print('Marker Server not available!')
+            self.reizmarker = False
     
