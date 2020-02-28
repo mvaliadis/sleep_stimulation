@@ -74,6 +74,9 @@ class PinkNoise():
         self.p = pyaudio.PyAudio()
         self.open_stream()
         self.reizmarker = True
+        self.play()
+        self.play()
+        self.play()
         if not reiz.marker.available():
             print('Marker Server not available!')
             self.reizmarker = False
