@@ -77,7 +77,7 @@ rf = pickle.load(open("rf_model.p", "rb"))
 # to-do later: add to sleep function script
 def epoch_stage(d):
     data = np.float64(d)
-    fs = sinfo
+    fs = bfr.fs
     times = np.arange(len(data)) / fs
     ## select and filter EEG, EOG
     # re-reference EEG signal to the average of mastoids
@@ -146,6 +146,7 @@ for interval in range(10000):
 
     clock.sleep(winshift_in_ms/1000)
  
-#TODO check sleep stage classifier, gate SO detection
+#TODO check sleep stage classifier; determine classifier run (e.g. first 210 minutes, or all night)
+#TODO gate SO detection (last 10 epochs are classified as S2/SWS)
 #TODO send markers
 #TODO set up SO detection
