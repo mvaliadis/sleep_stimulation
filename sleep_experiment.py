@@ -80,17 +80,20 @@ def epoch_stage(data_win):
     fs = sinfo
     times = np.arange(len(data)) / fs
     # select and filter EEG, EOG
-    EEG = data[:,[15]] # select Cz
-    EOG = data[:,[64, 65]] # select 2 HEOG channels
-    # to-do: re-reference to average of mastoids for EEG
-    # to-do: bipolarize HEOG
+    CPz_ref = data[:,[48]]     
+    EEG = data[:,[17]] #Cz
+    # add back a priori reference channel (Cpz) to EEG signal
+    unref_data = EEG + CPz_ref
+    # re-reference EEG signal to the average of mastoids 
+    EEG = unref_data - (data[:,[12]] + data[:,[18]])/2
+    # HEOG data selection
+    EOG = data[:,[70]] #HEOG
     # combine EEG & EOG for filtering
     EEG_EOG = np.transpose(np.concatenate([EEG, EOG], axis=1))
     EEG_EOG = filter_data(EEG_EOG, fs, 0.5, 35, method='fir')
     EEG_EOG = notch_filter(EEG_EOG, fs, 50)
     # select and filter EMG 
-    EMG = data[:,[70, 71]] 
-    # to-do: bipolarize EMG
+    EMG = data[:,[72]]  
     EMG = filter_data(EMG, fs, 10, 100, method='fir')
     # combine all data streams back into one array
     data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))
@@ -148,7 +151,6 @@ for interval in range(10000):
 
     clock.sleep(winshift_in_ms/1000)
  
-#TODO filter EEG (rereference, bipolarize EMG, EOG)
 #TODO check sleep stage classifier, gate SO detection
 #TODO send markers
 #TODO set up SO detection
