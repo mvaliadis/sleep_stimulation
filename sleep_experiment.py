@@ -75,33 +75,27 @@ n.samples = n.samples * volume
 rf = pickle.load(open("rf_model.p", "rb"))
 
 # to-do later: add to sleep function script
-def epoch_stage(data_win):
+def epoch_stage(d):
     data = np.float64(d)
     fs = sinfo
     times = np.arange(len(data)) / fs
-    # select and filter EEG, EOG
-    CPz_ref = data[:,[48]]     
-    EEG = data[:,[17]] #Cz
-    # add back a priori reference channel (Cpz) to EEG signal
-    unref_data = EEG + CPz_ref
-    # re-reference EEG signal to the average of mastoids 
-    EEG = unref_data - (data[:,[12]] + data[:,[18]])/2
+    ## select and filter EEG, EOG
+    # re-reference EEG signal to the average of mastoids
+    EEG = data[:,0:63] - (data[:,[12]] + data[:,[18]])/2
+    EEG = EEG[:,[15]] #select only Cz
     # HEOG data selection
-    EOG = data[:,[70]] #HEOG
+    EOG = data[:,[70]] 
     # combine EEG & EOG for filtering
     EEG_EOG = np.transpose(np.concatenate([EEG, EOG], axis=1))
     EEG_EOG = filter_data(EEG_EOG, fs, 0.5, 35, method='fir')
     EEG_EOG = notch_filter(EEG_EOG, fs, 50)
     # select and filter EMG 
-    EMG = data[:,[72]]  
+    EMG = np.transpose(data[:,[72]])  
     EMG = filter_data(EMG, fs, 10, 100, method='fir')
     # combine all data streams back into one array
-    data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))
+    data = np.transpose(np.concatenate([EEG_EOG, EMG]))
     # partition data into 30s epoch windows
-    times, data_win = yasa.sliding_window(data.get_data()*1e6, 
-                                          fs, window=30)
-    # swap to correct axis dimensions for bandpower calculation
-    data_win = np.swapaxes(data_win,0,1)
+    times, data_win = yasa.sliding_window(data*1e6, fs, window=30, axis=0)
     # compute bandpower of epoch
     win = bandpower(data_win, fs)
     return win
@@ -111,9 +105,10 @@ def sleep_staging(bfr):
     while True:
         d = bfr.get_data()
         global sleep_stage
+        # calcule PSD per epoch for delta, theta, alpha, sigma, & beta
         sleep_stage = epoch_stage(d)
         # predict sleep stage of epoch
-        stage_predict = rf.predict(data_win)
+        stage_predict = rf.predict(sleep_stage)
         print(stage_predict)
         # pull data every ~15s
         reiz.clock.sleep(15)
