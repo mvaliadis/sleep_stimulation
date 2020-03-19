@@ -142,10 +142,9 @@ class PinkNoise():
                         output=True)
         
     def play(self):
-        volume = 1     # range [0.0, 1.0]
         if self.reizmarker:
             reiz.marker.push('pinknoise')
-        self.stream.write(volume*self.samples)
+        self.stream.write(self.samples)
         self.stream.stop_stream()
         self.stream.start_stream()
 
@@ -153,9 +152,9 @@ class PinkNoise():
 #        return t
 #        self.p.terminate()
         
-    def __init__(self):
+    def __init__(self, volume):
         threading.Thread.__init__(self)
-        self.samples = self.generate_noise()
+        self.samples = self.generate_noise()*volume
         self.p = pyaudio.PyAudio()
         self.open_stream()
         self.reizmarker = True
