@@ -30,7 +30,7 @@ winshift_in_ms = 20
 #-----------------------------
 #----Tip: for development and testing, you can just set up a fake EEG stream by
 #----entering the following into your command line:
-#----liesl mock -type EEG
+#----liesl mock --type EEG
 sinfo = liesl.get_streaminfos_matching(type = 'EEG')
 bfr = liesl.RingBuffer(sinfo[0], duration_in_ms = 30000) #30 s buffer to allow sleep staging
 bfr.start()
@@ -67,8 +67,7 @@ while index_pos == []:
             volume = 1   
 
 #%% set up pink noise generator
-n = PinkNoise()
-n.samples = n.samples * volume
+n = PinkNoise(volume)
 
 #%% build sleep staging function
 # import trained random forest classifier
@@ -80,9 +79,8 @@ def epoch_stage(d):
     fs = bfr.fs
     times = np.arange(len(data)) / fs
     ## select and filter EEG, EOG
-    # re-reference EEG signal to the average of mastoids
-    EEG = data[:,0:63] - (data[:,[12]] + data[:,[18]])/2
-    EEG = EEG[:,[15]] #select only Cz
+    # re-reference EEG (Cz) signal to the average of mastoids
+    EEG = data[:,[15]] - (data[:,[12]] + data[:,[18]])/2
     # HEOG data selection
     EOG = data[:,[70]] 
     # combine EEG & EOG for filtering
@@ -93,47 +91,64 @@ def epoch_stage(d):
     EMG = np.transpose(data[:,[72]])  
     EMG = filter_data(EMG, fs, 10, 100, method='fir')
     # combine all data streams back into one array
-    data = np.transpose(np.concatenate([EEG_EOG, EMG]))
-    # partition data into 30s epoch windows
-    times, data_win = yasa.sliding_window(data*1e6, fs, window=30, axis=0)
+    data = np.concatenate([EEG_EOG, EMG])*1e6
+    # partition data into a manner readable by bandpower calculation (epochs x channels X time points)
+    data_win = np.expand_dims(data, axis=0) #adds requisite singleton dimension for bandpower calculation
     # compute bandpower of epoch
     win = bandpower(data_win, fs)
     return win
 
-# this returns sleep stage as a global variable. Not the most elegant way of doing this, but it works for now
+# sleep stage predict function
 def sleep_staging(bfr):
     while True:
         d = bfr.get_data()
-        global sleep_stage
         # calcule PSD per epoch for delta, theta, alpha, sigma, & beta
-        sleep_stage = epoch_stage(d)
+        epoch_psd = epoch_stage(d)
         # predict sleep stage of epoch
-        stage_predict = rf.predict(sleep_stage)
+        stage_predict = rf.predict(epoch_psd)
         print(stage_predict)
+        # append stage arrays 
+        stage_predictArrays = []
+        stage_predictArrays.append(stage_predictArrays)
         # pull data every ~15s
         reiz.clock.sleep(15)
         
 #%% put sleep stager into separate thread that can run in the background
+global stage_predict, stage_predictArrays
 sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
+# to-do: need to find a way to run this for a fixed period of time
+interval = 12600
+def startTimer(interval):
+    threading.Thread(target = sleep_staging, args = (bfr,))
+    threading.Timer(interval, startTimer).start()
+# start thread
 sleep_stager.start()
+
+   
+#%% initialize second data and marker stream for SW detection
+sinfo2 = liesl.get_streaminfos_matching(type = 'EEG') #is it necessary to reinitialize this?
+bfr2 = liesl.RingBuffer(sinfo2[0], duration_in_ms = 2000) 
+bfr2.start()
+
+bfr2.await_running()
+
 
 winshift_in_ms = 20
 winshift_in_samples = int((winshift_in_ms/1000)*sinfo.nominal_srate())
 block_auditory_stim = False
 tblock = 0
-for interval in range(10000):
-    if sleep_stage == 1: #we need to build something that detects whether the last n epochs were slow wave sleep.
+for interval in range(10000): 
+    if stage_predict == 1: #to-do: detect whether the last n epochs were slow wave sleep.
         if clock.now() -tblock > 2.4:
             block_auditory_stim = False
             
         #%% proper channel needs to be picked here
         d = bfr.get_data()[:,1] #presumably C3, test channel is 1Hz sinusoid
         
-        #%% online data preprocessing needs to be added here
-        b,a = signal.butter(4, (.5, 1.5), btype = 'bandpass', fs = bfr.fs)
-        d = signal.filtfilt(b,a,d, axis = 0)
+        #%% online SWS detection pre-processing
+        d = filter_data(d, fs, 0.25, 2.0, method='fir')
         
-        if max(d[-2:]) > maxamp * .9 and block_auditory_stim == False: # thresholding: SO?
+        if min(d[-2:]) < maxamp * .9 and block_auditory_stim == False: # thresholding: SO?
             # wait for 0ms, 500ms, depending on Up/Downstate
             clock.sleep(time_delay)
             # deliver tone twice with 1.075s interval
@@ -146,7 +161,6 @@ for interval in range(10000):
 
     clock.sleep(winshift_in_ms/1000)
  
-#TODO check sleep stage classifier; determine classifier run (e.g. first 210 minutes, or all night)
+#TODO find way to run classifier thread for 210 minutes
 #TODO gate SO detection (last 10 epochs are classified as S2/SWS)
-#TODO send markers
-#TODO set up SO detection
+#TODO replace sleep with debiasing sleep 
