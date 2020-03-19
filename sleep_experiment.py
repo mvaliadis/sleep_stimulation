@@ -98,9 +98,14 @@ def epoch_stage(d):
     win = bandpower(data_win, fs)
     return win
 
+
+
 # sleep stage predict function
 def sleep_staging(bfr):
-    while True:
+    tz = reiz.clock.now()
+    #loop for 210 minutes (12600s)
+    while reiz.clock.now() - tz < 12600:
+    #while True:    
         d = bfr.get_data()
         # calcule PSD per epoch for delta, theta, alpha, sigma, & beta
         epoch_psd = epoch_stage(d)
@@ -108,37 +113,37 @@ def sleep_staging(bfr):
         stage_predict = rf.predict(epoch_psd)
         print(stage_predict)
         # append stage arrays 
-        stage_predictArrays = []
-        stage_predictArrays.append(stage_predictArrays)
+        stage_predictArrays.append(stage_predict)
         # pull data every ~15s
         reiz.clock.sleep(15)
         
 #%% put sleep stager into separate thread that can run in the background
-global stage_predict, stage_predictArrays
+global stage_predictArrays
+stage_predictArrays = []
 sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
-# to-do: need to find a way to run this for a fixed period of time
-interval = 12600
-def startTimer(interval):
-    threading.Thread(target = sleep_staging, args = (bfr,))
-    threading.Timer(interval, startTimer).start()
+
 # start thread
 sleep_stager.start()
 
    
 #%% initialize second data and marker stream for SW detection
-sinfo2 = liesl.get_streaminfos_matching(type = 'EEG') #is it necessary to reinitialize this?
-bfr2 = liesl.RingBuffer(sinfo2[0], duration_in_ms = 2000) 
+bfr2 = liesl.RingBuffer(sinfo[0], duration_in_ms = 2000) 
 bfr2.start()
 
 bfr2.await_running()
 
+stages = np.concatenate(stageArrays)
 
 winshift_in_ms = 20
 winshift_in_samples = int((winshift_in_ms/1000)*sinfo.nominal_srate())
 block_auditory_stim = False
 tblock = 0
-for interval in range(10000): 
-    if stage_predict == 1: #to-do: detect whether the last n epochs were slow wave sleep.
+
+tz = reiz.clock.now()
+#loop for 210 minutes (12600s)
+while reiz.clock.now() - tz < 12600:
+    reiz.clock.tick()
+    if sum(stage_predictArrays[-10:-1]) == 10: #to-do: detect whether the last n epochs were slow wave sleep.
         if clock.now() -tblock > 2.4:
             block_auditory_stim = False
             
@@ -148,7 +153,7 @@ for interval in range(10000):
         #%% online SWS detection pre-processing
         d = filter_data(d, fs, 0.25, 2.0, method='fir')
         
-        if min(d[-2:]) < maxamp * .9 and block_auditory_stim == False: # thresholding: SO?
+        if min(d[-2:]) < maxamp and block_auditory_stim == False: # thresholding: SO?
             # wait for 0ms, 500ms, depending on Up/Downstate
             clock.sleep(time_delay)
             # deliver tone twice with 1.075s interval
@@ -159,8 +164,10 @@ for interval in range(10000):
             block_auditory_stim = True 
             tblock = clock.now()
 
-    clock.sleep(winshift_in_ms/1000)
+    clock.sleep_debiased(winshift_in_ms/1000)
  
-#TODO find way to run classifier thread for 210 minutes
-#TODO gate SO detection (last 10 epochs are classified as S2/SWS)
-#TODO replace sleep with debiasing sleep 
+## to-do: take nearest channels in case of failure for detection/classifier, take out EOG/EMG if they fail
+## to-do: train classifier on different streams (EEG,EOG,EMG)?/try log. reg. or linear SVM
+## to-do: stage sleep 
+## to-do: border effects
+## to-do: obtain laptop
