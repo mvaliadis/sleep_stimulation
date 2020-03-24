@@ -16,6 +16,33 @@ import threading
 import mne
 from scipy.signal import welch
 
+def thresholdcrossings(x, threshold):
+    """Find indices of threshold-crossings in a 1D array.
+
+    Parameters
+    ----------
+    x : np.array
+        One dimensional data vector.
+
+    Returns
+    -------
+    idx_zc : np.array
+        Indices of threshold-crossings
+
+    Examples
+    --------
+
+        >>> import numpy as np
+        >>> from sleep_funs import thresholdcrossings
+        >>> a = np.array([20, 29, -43, -10, 16, 37, 45, -36, -29])
+        >>> thresholdcrossings(a)
+            array([1, 2, 6, 7], dtype=int64)
+    """
+    pos = x > threshold
+    npos = ~pos
+    return ((pos[:-1] & npos[1:]) | (npos[:-1] & pos[1:])).nonzero()[0]
+
+
 def process_raw_EDF(fname):
     raw_train = mne.io.read_raw_edf(fname + '-PSG.edf', preload=True)
     
