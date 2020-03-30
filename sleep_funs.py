@@ -16,6 +16,13 @@ import threading
 import mne
 from scipy.signal import welch
 
+def hjorth_mobility(x):
+    return np.sqrt(np.var(np.diff(x))/np.var(x))
+
+def hjorth_complexity(x):
+    """ calculates Hjorth complexity of the input time series vector x"""
+    return hjorth_mobility(np.diff(x))/hjorth_mobility(x)
+
 def thresholdcrossings(x, threshold):
     """Find indices of threshold-crossings in a 1D array.
 
