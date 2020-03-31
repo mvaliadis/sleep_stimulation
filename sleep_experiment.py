@@ -151,7 +151,7 @@ while reiz.clock.now() - tz < 12600:
         d = bfr.get_data()[:,1] #presumably C3, test channel is 1Hz sinusoid
         
         #%% online SWS detection pre-processing
-        d = filter_data(d, fs, 0.25, 2.0, method='fir')
+        d = filter_data(d, fs, 0.25, 2.0, method='iir')
         
         if min(d[-2:]) < maxamp and block_auditory_stim == False: # thresholding: SO?
             # wait for 0ms, 500ms, depending on Up/Downstate
@@ -167,7 +167,6 @@ while reiz.clock.now() - tz < 12600:
     clock.sleep_debiased(winshift_in_ms/1000)
  
 ## to-do: take nearest channels in case of failure for detection/classifier, take out EOG/EMG if they fail
-## to-do: train classifier on different streams (EEG,EOG,EMG)?/try log. reg. or linear SVM
+## to-do: train classifier on different streams (EEG,EOG,EMG)
 ## to-do: stage sleep 
-## to-do: border effects
-## to-do: obtain laptop
+## to-do: border effect plots
