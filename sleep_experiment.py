@@ -132,7 +132,7 @@ sleep_stager.start()
 
    
 #%% initialize second data and marker stream for SW detection
-bfr2 = liesl.RingBuffer(sinfo[0], duration_in_ms = 2000) 
+bfr2 = liesl.RingBuffer(sinfo[0], duration_in_ms = 3000) 
 bfr2.start()
 
 bfr2.await_running()
@@ -157,10 +157,10 @@ while reiz.clock.now() - tz < 12600:
             block_auditory_stim = False
             
         #%% proper channel needs to be picked here
-        d = bfr.get_data()[:,9] #C3, test channel is 1Hz sinusoid
+        d = bfr.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
         
         #%% online SWS detection pre-processing
-        d = filter_data(d, fs, 0.25, 2.0, method='fir')
+        d = filter_data(d, fs, l_freq='none', h_freq=2.0, method='fir')
         
         if min(d[-2:]) < minamp and block_auditory_stim == False: 
             # wait for 0ms, 500ms, depending on Up/Downstate
