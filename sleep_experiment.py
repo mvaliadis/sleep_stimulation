@@ -75,8 +75,8 @@ n = PinkNoise(volume)
 rf = pickle.load(open("rf_model.p", "rb"))
 
 # to-do later: add to sleep function script
-def epoch_stage(d):
-    data = np.float64(d)
+def epoch_stage(dat):
+    data = np.float64(dat)
     fs = bfr.fs
     times = np.arange(len(data)) / fs
     ## select and filter EEG, EOG
@@ -109,9 +109,9 @@ def sleep_staging(bfr):
     #loop for 210 minutes (12600s)
     while reiz.clock.now() - tz < 12600:
     #while True:    
-        d = bfr.get_data()
+        dat = bfr.get_data()
         # calcule PSD per epoch for delta, theta, alpha, sigma, & beta
-        epoch_psd = epoch_stage(d)
+        epoch_psd = epoch_stage(dat)
         # predict sleep stage of epoch
         stage_predict = rf.predict(epoch_psd)[0]
         print(stage_predict)
@@ -119,8 +119,7 @@ def sleep_staging(bfr):
         stage_predictArrays.append(stage_predict)
         # pull data every ~15s
         reiz.clock.sleep(15)
-        
-        
+             
         
 #%% put sleep stager into separate thread that can run in the background
 global stage_predictArrays
@@ -136,8 +135,6 @@ bfr2 = liesl.RingBuffer(sinfo[0], duration_in_ms = 3000)
 bfr2.start()
 
 bfr2.await_running()
-
-stages = np.concatenate(stageArrays)
 
 winshift_in_ms = 20
 winshift_in_samples = int((winshift_in_ms/1000)*sinfo[0].nominal_srate())
@@ -160,7 +157,7 @@ while reiz.clock.now() - tz < 12600:
         d = bfr.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
         
         #%% online SWS detection pre-processing
-        d = filter_data(d, fs, l_freq='none', h_freq=2.0, method='fir')
+        d = filter_data(d, sfreq=sinfo[0].nominal_srate(), l_freq=None, h_freq=2.0, method='fir')
         
         if min(d[-2:]) < minamp and block_auditory_stim == False: 
             # wait for 0ms, 500ms, depending on Up/Downstate
