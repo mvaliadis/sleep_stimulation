@@ -14,8 +14,9 @@ from reiz import clock
 import reiz
 import threading
 import mne
+from scipy import signal
 from scipy.signal import welch
-
+import pickle
 def hjorth_mobility(x):
     return np.sqrt(np.var(np.diff(x))/np.var(x))
 
@@ -133,6 +134,50 @@ def bandpower(epochs, fs):
 
     return np.concatenate(X, axis=1)
 
+def epoch_stage(dat, fs):
+    data = np.float64(dat)
+    times = np.arange(len(data)) / fs
+    ## select and filter EEG, EOG
+    # re-reference EEG (Cz) signal to the average of mastoids
+    # EEG = data[:,[15]] - (data[:,[12]] + data[:,[18]])/2
+    EEG = data[:,[10]]
+    # EOG data selection
+    EOG = data[:,[21]] 
+    # combine EEG & EOG for filtering
+    EEG_EOG = np.transpose(np.concatenate([EEG, EOG], axis=1))
+    EEG_EOG = signal.filtfilt(*signal.butter(4, (0.5, 35), fs = fs, btype = 'pass'), EEG_EOG)
+    EEG_EOG = signal.filtfilt(*signal.butter(4, (49, 51), fs = fs, btype = 'stop'), EEG_EOG)
+    # select and filter EMG 
+    EMG = np.transpose(data[:,[20]])  
+    EMG = signal.filtfilt(*signal.butter(4, (10, 100), fs = fs, btype = 'pass'), EMG)
+    # combine all data streams back into one array
+    data = np.concatenate([EEG_EOG, EMG])*1e6
+    # partition data into a manner readable by bandpower calculation (epochs x channels X time points)
+    data_win = np.expand_dims(data, axis=0) #adds requisite singleton dimension for bandpower calculation
+    # compute bandpower of epoch
+    win = bandpower(data_win, fs)
+    return win
+
+def sleep_staging(bfr):
+    rf = pickle.load(open("rf_model.p", "rb"))
+    global stage_predictArrays
+    stage_predictArrays = []
+    tz = reiz.clock.now()
+    #loop for 210 minutes (12600s)
+    while reiz.clock.now() - tz < 12600:
+    #while True:    
+        dat = bfr.get_data()
+        # calcule PSD per epoch for delta, theta, alpha, sigma, & beta
+        epoch_psd = epoch_stage(dat, bfr.fs)
+        # predict sleep stage of epoch
+        stage_predict = rf.predict(epoch_psd)[0]
+        print(stage_predict)
+        # append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
+        stage_predict = 1
+        stage_predictArrays.append(stage_predict)
+        # pull data every ~15s
+        reiz.clock.sleep(15)
+  
 class PinkNoise():
     def generate_noise(self,duration_in_s = 0.05, fs = 48000, ncols=16):
         """Generates pink noise using the Voss-McCartney algorithm.
