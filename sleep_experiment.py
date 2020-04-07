@@ -58,11 +58,9 @@ winshift_in_ms = 20
 #             volume = 1
 #         # 2 corresponds to down-state targeting     
 #         elif int(subj_cond[index_pos[0],:][cond]) == 2:
-time_delay = 0
-volume = 1   
+ 
 
 #%% set up pink noise generator
-n = PinkNoise(volume)
 
 
 
@@ -97,43 +95,47 @@ winshift_in_samples = int((winshift_in_ms/1000)*sinfo[0].nominal_srate())
 block_auditory_stim = False
 tblock = 0
 filtparams = signal.butter(4, 4, fs = bfr2.fs)
-tz = reiz.clock.now()
 #loop for 210 minutes (12600s)
 nepochsthresh = 0 #epochs of N2/3 required for SW detection and pink noise trigger
 
     
-def SO_detection(bfr = bfr2, filtparams = filtparams, nepochsthresh = 0, minamp = -35, winshift_in_ms = 20):
+def SO_detection(bfr = bfr2, filtparams = filtparams, 
+                 nepochsthresh = 0, minamp = -35, 
+                 winshift_in_ms = 20, totalruntime = 10,
+                 time_delay = 0, volume = 1  ):
+    
+    n = PinkNoise(volume)
+
     block_auditory_stim = False
     tblock = 0
-    reiz.clock.tick()
-    if sum(stage_predictArrays[-10:-1]) > nepochsthresh: 
-        if clock.now() -tblock > 2.4:
-            block_auditory_stim = False
+    tz = reiz.clock.now()
+    while reiz.clock.now() - tz < totalruntime:
+        reiz.clock.tick()
+        if sum(stage_predictArrays[-10:-1]) > nepochsthresh: 
+            if clock.now() -tblock > 2.4:
+                block_auditory_stim = False
+                
+            #%% proper channel needs to be picked here
+            d = bfr.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
             
-        #%% proper channel needs to be picked here
-        d = bfr.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
-        
-        #%% online SWS detection pre-processing
-        d = signal.filtfilt(*filtparams, d)
-        crit = min(d[-6:]) - np.median(d)
-        # reiz.marker.push('crit: {}'.format(crit))
-        if crit < minamp and block_auditory_stim == False: 
-            # wait for 0ms, 500ms, depending on Up/Downstate
-            clock.sleep(time_delay)
-            # deliver tone twice with 1.075s interval
-            n.play()
-            clock.sleep(1.075)
-            n.play()
-            # blocking auditory stimulation for 2.5s
-            block_auditory_stim = True 
-            tblock = clock.now()
-            
-    clock.sleep_debiased(winshift_in_ms/1000)
+            #%% online SWS detection pre-processing
+            d = signal.filtfilt(*filtparams, d)
+            crit = min(d[-6:]) - np.median(d)
+            # reiz.marker.push('crit: {}'.format(crit))
+            if crit < minamp and block_auditory_stim == False: 
+                # wait for 0ms, 500ms, depending on Up/Downstate
+                clock.sleep(time_delay)
+                # deliver tone twice with 1.075s interval
+                n.play()
+                clock.sleep(1.075)
+                n.play()
+                # blocking auditory stimulation for 2.5s
+                block_auditory_stim = True 
+                tblock = clock.now()
+                
+        clock.sleep_debiased(winshift_in_ms/1000)
 
-while reiz.clock.now() - tz < 12600:
-    SO_detection()
-    
-    
+
     
 ## to-do: take nearest channels in case of failure for detection/classifier, take out EOG/EMG if they fail
 ## to-do: write channel failure function accounting for both signal quality reduction and non-physio channel activity
