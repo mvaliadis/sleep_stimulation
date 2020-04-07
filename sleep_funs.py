@@ -15,17 +15,41 @@ import reiz
 import threading
 import mne
 from scipy import signal
-from scipy.signal import welch
+from scipy.signal import welch, resample, resample_poly
 import pickle
 import liesl
 
 
 def hjorth_mobility(x):
     return np.sqrt(np.var(np.diff(x))/np.var(x))
-
 def hjorth_complexity(x):
     """ calculates Hjorth complexity of the input time series vector x"""
     return hjorth_mobility(np.diff(x))/hjorth_mobility(x)
+
+def downsample_scaled(data, old_sf, new_sf):
+    ## The following function allows the user to downsample the data, so long as the new sampling rate is a multiple of 100 or 128
+    ## and the ratio of the old/new sampling rate is an integer number.
+    
+    # Check if we can downsample to 100 or 128 Hz
+    if old_sf > 128 and new_sf > 128: #to-do edit to allow for 100 Hz minimum fs...
+        if old_sf % 100 == 0 or old_sf % 128 == 0:
+            if new_sf % 100 == 0 or new_sf % 128 == 0:
+                if old_sf % new_sf == 0:
+                    decim = int(old_sf/new_sf)
+                    data = data[::decim]
+                    print(f'Downsampled data by a factor of {decim}')
+                else:
+                    # resample/resample_poly not integer numbers
+                    raise ValueError('The ratio of the old and new sampling rate is not an integer value')
+            else:
+                raise ValueError('The requested sampling rate must be a multiple of 100 or 128')
+        else:
+            # resample/resample_poly not integer numbers
+            raise ValueError('The initial sampling rare is not divisible by 100 or 128!') 
+    else:
+        raise ValueError('The initial or requested sampling rate must both be larger than 128 Hz!')
+         
+    return data
 
 def thresholdcrossings(x, threshold):
     """Find indices of threshold-crossings in a 1D array.
