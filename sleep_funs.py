@@ -17,6 +17,9 @@ import mne
 from scipy import signal
 from scipy.signal import welch
 import pickle
+import liesl
+
+
 def hjorth_mobility(x):
     return np.sqrt(np.var(np.diff(x))/np.var(x))
 
@@ -177,7 +180,52 @@ def sleep_staging(bfr):
         stage_predictArrays.append(stage_predict)
         # pull data every ~15s
         reiz.clock.sleep(15)
-  
+
+
+def SO_detection(nepochsthresh = 0, minamp = -35, 
+                 winshift_in_ms = 20, totalruntime = 12600,
+                 time_delay = 0, volume = 1  ):
+    sinfo = liesl.get_streaminfos_matching(type = 'EEG')
+
+    bfr2 = liesl.RingBuffer(sinfo[0], duration_in_ms = 30000) 
+    bfr2.start()
+
+    bfr2.await_running()
+    
+    filtparams = signal.butter(4, 4, fs = bfr2.fs)
+
+    n = PinkNoise(volume)
+
+    block_auditory_stim = False
+    tblock = 0
+    tz = reiz.clock.now()
+    while reiz.clock.now() - tz < totalruntime:
+        reiz.clock.tick()
+        if sum(stage_predictArrays[-10:-1]) > nepochsthresh: 
+            if clock.now() -tblock > 2.4:
+                block_auditory_stim = False
+                
+            #%% proper channel needs to be picked here
+            d = bfr2.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
+            
+            #%% online SWS detection pre-processing
+            d = signal.filtfilt(*filtparams, d)
+            crit = min(d[-6:]) - np.median(d)
+            # reiz.marker.push('crit: {}'.format(crit))
+            if crit < minamp and block_auditory_stim == False: 
+                # wait for 0ms, 500ms, depending on Up/Downstate
+                clock.sleep(time_delay)
+                # deliver tone twice with 1.075s interval
+                n.play()
+                clock.sleep(1.075)
+                n.play()
+                # blocking auditory stimulation for 2.5s
+                block_auditory_stim = True 
+                tblock = clock.now()
+                
+        clock.sleep_debiased(winshift_in_ms/1000)
+
+
 class PinkNoise():
     def generate_noise(self,duration_in_s = 0.05, fs = 48000, ncols=16):
         """Generates pink noise using the Voss-McCartney algorithm.
