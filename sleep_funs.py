@@ -18,6 +18,7 @@ from scipy import signal
 from scipy.signal import welch, resample, resample_poly
 import pickle
 import liesl
+import yasa
 
 
 def hjorth_mobility(x):
@@ -219,13 +220,26 @@ def SO_detection(nepochsthresh = 0, minamp = -35,
     filtparams = signal.butter(4, 4, fs = bfr2.fs)
 
     n = PinkNoise(volume)
+    
+    #baseline levels
+    d = bfr2.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
+    #online SWS detection pre-processing
+    d = signal.filtfilt(*filtparams, d)
+    # extract bandpower 
+    freqs, psd = welch(d, sf=bfr2.fs, nperseg=int(4 * bfr2.fs), average='median')
+    # calculate relative alpha power
+    rel_alpha = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(8, 12, 'Alpha')])
+    # calculate relative line noise power
+    rel_ln = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(49, 51, 'LineNoise')])
+    # calculate alpha/line ratio
+    baseline_ln_alpha = rel_ln/alpha_ln
 
     block_auditory_stim = False
     tblock = 0
     tz = reiz.clock.now()
     while reiz.clock.now() - tz < totalruntime:
         reiz.clock.tick()
-        if sum(stage_predictArrays[-10:-1]) > nepochsthresh: 
+        if sum(stage_predictArrays[-10:]) > nepochsthresh: 
             if clock.now() -tblock > 2.4:
                 block_auditory_stim = False
                 
@@ -234,9 +248,21 @@ def SO_detection(nepochsthresh = 0, minamp = -35,
             
             #%% online SWS detection pre-processing
             d = signal.filtfilt(*filtparams, d)
+            # extract bandpower 
+            freqs, psd = welch(d, sf=bfr2.fs, nperseg=int(4 * bfr2.fs), average='median')
+            # calculate relative alpha power
+            rel_alpha = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(8, 12, 'Alpha')])
+            # calculate relative line noise power
+            rel_ln = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(49, 51, 'LineNoise')])
+            # calculate alpha/line ratio
+            ln_alpha = rel_ln/alpha_ln
+          
             crit = min(d[-6:]) - np.median(d)
             # reiz.marker.push('crit: {}'.format(crit))
             if crit < minamp and block_auditory_stim == False: 
+                # change the minamp to reflect the most negative median amplitude from the last 5 seconds
+                if np.median(d[-5* bfr2.fs:]) < minamp:
+                    minamp = np.median(d[-5* bfr2.fs:])
                 # wait for 0ms, 500ms, depending on Up/Downstate
                 clock.sleep(time_delay)
                 # deliver tone twice with 1.075s interval
