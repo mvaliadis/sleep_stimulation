@@ -168,7 +168,7 @@ def epoch_stage(dat, fs):
     ## select and filter EEG, EOG
     # re-reference EEG (Cz) signal to the average of mastoids
     # EEG = data[:,[15]] - (data[:,[12]] + data[:,[18]])/2
-    EEG = data[:,[10]]
+    EEG = data[:,[9,10]] #C3 and Cz - add a few relevant channels ()
     # EOG data selection
     EOG = data[:,[21]] 
     # combine EEG & EOG for filtering
@@ -206,6 +206,17 @@ def sleep_staging(bfr):
         # pull data every ~15s
         reiz.clock.sleep(15)
 
+#def channel_failure():
+    #global channel_failureArray #21 elements set to 1, if failed fifth position 0
+    #baseline ratio levels
+    # extract bandpower 
+    #freqs, psd = welch(d, sf=bfr2.fs, nperseg=int(4 * bfr2.fs), average='median')
+    # calculate relative alpha power
+    #rel_alpha = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(8, 12, 'Alpha')])
+    # calculate relative line noise power
+    #rel_ln = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(49, 51, 'LineNoise')])
+    # calculate alpha/line ratio
+    #baseline_ln_alpha = rel_ln/rel_alpha
 
 def SO_detection(nepochsthresh = 0, minamp = -35, 
                  winshift_in_ms = 20, totalruntime = 12600,
@@ -220,19 +231,6 @@ def SO_detection(nepochsthresh = 0, minamp = -35,
     filtparams = signal.butter(4, 4, fs = bfr2.fs)
 
     n = PinkNoise(volume)
-    
-    #baseline levels
-    d = bfr2.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
-    #online SWS detection pre-processing
-    d = signal.filtfilt(*filtparams, d)
-    # extract bandpower 
-    freqs, psd = welch(d, sf=bfr2.fs, nperseg=int(4 * bfr2.fs), average='median')
-    # calculate relative alpha power
-    rel_alpha = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(8, 12, 'Alpha')])
-    # calculate relative line noise power
-    rel_ln = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(49, 51, 'LineNoise')])
-    # calculate alpha/line ratio
-    baseline_ln_alpha = rel_ln/alpha_ln
 
     block_auditory_stim = False
     tblock = 0
@@ -248,21 +246,12 @@ def SO_detection(nepochsthresh = 0, minamp = -35,
             
             #%% online SWS detection pre-processing
             d = signal.filtfilt(*filtparams, d)
-            # extract bandpower 
-            freqs, psd = welch(d, sf=bfr2.fs, nperseg=int(4 * bfr2.fs), average='median')
-            # calculate relative alpha power
-            rel_alpha = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(8, 12, 'Alpha')])
-            # calculate relative line noise power
-            rel_ln = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(49, 51, 'LineNoise')])
-            # calculate alpha/line ratio
-            ln_alpha = rel_ln/alpha_ln
           
             crit = min(d[-6:]) - np.median(d)
             # reiz.marker.push('crit: {}'.format(crit))
+            # change the minamp to reflect the most negative median amplitude from the last 5 seconds
+            minamp = min((d[-5* bfr2.fs:]) - np.median(d), -35)
             if crit < minamp and block_auditory_stim == False: 
-                # change the minamp to reflect the most negative median amplitude from the last 5 seconds
-                if np.median(d[-5* bfr2.fs:]) < minamp:
-                    minamp = np.median(d[-5* bfr2.fs:])
                 # wait for 0ms, 500ms, depending on Up/Downstate
                 clock.sleep(time_delay)
                 # deliver tone twice with 1.075s interval
