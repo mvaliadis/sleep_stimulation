@@ -187,36 +187,64 @@ def epoch_stage(dat, fs):
     return win
 
 def sleep_staging(bfr):
+    # to-do: upload other back-up (bipolar) model, save only as rf.predict due to large file size
     rf = pickle.load(open("rf_model.p", "rb"))
+    # rf_bipolar = pickle.load(open("rf_bipolar_model.p", "rb"))
     global stage_predictArrays
     stage_predictArrays = []
     tz = reiz.clock.now()
     #loop for 210 minutes (12600s)
     while reiz.clock.now() - tz < 12600:
     #while True:    
-        dat = bfr.get_data()
+        # to-do: incorporate baseline channel failure calculation comparison
+        dat = bfr.get_data()[:,4]*1e6 #to-do: decide which channels can be replacements, also include SW detection channel to preprocess
+        ## to-do: combine the epoch_psd calculation and channel detection failure test
         # calcule PSD per epoch for delta, theta, alpha, sigma, & beta
         epoch_psd = epoch_stage(dat, bfr.fs)
+        # to-do: extract bandpower and relative power per epoch with new bandpower calculation
+        # .....
+        # check to see if channel failure occured
+        channel_failure = channel_failure_test(rel_alpha/rel_ln) #to-do: integrate with new function to compute failure based on ratio
+        if channel_failure = 1: #and channel is frontal, (elif) central, (elif) parietal:
+            dat = bfr.get_data()[:,..]*1e6 # pick possible channel changes
+            # extract bandpower/relative power again.... 
+            # what if bipolar channel fails and new classifier is necessary?
         # predict sleep stage of epoch
         stage_predict = rf.predict(epoch_psd)[0]
         print(stage_predict)
         # append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
-        stage_predict = 1
+        #stage_predict = 1
         stage_predictArrays.append(stage_predict)
         # pull data every ~15s
         reiz.clock.sleep(15)
 
-#def channel_failure():
-    #global channel_failureArray #21 elements set to 1, if failed fifth position 0
+def channel_failure_test(d):
+    global channel_failureArray #21 elements set to 1, if failed fifth position -> 0
+    channel_failureArray = []
+    global rel_alpha_power # see note below
+    rel_alpha_power = [] # see note below 
     #baseline ratio levels
-    # extract bandpower 
-    #freqs, psd = welch(d, sf=bfr2.fs, nperseg=int(4 * bfr2.fs), average='median')
+    # extract bandpower (parse into seperate function that works with classfication)
+    freqs, psd = welch(d, sf=bfr.fs, nperseg=int(4 * bfr.fs), average='median')
+    # calculate relative delta/theta/alpha/sigma/beta (may have to transpose psds based on bfr data shape)    
+    rel_all = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(0.5, 4, 'Delta'),(4, 8, 'Theta'),
+                                                                 (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
+                                                                 (16, 30, 'Beta'), (49, 51, 'Line Noise')], relative=True)
     # calculate relative alpha power
-    #rel_alpha = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(8, 12, 'Alpha')])
+    rel_alpha = rel_all[2,:] 
     # calculate relative line noise power
-    #rel_ln = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(49, 51, 'LineNoise')])
+    rel_ln = rel_all[5,:]  
     # calculate alpha/line ratio
-    #baseline_ln_alpha = rel_ln/rel_alpha
+    ln_alpha = rel_ln/rel_alpha
+    # create a list of relative alpha power values (may need to add to different function)
+    rel_alpha_power.append(rel_alpha)
+    # threshold(s) necessary to reflect channel failure 
+    if diff(rel_alpha_power) > np.mean(rel_alpha_power)*.2 and rel_ln > .01 and ln_alpha < 5: #epoch to epoch checks
+        if rel_alpha_power[-1] - rel_alpha_power[0] and : #compare baseline and present epoch
+            channel_failure = 1
+    channel_failureArray.append(channel_failure)
+    # don't extract power here
+    return channel_failureArray #rel_all, rel_alpha_power 
 
 def SO_detection(nepochsthresh = 0, minamp = -35, 
                  winshift_in_ms = 20, totalruntime = 12600,
