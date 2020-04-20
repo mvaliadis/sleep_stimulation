@@ -92,10 +92,10 @@ if __name__ == '__main__':
     with session('sleepstim'):
         main()
 
+## to-do: test timing of integrated functions 
 ## to-do: take nearest channels in case of failure for detection/classifier, take out EOG/EMG if they fail
 ## to-do: write channel failure function accounting for both signal quality reduction and non-physio channel activity
 ## to-do: train classifier on different streams (EEG,EOG,EMG)
-## to-do: border effect plots to determine optimal SW filter 
 
 ## to-do: stage sleep 
 ## DONE: move functions into function script
