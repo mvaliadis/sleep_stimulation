@@ -72,7 +72,10 @@ def downsample_scaled(data, old_sf, new_sf):
     return data
 
 def thresholdcrossings(x, threshold):
-    """Find indices of threshold-crossings in a 1D array.
+    """Find indices of threshold-crossings in a 1D array. 
+    
+    This function can be utilized to determine zero crossing as well as any 
+    negative or postive crossing. 
 
     Parameters
     ----------
@@ -99,6 +102,24 @@ def thresholdcrossings(x, threshold):
 
 
 def process_raw_EDF(fname):
+    """
+    The following function exlusively preprocesses physionet datasets and 
+    extracts the epoched data along with the corresponding sleep stages for 
+    and eventual classification
+    
+        Parameters
+    ----------
+    fname : EDF data file(s) 
+        fname is root and will append both PSG.edf & Hypnogram.edf
+
+    Returns
+    -------
+    datArray : np.array
+        Epoched data array
+    stageArray : np.array
+        Epoched stage array
+    
+    """
     raw_train = mne.io.read_raw_edf(fname + '-PSG.edf', preload=True)
     
     # load in hypnogram
@@ -146,6 +167,7 @@ def process_raw_EDF(fname):
     stageArray = epochs_train.events[:,2]
     return datArray, stageArray
 
+
 def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
                                  (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True):
@@ -182,65 +204,66 @@ def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
     bp = bandpower_from_psd_ndarray(psd, freqs, bands, relative)
     return bp
 
+
 def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
+    ## Safety check 
     # check data type, convert to float64 if necessary
     if data.dtype != np.float64:
         data == np.asarray(data, dtype=np.float64)
-    # construct butter filter (scipy)
+    ## Construct butter filter (scipy)
     filtparams = butter(order, (lfreq, hfreq), btype=btype, fs = fs)
     # run zero phase digitial filter with butterworth parameters
     data = filtfilt(*filtparams, data, axis=0, padtype='odd')
     return data
 
+
 def re_reference(data, reference='common average'):
+    # common average method takes ~1.5 ms for 30s of data
     if reference == 'common average':
         mean_vec = np.mean(data, axis = 1)
         data -= np.tile(mean_vec, (np.shape(data)[1],1)).T
+    # mastoid average method takes ~115 micro s for 30s of data
     elif reference == 'mastoids':
         # not true yet, please avoid selecting this option
         data = data[:,[9,10,11]] - (data[:, [18]] + data[:,[20]])/2
     else:
         raise ValueError('Please select a valid reference!')
-    
+
+        
 def epoch_stage(data, fs):
-    ## select and filter EEG, EOG
-    # re-reference EEG signal to the average of mastoids
-    # EEG = data[:,9,10,11] - (data[:, M1] + data[:, M2])/2
-    # re-reference data to the common average
-    """
-    use re_reference function above *please note that the function takes 1.55 ms for common average, 
-    and 115 microseconds for mastoid average
-    """
-    EEG = data[:,[9,10,11]] #C3, Cz, C4
+    ## Data selection and filtering
+    # select and re-reference EEG signal to the common average
+    EEG = re_reference(data[:,[9,10,11]], reference='common average')  #C3, Cz, C4
     # EOG data selection
     EOG = data[:,[21]] 
     # combine EEG & EOG for filtering (necessary if re-referencing online)
     EEG_EOG = np.concatenate([EEG, EOG], axis=1)
-    
     # bandpass filter data (defaults to 4th order filt, 0.5 - 35 Hz bandpass)
     EEG_EOG = bfr_butter_filt(EEG_EOG, fs)
     # notch filter data
     EEG_EOG = bfr_butter_filt(EEG_EOG, fs, lfreq = 49, hfreq = 51, btype='stop')
-    ## select and filter EMG 
+    # select and filter EMG 
     EMG = bfr_butter_filt(data[:,[20]], fs, lfreq = 10, hfreq = 100)
-    ## combine all data streams back into one array
-    data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))#*1e6
-    
-    ## safety checks
+    # combine all data streams back into one array
+    data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))#*1e6  
+    ## Safety checks
     assert data.ndim == 2, 'Data must be of shape (nchan, n_samples).'
     nchan, npts = data.shape
     if npts < nchan:
-        data = np.transpose(data)
-        
-    # compute bandpower of epoch
+        data = np.transpose(data) 
+        nchan, npts = data.shape
+    ## Compute bandpower of epoch
     win = bandpower(data, fs)
+    ## Reshape data for classifier (epochs x (nchans*bands))
+    win = win.reshape(1, nchan*6, order='F')
     return win  
+ 
     
 def sleep_staging(bfr):
     global stage_predictArrays
     stage_predictArrays = []
     tz = reiz.clock.now()
-    #loop for 210 minutes (12600s)
+    ## Loop for 210 minutes (12600s)
     while reiz.clock.now() - tz < 12600:
     #while True:    
         # to-do: incorporate baseline channel failure calculation comparison
@@ -255,8 +278,9 @@ def sleep_staging(bfr):
             dat = bfr.get_data()[:,..]*1e6 # pick possible channel changes
             # extract bandpower/relative power again.... 
             # what if bipolar channel fails and new classifier is necessary?
+            rf
         # predict sleep stage of epoch
-        stage_predict = rf.predict(epoch_psd)[0]
+        stage_predict = rf.predict(epoch_psd[:,])[0]
         print(stage_predict)
         # append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
         #stage_predict = 1
