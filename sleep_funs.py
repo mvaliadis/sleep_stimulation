@@ -5,8 +5,6 @@ Created on Mon Feb 17 13:58:01 2020
 @author: neuro
 """
 
-
-
 import pyaudio
 import numpy as np
 import pandas as pd
@@ -16,6 +14,7 @@ import threading
 import mne
 from scipy import signal
 from scipy.signal import welch, resample, resample_poly
+from scipy.integrate import simps
 import pickle
 import liesl
 import yasa
@@ -28,10 +27,30 @@ def hjorth_complexity(x):
     return hjorth_mobility(np.diff(x))/hjorth_mobility(x)
 
 def downsample_scaled(data, old_sf, new_sf):
-    ## The following function allows the user to downsample the data, so long as the new sampling rate is a multiple of 100 or 128
-    ## and the ratio of the old/new sampling rate is an integer number.
+    """Downsample function 
     
-    # Check if we can downsample to 100 or 128 Hz
+    The following function allows the user to downsample the data, so long 
+    as the new sampling rate is a multiple of 100 or 128 and the ratio of 
+    the old/new sampling rate is an integer number.
+
+    Parameters
+    ----------
+    data : np.array
+           The data.
+           
+    old_sf : int
+             initial sampling rate.
+             
+    new_sf : int
+             requested sampling rate.
+             
+    Returns
+    -------
+    data: np.array of shape [n_samples, chans]
+        Downsampled data.
+    """
+    
+    # first Check if we can downsample to 100 or 128 Hz
     if old_sf > 128 and new_sf > 128: #to-do edit to allow for 100 Hz minimum fs...
         if old_sf % 100 == 0 or old_sf % 128 == 0:
             if new_sf % 100 == 0 or new_sf % 128 == 0:
@@ -70,7 +89,7 @@ def thresholdcrossings(x, threshold):
 
         >>> import numpy as np
         >>> from sleep_funs import thresholdcrossings
-        >>> a = np.array([20, 29, -43, -10, 16, 37, 45, -36, -29])
+        >>> a = np.array([20, 29, -43, -10, 16, 37, 45, -36, -29]) #amplitude values 
         >>> thresholdcrossings(a)
             array([1, 2, 6, 7], dtype=int64)
     """
@@ -127,69 +146,97 @@ def process_raw_EDF(fname):
     stageArray = epochs_train.events[:,2]
     return datArray, stageArray
 
-def bandpower(epochs, fs):
-    """EEG relative power band feature extraction.
+def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
+                                 (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
+                                 (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True):
+    """EEG absolute/relative power band feature extraction.
 
     This function takes a numpy array of the data & creates EEG features based
     on relative power in specific frequency bands that are compatible with
-    scikit-learn.
+    scikit-learn. The function first computes the spectral density based on Welch's 
+    method then by wrapping the bandpower_from_psd_ndarray from yasa, a package 
+    written by Raphael Vallat, computes the absolute or relative power per frequency
+    band of interest. 
 
     Parameters
     ----------
     epochs : Epochs
         The data.
+        
+    fs : sampling rate 
+    
+    see 'yasa.bandpower_from_psd_ndarray' for remaining parameters and documentation
 
     Returns
     -------
-    X : numpy array of shape [n_samples, 5]
-        Transformed data.
+    bp : numpy array of shape [n_bands, chans]
+        relative/absolute power of data.
     """
-    # specific frequency bands
-    FREQ_BANDS = {"delta": [0.5, 4],
-                  "theta": [4, 8],
-                  "alpha": [8, 11],
-                  "sigma": [11, 16],
-                  "beta": [16, 30]}
+    # Define window length sufficiently long encompassing at least two 2 cycles of the lowest frequency of interest
+    nperseg = (2 / bands[0][0]) * fs
 
-    freqs,psds = welch(epochs, fs = fs)
-    # Normalize the PSDs
-    psds /= np.sum(psds, axis=-1, keepdims=True)
+    # Compute the modified periodogram (Welch)
+    freqs, psd = welch(data_win, fs, nperseg=nperseg, average='median')
+    
+    # extract relative or absolute spectral density values for frequency bands of interest
+    bp = bandpower_from_psd_ndarray(psd, freqs, bands, relative)
+    return bp
 
-    X = []
-    for fmin, fmax in FREQ_BANDS.values():
-        psds_band = psds[:, :, (freqs >= fmin) & (freqs < fmax)].mean(axis=-1)
-        X.append(psds_band.reshape(len(psds), -1))
+def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
+    # check data type, convert to float64 if necessary
+    if data.dtype != np.float64:
+        data == np.asarray(data, dtype=np.float64)
+    # construct butter filter (scipy)
+    filtparams = butter(order, (lfreq, hfreq), btype=btype, fs = fs)
+    # run zero phase digitial filter with butterworth parameters
+    data = filtfilt(*filtparams, data, axis=0, padtype='odd')
+    return data
 
-    return np.concatenate(X, axis=1)
-
-def epoch_stage(dat, fs):
-    data = np.float64(dat)
-    times = np.arange(len(data)) / fs
+def re_reference(data, reference='common average'):
+    if reference == 'common average':
+        mean_vec = np.mean(data, axis = 1)
+        data -= np.tile(mean_vec, (np.shape(data)[1],1)).T
+    elif reference == 'mastoids':
+        # not true yet, please avoid selecting this option
+        data = data[:,[9,10,11]] - (data[:, [18]] + data[:,[20]])/2
+    else:
+        raise ValueError('Please select a valid reference!')
+    
+def epoch_stage(data, fs):
     ## select and filter EEG, EOG
-    # re-reference EEG (Cz) signal to the average of mastoids
-    # EEG = data[:,[15]] - (data[:,[12]] + data[:,[18]])/2
-    EEG = data[:,[9,10]] #C3 and Cz - add a few relevant channels ()
+    # re-reference EEG signal to the average of mastoids
+    # EEG = data[:,9,10,11] - (data[:, M1] + data[:, M2])/2
+    # re-reference data to the common average
+    """
+    use re_reference function above *please note that the function takes 1.55 ms for common average, 
+    and 115 microseconds for mastoid average
+    """
+    EEG = data[:,[9,10,11]] #C3, Cz, C4
     # EOG data selection
     EOG = data[:,[21]] 
-    # combine EEG & EOG for filtering
-    EEG_EOG = np.transpose(np.concatenate([EEG, EOG], axis=1))
-    EEG_EOG = signal.filtfilt(*signal.butter(4, (0.5, 35), fs = fs, btype = 'pass'), EEG_EOG)
-    EEG_EOG = signal.filtfilt(*signal.butter(4, (49, 51), fs = fs, btype = 'stop'), EEG_EOG)
-    # select and filter EMG 
-    EMG = np.transpose(data[:,[20]])  
-    EMG = signal.filtfilt(*signal.butter(4, (10, 100), fs = fs, btype = 'pass'), EMG)
-    # combine all data streams back into one array
-    data = np.concatenate([EEG_EOG, EMG])*1e6
-    # partition data into a manner readable by bandpower calculation (epochs x channels X time points)
-    data_win = np.expand_dims(data, axis=0) #adds requisite singleton dimension for bandpower calculation
+    # combine EEG & EOG for filtering (necessary if re-referencing online)
+    EEG_EOG = np.concatenate([EEG, EOG], axis=1)
+    
+    # bandpass filter data (defaults to 4th order filt, 0.5 - 35 Hz bandpass)
+    EEG_EOG = bfr_butter_filt(EEG_EOG, fs)
+    # notch filter data
+    EEG_EOG = bfr_butter_filt(EEG_EOG, fs, lfreq = 49, hfreq = 51, btype='stop')
+    ## select and filter EMG 
+    EMG = bfr_butter_filt(data[:,[20]], fs, lfreq = 10, hfreq = 100)
+    ## combine all data streams back into one array
+    data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))#*1e6
+    
+    ## safety checks
+    assert data.ndim == 2, 'Data must be of shape (nchan, n_samples).'
+    nchan, npts = data.shape
+    if npts < nchan:
+        data = np.transpose(data)
+        
     # compute bandpower of epoch
-    win = bandpower(data_win, fs)
-    return win
-
+    win = bandpower(data, fs)
+    return win  
+    
 def sleep_staging(bfr):
-    # to-do: upload other back-up (bipolar) model, save only as rf.predict due to large file size
-    rf = pickle.load(open("rf_model.p", "rb"))
-    # rf_bipolar = pickle.load(open("rf_bipolar_model.p", "rb"))
     global stage_predictArrays
     stage_predictArrays = []
     tz = reiz.clock.now()
@@ -199,10 +246,9 @@ def sleep_staging(bfr):
         # to-do: incorporate baseline channel failure calculation comparison
         dat = bfr.get_data()[:,4]*1e6 #to-do: decide which channels can be replacements, also include SW detection channel to preprocess
         ## to-do: combine the epoch_psd calculation and channel detection failure test
-        # calcule PSD per epoch for delta, theta, alpha, sigma, & beta
+        # extract bandpower and relative power per epoch
         epoch_psd = epoch_stage(dat, bfr.fs)
-        # to-do: extract bandpower and relative power per epoch with new bandpower calculation
-        # .....
+
         # check to see if channel failure occured
         channel_failure = channel_failure_test(rel_alpha/rel_ln) #to-do: integrate with new function to compute failure based on ratio
         if channel_failure = 1: #and channel is frontal, (elif) central, (elif) parietal:
@@ -248,7 +294,7 @@ def channel_failure_test(d):
 
 def SO_detection(nepochsthresh = 0, minamp = -35, 
                  winshift_in_ms = 20, totalruntime = 12600,
-                 time_delay = 0, volume = 1  ):
+                 time_delay = 500, volume = 1  ):
     sinfo = liesl.get_streaminfos_matching(type = 'EEG')
 
     bfr2 = liesl.RingBuffer(sinfo[0], duration_in_ms = 30000) 
