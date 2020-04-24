@@ -59,12 +59,12 @@ def downsample_scaled(data, old_sf, new_sf):
                     data = data[::decim]
                     print(f'Downsampled data by a factor of {decim}')
                 else:
-                    # resample/resample_poly not integer numbers
+                    # add resample/resample_poly for non integer numbers
                     raise ValueError('The ratio of the old and new sampling rate is not an integer value')
             else:
                 raise ValueError('The requested sampling rate must be a multiple of 100 or 128')
         else:
-            # resample/resample_poly not integer numbers
+            # add resample/resample_poly for non integer numbers
             raise ValueError('The initial sampling rare is not divisible by 100 or 128!') 
     else:
         raise ValueError('The initial or requested sampling rate must both be larger than 128 Hz!')
@@ -201,13 +201,13 @@ def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
     freqs, psd = welch(data_win, fs, nperseg=nperseg, average='median')
     
     # extract relative or absolute spectral density values for frequency bands of interest
-    bp = bandpower_from_psd_ndarray(psd, freqs, bands, relative)
+    bp = yasa.bandpower_from_psd_ndarray(psd, freqs, bands, relative)
     return bp
 
 
 def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
     ## Safety check 
-    # check data type, convert to float64 if necessary
+    # check data type, convert to float64 if necessary 
     if data.dtype != np.float64:
         data == np.asarray(data, dtype=np.float64)
     ## Construct butter filter (scipy)
@@ -233,9 +233,9 @@ def re_reference(data, reference='common average'):
 def epoch_stage(data, fs):
     ## Data selection and filtering
     # select and re-reference EEG signal to the common average
-    EEG = re_reference(data[:,[9,10,11]], reference='common average')  #C3, Cz, C4
+    EEG = re_reference(data[:,[0,1,2]], reference='common average')  #Cz, C3, C4
     # EOG data selection
-    EOG = data[:,[21]] 
+    EOG = data[:,[3]] 
     # combine EEG & EOG for filtering (necessary if re-referencing online)
     EEG_EOG = np.concatenate([EEG, EOG], axis=1)
     # bandpass filter data (defaults to 4th order filt, 0.5 - 35 Hz bandpass)
@@ -243,7 +243,7 @@ def epoch_stage(data, fs):
     # notch filter data
     EEG_EOG = bfr_butter_filt(EEG_EOG, fs, lfreq = 49, hfreq = 51, btype='stop')
     # select and filter EMG 
-    EMG = bfr_butter_filt(data[:,[20]], fs, lfreq = 10, hfreq = 100)
+    EMG = bfr_butter_filt(data[:,[4]], fs, lfreq = 10, hfreq = 100)
     # combine all data streams back into one array
     data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))#*1e6  
     ## Safety checks
@@ -261,60 +261,122 @@ def epoch_stage(data, fs):
     
 def sleep_staging(bfr):
     global stage_predictArrays
+    global channel_failure
     stage_predictArrays = []
     tz = reiz.clock.now()
     ## Loop for 210 minutes (12600s)
     while reiz.clock.now() - tz < 12600:
-    #while True:    
-        # to-do: incorporate baseline channel failure calculation comparison
-        dat = bfr.get_data()[:,4]*1e6 #to-do: decide which channels can be replacements, also include SW detection channel to preprocess
-        ## to-do: combine the epoch_psd calculation and channel detection failure test
-        # extract bandpower and relative power per epoch
-        epoch_psd = epoch_stage(dat, bfr.fs)
+    #while True:  
+        ## Pull data from EEG, EOG, and EMG
+        data = bfr.get_data()[:,[9,10,11,20,21]]*1e6 
+        
+        ## Extract bandpower and relative power per epoch
+        epoch_psd = epoch_stage(data, bfr.fs)
+        
+        ## Baseline and ongoing channel failure calculation comparison
+        # function produces an array matching the functional channels [1,1,1,1,1], 
+        # where 0 is dysfunctional and 1 is functional.
+        channel_failure = channel_failure_test(epoch_psd)         
+        
+        ## Classifier selection:
+        # Classifer to use when all channels are functional (1 EEG, 1 EOG, 1 EMG)
+        if sum(channel_failure) == 5: 
+            # predict sleep stage of epoch
+            index = np.r_[0:5,18:29] #bands for: ch0, ch3, ch4
+            epoch_psd = epoch_psd[:,index][0]
+            stage_predict = rf.predict(epoch_psd)[0] 
+        # Classifer to use if bipolar channels fail (2 EEG)
+        # to-do: edit to just select two of three functioning EEG channels 
+        elif sum(channel_failure[[3,4]]) <= 1:
+            if channel_failure[0] == 1 and channel_failure[1] == 1:
+                epoch_psd = epoch_psd[:,0:11][0] #bands for: ch0, ch1
+                stage_predict = rf_2EEG.predict(epoch_psd)[0]
+            elif channel_failure[0] == 1 and channel_failure[2] == 1:
+                index = np.r_[0:5,12:17] #bands for: ch0, ch2
+                epoch_psd = epoch_psd[:,index][0]
+                stage_predict = rf_2EEG.predict(epoch_psd)[0]
+            elif channel_failure[1] == 1 and channel_failure[2] == 1:
+                epoch_psd = epoch_psd[:,[6:17]][0] #bands for: ch0, ch2
+                stage_predict = rf_2EEG.predict(epoch_psd)[0]
+        # Classifer to use if EMG fails (1 EEG, 1 EOG)    
+        elif channel_failure[4] == 0:
+            if channel_failure[3] == 1 and channel_failure[0] == 1:
+                index = np.r_[18:23,0:5] #bands for: ch3, ch0
+                epoch_psd = epoch_psd[:,index][0] 
+                stage_predict = rf_EEG_EOG.predict(epoch_psd)[0]
+            elif channel_failure[3] == 1 and channel_failure[1] == 1:
+                index = np.r_[18:23,6:11] #bands for: ch3, ch1
+                epoch_psd = epoch_psd[:,index][0]
+                stage_predict = rf_EEG_EOG.predict(epoch_psd)[0]
+            elif channel_failure[3] == 1 and channel_failure[2] == 1:
+                index = np.r_[18:23,12:17] #bands for: ch3, ch2
+                epoch_psd = epoch_psd[:,index][0] 
+                stage_predict = rf_EEG_EOG.predict(epoch_psd)[0]
+        # Classifer to use if bipolar channels + 2 EEG channels fail (1 EEG)
+        elif sum(channel_failure[[0,1,2]]) == 1 and sum(channel_failure[[3,4]]) == 0:
+            if channel_failure[0] == 1:
+                stage_predict = rf_1EEG.predict(epoch_psd[:,0:5)[0]
+            elif channel_failure[1] == 1:
+                stage_predict = rf_1EEG.predict(epoch_psd[:,6:11])[0]
+            elif channel_failure[2] == 2:
+                stage_predict = rf_1EEG.predict(epoch_psd[:,6:11])[0]
 
-        # check to see if channel failure occured
-        channel_failure = channel_failure_test(rel_alpha/rel_ln) #to-do: integrate with new function to compute failure based on ratio
-        if channel_failure = 1: #and channel is frontal, (elif) central, (elif) parietal:
-            dat = bfr.get_data()[:,..]*1e6 # pick possible channel changes
-            # extract bandpower/relative power again.... 
-            # what if bipolar channel fails and new classifier is necessary?
-            rf
-        # predict sleep stage of epoch
-        stage_predict = rf.predict(epoch_psd[:,])[0]
+        ## append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
         print(stage_predict)
-        # append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
-        #stage_predict = 1
+        #stage_predict = 1 # for testing
         stage_predictArrays.append(stage_predict)
         # pull data every ~15s
         reiz.clock.sleep(15)
 
-def channel_failure_test(d):
-    global channel_failureArray #21 elements set to 1, if failed fifth position -> 0
-    channel_failureArray = []
-    global rel_alpha_power # see note below
-    rel_alpha_power = [] # see note below 
-    #baseline ratio levels
-    # extract bandpower (parse into seperate function that works with classfication)
-    freqs, psd = welch(d, sf=bfr.fs, nperseg=int(4 * bfr.fs), average='median')
-    # calculate relative delta/theta/alpha/sigma/beta (may have to transpose psds based on bfr data shape)    
-    rel_all = yasa.bandpower_from_psd_ndarray(psd, freqs, bands=[(0.5, 4, 'Delta'),(4, 8, 'Theta'),
-                                                                 (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
-                                                                 (16, 30, 'Beta'), (49, 51, 'Line Noise')], relative=True)
+        
+def channel_failure_test(epochs):
+    # ~24 microseconds computation time
+    ## Initialize all channels as functioning -> 1
+    channel_failureArray = np.ones(5)
+    
+    ## Baseline spectral density ratio levels
     # calculate relative alpha power
-    rel_alpha = rel_all[2,:] 
+    rel_alpha = epochs[:,2] 
     # calculate relative line noise power
-    rel_ln = rel_all[5,:]  
+    rel_ln = epochs[:,5]  
     # calculate alpha/line ratio
     ln_alpha = rel_ln/rel_alpha
-    # create a list of relative alpha power values (may need to add to different function)
-    rel_alpha_power.append(rel_alpha)
-    # threshold(s) necessary to reflect channel failure 
-    if diff(rel_alpha_power) > np.mean(rel_alpha_power)*.2 and rel_ln > .01 and ln_alpha < 5: #epoch to epoch checks
-        if rel_alpha_power[-1] - rel_alpha_power[0] and : #compare baseline and present epoch
-            channel_failure = 1
-    channel_failureArray.append(channel_failure)
-    # don't extract power here
-    return channel_failureArray #rel_all, rel_alpha_power 
+
+    ## Ongoing check to see if threshold is exceeded
+    # epoch to epoch check
+    if ln_alpha[-1] < 5: 
+        # compare baseline and present epoch
+        if ln_alpha[-1] - ln_alpha[0] > np.mean(ln_alpha)*1.3:
+            # if EEG channel 1 fails, then switch to EEG channel 2
+            channel_failureArray[0] = 0
+            ln_alpha = epochs[:,8]/epochs[:,11]
+            if ln_alpha[-1] < 5:
+                if ln_alpha[-1] - ln_alpha[0] > np.mean(ln_alpha)*1.3:
+                    # if EEG channel 2 fails, then switch to EEG channel 3
+                    channel_failureArray[1] = 0
+                    ln_alpha = epochs[:,14]/epochs[:,17]
+                    if ln_alpha[-1] < 5:
+                        if ln_alpha[-1] - ln_alpha[0] > np.mean(ln_alpha)*1.3:
+                            # if EEG channel 3 fails, then.....
+                            channel_failureArray[2] = 0
+    else:
+        channel_failureArray = channel_failureArray
+        
+    ## Check EOG and EMG channels for failure 
+    # EOG check 
+    ln_alpha_EOG = epochs[:,20] /epochs[:,23]
+    if ln_alpha_EOG[-1] < 5:
+        if ln_alpha_EOG[-1] - ln_alpha_EOG[0] > np.mean(ln_alpha_EOG)*1.3:
+            channel_failureArray[3] = 0
+    # EMG check    
+    ln_alpha_EMG = epochs[:,26] /epochs[:,29]
+    if ln_alpha_EMG[-1] < 5:
+        if ln_alpha_EMG[-1] - ln_alpha_EMG[0] > np.mean(ln_alpha_EMG)*1.3:
+            channel_failureArray[4] = 0
+            
+    ## Return updated channel_failureArray  
+    return channel_failureArray    
+
 
 def SO_detection(nepochsthresh = 0, minamp = -35, 
                  winshift_in_ms = 20, totalruntime = 12600,
@@ -335,34 +397,49 @@ def SO_detection(nepochsthresh = 0, minamp = -35,
     tz = reiz.clock.now()
     while reiz.clock.now() - tz < totalruntime:
         reiz.clock.tick()
-        if sum(stage_predictArrays[-10:]) > nepochsthresh: 
-            if clock.now() -tblock > 2.4:
+        if sum(stage_predictArrays[-5:]) > nepochsthresh: 
+            if clock.now() - tblock > 2.4:
                 block_auditory_stim = False
                 
-            #%% proper channel needs to be picked here
-            d = bfr2.get_data()[:,9]*1e6 #C3, test channel is 1Hz sinusoid
+            #%% Proper channel needs to be selected based on channel failure index from classification thread
+            # Question: will this stop the loop until the requirement is met?
+            if channel_failure[0] == 1:
+                d = bfr2.get_data()[:,9]*1e6 #C3, main recording channel
+            elif channel_failure[1] == 1: 
+                d = bfr2.get_data()[:,10]*1e6 #Cz, alternative recording channel
             
             #%% online SWS detection pre-processing
             d = signal.filtfilt(*filtparams, d)
           
+            # Question: should the below reference the last 6 data points or 6*sampling rate? 
             crit = min(d[-6:]) - np.median(d)
             # reiz.marker.push('crit: {}'.format(crit))
-            # change the minamp to reflect the most negative median amplitude from the last 5 seconds
-            minamp = min((d[-5* bfr2.fs:]) - np.median(d), -35)
-            if crit < minamp and block_auditory_stim == False: 
-                # wait for 0ms, 500ms, depending on Up/Downstate
-                clock.sleep(time_delay)
-                # deliver tone twice with 1.075s interval
-                n.play()
-                clock.sleep(1.075)
-                n.play()
-                # blocking auditory stimulation for 2.5s
-                block_auditory_stim = True 
-                tblock = clock.now()
+            
+            ## Change the minamp to reflect the most negative median amplitude from the last 5 seconds
+            minamp = min(min(d[-5* bfr2.fs:]) - np.median(d), -35)
+            
+            ## Linear drift detection
+            # Check the peak-to-peak maximum of the current epoch, if it exceeds 500 µV
+            # (and -300 µV negative amplitude), reset threshold to -35 & block stimulation for 10s
+            if minamp < -300 and np.ptp(d - np.median(d)) < 500:
+                minamp = -35                                     
+                clock.now() - tblock > 10
+                block_auditory_stim = False 
+            
+                if crit < minamp and block_auditory_stim == False: 
+                    # wait for 0ms, 500ms, depending on Up/Downstate    
+                    clock.sleep(time_delay)
+                    # deliver tone twice with 1.075s interval
+                    n.play()
+                    clock.sleep(1.075)
+                    n.play()
+                    # blocking auditory stimulation for 2.5s
+                    block_auditory_stim = True 
+                    tblock = clock.now()
                 
         clock.sleep_debiased(winshift_in_ms/1000)
 
-
+ 
 class PinkNoise():
     def generate_noise(self,duration_in_s = 0.05, fs = 48000, ncols=16):
         """Generates pink noise using the Voss-McCartney algorithm.
