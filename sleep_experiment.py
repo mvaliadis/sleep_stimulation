@@ -14,7 +14,14 @@ from reiz import clock
 import numpy as np
 import threading
 from scipy import signal
-# import yasa
+import yasa
+import pickle
+
+#%% load classifier models
+rf = pickle.load(open("rf_model.p", "rb"))                  #1 EEG, 1 EOG, 1 EMG
+rf_1EEG = pickle.load(open("rf_model_EEG.p", "rb"))         #1 EEG
+rf_EEG_EOG = pickle.load(open("rf_model_EEG_EOG.p", "rb"))  #1 EEG, 1 EOG
+rf_2EEG = pickle.load(open("rf_model_2EEG.p", "rb"))        #2 EEG
 
 #%% set parameters
 
@@ -93,10 +100,6 @@ if __name__ == '__main__':
         main()
 
 ## to-do: test timing of integrated functions 
-## to-do: take nearest channels in case of failure for detection/classifier, take out EOG/EMG if they fail
-## to-do: write channel failure function accounting for both signal quality reduction and non-physio channel activity
-## to-do: train classifier on different streams (EEG,EOG,EMG)
 
 ## to-do: stage sleep 
-## DONE: move functions into function script
 ## to-do: encrypt/decrypt subject codes
