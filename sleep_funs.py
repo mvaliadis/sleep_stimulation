@@ -208,8 +208,8 @@ def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
 def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
     ## Safety check 
     # check data type, convert to float64 if necessary 
-    if data.dtype != np.float64:
-        data == np.asarray(data, dtype=np.float64)
+    #if data.dtype != np.float64:
+    #    data == np.asarray(data, dtype=np.float64)
     ## Construct butter filter (scipy)
     filtparams = butter(order, (lfreq, hfreq), btype=btype, fs = fs)
     # run zero phase digitial filter with butterworth parameters
@@ -219,6 +219,7 @@ def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
 
 def re_reference(data, reference='common average'):
     # common average method takes ~1.5 ms for 30s of data
+    # to-do: use loop method
     if reference == 'common average':
         mean_vec = np.mean(data, axis = 1)
         data -= np.tile(mean_vec, (np.shape(data)[1],1)).T
@@ -233,6 +234,7 @@ def re_reference(data, reference='common average'):
 def epoch_stage(data, fs):
     ## Data selection and filtering
     # select and re-reference EEG signal to the common average
+    # to-do: take mean of all channels in rereference function
     EEG = re_reference(data[:,[0,1,2]], reference='common average')  #Cz, C3, C4
     # EOG data selection
     EOG = data[:,[3]] 
@@ -298,7 +300,8 @@ def sleep_staging(bfr):
             elif channel_failure[1] == 1 and channel_failure[2] == 1:
                 epoch_psd = epoch_psd[:,[6:17]][0] #bands for: ch0, ch2
                 stage_predict = rf_2EEG.predict(epoch_psd)[0]
-        # Classifer to use if EMG fails (1 EEG, 1 EOG)    
+        # Classifer to use if EMG fails (1 EEG, 1 EOG)
+        # WARNING: won't be reached 
         elif channel_failure[4] == 0:
             if channel_failure[3] == 1 and channel_failure[0] == 1:
                 index = np.r_[18:23,0:5] #bands for: ch3, ch0
@@ -344,6 +347,7 @@ def channel_failure_test(epochs):
 
     ## Ongoing check to see if threshold is exceeded
     # epoch to epoch check
+    # to-do: make into loop                                                     
     if ln_alpha[-1] < 5: 
         # compare baseline and present epoch
         if ln_alpha[-1] - ln_alpha[0] > np.mean(ln_alpha)*1.3:
@@ -402,16 +406,17 @@ def SO_detection(nepochsthresh = 0, minamp = -35,
                 block_auditory_stim = False
                 
             #%% Proper channel needs to be selected based on channel failure index from classification thread
-            # Question: will this stop the loop until the requirement is met?
             if channel_failure[0] == 1:
                 d = bfr2.get_data()[:,9]*1e6 #C3, main recording channel
             elif channel_failure[1] == 1: 
                 d = bfr2.get_data()[:,10]*1e6 #Cz, alternative recording channel
-            
+            else:
+                continue
+                                                          
             #%% online SWS detection pre-processing
             d = signal.filtfilt(*filtparams, d)
           
-            # Question: should the below reference the last 6 data points or 6*sampling rate? 
+            #
             crit = min(d[-6:]) - np.median(d)
             # reiz.marker.push('crit: {}'.format(crit))
             
@@ -421,9 +426,11 @@ def SO_detection(nepochsthresh = 0, minamp = -35,
             ## Linear drift detection
             # Check the peak-to-peak maximum of the current epoch, if it exceeds 500 µV
             # (and -300 µV negative amplitude), reset threshold to -35 & block stimulation for 10s
-            if minamp < -300 and np.ptp(d - np.median(d)) < 500:
-                minamp = -35                                     
-                clock.now() - tblock > 10
+            if minamp < -300 and np.ptp(d[-2*bfr2.fs:] - np.median(d[-2*bfr2.fs:])) < 500:
+                minamp = -35
+                block_auditory_stim = True 
+                tblock = clock.now()
+            if clock.now() - tblock > 10:
                 block_auditory_stim = False 
             
                 if crit < minamp and block_auditory_stim == False: 
