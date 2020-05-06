@@ -13,13 +13,134 @@ import reiz
 import threading
 import mne
 from scipy import signal
-from scipy.signal import welch, resample, resample_poly
+from scipy.signal import butter, filtfilt, welch, resample, resample_poly
 from scipy.integrate import simps
 import pickle
 import liesl
 import yasa
+import xml.etree.ElementTree as ET
+
+#%%
+## NSRR Cleveland Sleep Dataset Classifier training functions
+def process_raw_EDF_cfs(file):
+    # import raw edf file
+    raw_train = mne.io.read_raw_edf(file + '.edf', eog = ['LOC','ROC'], preload = 'True')
+    
+    # create dictionary of channels we are interested in  
+    mapping = {'C3': 'eeg',
+               'C4': 'eeg',
+               'M1': 'eeg',
+               'M2': 'eeg',
+               'LOC': 'eog',
+               'ROC': 'eog',
+               'EMG2': 'emg',
+               'EMG3': 'emg'}
+    
+    # select channels in object and give labels for channel type
+    raw_train.pick_channels(ch_names=list(mapping))
+    raw_train.set_channel_types(mapping) 
+    
+    # rereference eeg data to average of mastoids
+    raw_train.set_eeg_reference(ref_channels=['M1','M2'])
+     
+    # bipolarize eog and emg data 
+    raw_train = mne.set_bipolar_reference(raw_train, 'LOC', 'ROC')
+    raw_train = mne.set_bipolar_reference(raw_train, 'EMG2', 'EMG3')
+
+    
+    # extract data, time, sampling rate information
+    EEG = raw_train.get_data(picks='eeg', return_times=False)*1e6
+    EOG = raw_train.get_data(picks='eog', return_times=False)*1e6
+    EMG = raw_train.get_data(picks='emg', return_times=False)*1e6
+    times = raw_train.times
+    fs = raw_train.info['sfreq']
+    
+    # delete mne object as it is no longer necessary
+    del raw_train
+    
+    # filter data 
+    EEG = bfr_butter_filt(EEG, fs, lfreq=0.5, hfreq=35)
+    EOG = bfr_butter_filt(EOG, fs, lfreq=0.5, hfreq=35)
+    EMG = bfr_butter_filt(EMG, fs, lfreq=10, hfreq=100)
+
+    # combine data 
+    data = np.concatenate([EEG, EOG, EMG])
+    
+    # epoch data into 30s segments 
+    times, epochs = yasa.sliding_window(data, fs, window=30)
+     
+    # downsample data to 128 Hz (up-sampled due to ECG being sampled at 512 Hz) 
+    epoched_data = []
+    for index in range(np.size(epochs, 1)):
+        dat = np.expand_dims(downsample_scaled((epochs[:,index,:]), fs, new_sf=128), 1)            
+        epoched_data.append(dat)
+    epoched_data = np.swapaxes(np.concatenate(epoched_data, axis=1), 2, 0)
+    
+    # import hypnogram
+    stages, stagelens = read_xml(file + '.xml')
+            
+    # unravel hypnogram
+    hypnogram = unravel_hypnogram(stages, stagelens)
+  
+    return epoched_data, hypnogram
 
 
+def read_xml(file):
+    # import xml annotation file to extract hypnogram
+    tree = ET.parse(file)
+    
+    # obtain roots from xml annotation tree
+    root = tree.getroot()
+    
+    # extract sleep stageing related information
+    stages = [] 
+    stagelens = []
+    for child in root.iter('ScoredEvent'):
+        var = child[0].text
+        if var == None:
+            pass
+        elif 'Stages' in var:
+            stage = child[1].text
+            # append stages (0-5)
+            stages.append(int(stage[-1]))
+            stagelen = int(float(child[3].text))
+            # append epoch lengths in increments of 30s
+            stagelens.append(int(stagelen/30))
+        else:
+            pass
+        
+    # return numpy arrays with stages and corresponding length info
+    return np.array(stages).astype(int), np.array(stagelens).astype(int)
+
+
+def unravel_hypnogram(stages, stagelens):  
+    stage_len = []
+    # parse stageing information to fit total of epochs by stages 
+    for index, length in enumerate(stagelens):
+        if stages[index] == 0:
+            stage_len.append(np.zeros(length))
+        elif stages[index] == 1:
+            stage_len.append(np.ones(length))
+        elif stages[index] == 2:
+            stage_len.append(2*np.ones(length))
+        elif stages[index] == 3:
+            stage_len.append(3*np.ones(length))
+        # collapse stage 3 and 4
+        elif stages[index] == 4:
+            stage_len.append(3*np.ones(length))
+        elif stages[index] == 5:
+            stage_len.append(4*np.ones(length))
+    
+    hypnogram = np.concatenate(stage_len)
+    
+    # sanity check - does hypnogram 
+    if len(hypnogram) != stagelens.sum():
+        raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs')
+    
+    return hypnogram 
+
+
+#%%
 def hjorth_mobility(x):
     return np.sqrt(np.var(np.diff(x))/np.var(x))
 def hjorth_complexity(x):
@@ -51,11 +172,15 @@ def downsample_scaled(data, old_sf, new_sf):
     """
     
     # first Check if we can downsample to 100 or 128 Hz
-    if old_sf > 128 and new_sf > 128: #to-do edit to allow for 100 Hz minimum fs...
+    if old_sf >= 128 and new_sf >= 128: #to-do edit to allow for 100 Hz minimum fs...
         if old_sf % 100 == 0 or old_sf % 128 == 0:
             if new_sf % 100 == 0 or new_sf % 128 == 0:
                 if old_sf % new_sf == 0:
                     decim = int(old_sf/new_sf)
+                    dpnts, epochs = data.shape
+                    # so long as recording is less than 25 hrs, the below is valid
+                    if epochs > dpnts:
+                        data = np.transpose(data)
                     data = data[::decim]
                     print(f'Downsampled data by a factor of {decim}')
                 else:
@@ -198,7 +323,7 @@ def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
     nperseg = (2 / bands[0][0]) * fs
 
     # Compute the modified periodogram (Welch)
-    freqs, psd = welch(data_win, fs, nperseg=nperseg, average='median')
+    freqs, psd = welch(epochs, fs, nperseg=nperseg, average='median')
     
     # extract relative or absolute spectral density values for frequency bands of interest
     bp = yasa.bandpower_from_psd_ndarray(psd, freqs, bands, relative)
@@ -210,10 +335,16 @@ def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
     # check data type, convert to float64 if necessary 
     #if data.dtype != np.float64:
     #    data == np.asarray(data, dtype=np.float64)
+   
     ## Construct butter filter (scipy)
     filtparams = butter(order, (lfreq, hfreq), btype=btype, fs = fs)
-    # run zero phase digitial filter with butterworth parameters
-    data = filtfilt(*filtparams, data, axis=0, padtype='odd')
+    # run zero phase digitial filter with butterworth parameters, 
+    # but first confirm order of dims
+    chans, dpnts = data.shape
+    if chans > dpnts:
+        data = filtfilt(*filtparams, data, axis=0, padtype='odd')
+    else:
+        data = filtfilt(*filtparams, data, axis=-1, padtype='odd')
     return data
 
 
