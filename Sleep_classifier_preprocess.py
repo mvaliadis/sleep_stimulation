@@ -13,20 +13,19 @@ import yasa
 from scipy.signal import welch
 from os import chdir as cd
 from os import listdir
-#cd('/users/neuro/sleep_stimulation')
-from sleep_funs import process_raw_EDF_cfs, bandpower
+cd('/users/neuro/sleep_stimulation')
+from sleep_funs import process_raw_EDF, process_raw_EDF_cfs, bandpower
 
 #%%
 ## Physionet data
 #cd('/home/administrator/Documents/Physionet_data')
 
-files = list(set([f.split('-')[0] for f in sorted(listdir())]))
+files = list(set([f.split('-')[0] for f in sorted(listdir()) if f.endswith('.edf')]))
 
 allArrays = []
 stageArrays = []
 
-for f in enumerate(files): 
-    fname = f[1]
+for idx, fname in enumerate(files):
     
     datArray, stageArray = process_raw_EDF(fname)
      
@@ -36,7 +35,12 @@ for f in enumerate(files):
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
                                  (16, 30, 'Beta')], relative=True)
     
-    pickle.dump(dataArray, open(fname + "-allArrays.p", "wb"))
+    # reshape data for classifier, must be (epochs x (nchans*bands))
+    data = np.swapaxes(data, 0, 1)
+    nepochs, nbands, nchans = np.shape(data)
+    data = data.reshape(nepochs, nchans*nbands, order='F')
+    
+    pickle.dump(data, open(fname + "-allArrays.p", "wb"))
     
     pickle.dump(stageArray, open(fname + "-stageArrays.p", "wb"))
     
@@ -47,23 +51,29 @@ for f in enumerate(files):
 ## NSRR Cleveland Sleep Study
 #cd('/users/neuro/cfs/polysomnography')
 
-files = list(set([f.split('.')[0] for f in sorted(listdir())]))
+files = list(set([f.split('.')[0] for f in sorted(listdir()) if f.endswith('.xml') or f.endswith('.edf')]))
 
 allArrays = []
 stageArrays = []
 
-for f in enumerate(files): 
-    fname = f[1]
-    
-    datArray, stageArray = process_raw_EDF(fname)
+for idx, fname in enumerate(files): 
+    print(idx)
+    datArray, stageArray = process_raw_EDF_cfs(fname)
      
     ## compute PSD with welch's method + yasa absolute/relative power extraction 
     # compute power spectral density with welch's method
-    data = bandpower(datArray, fs=100, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
+    data = bandpower(datArray, fs=128, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
                                  (16, 30, 'Beta')], relative=True)
     
-    pickle.dump(dataArray, open(fname + "-allArrays.p", "wb"))
+    # reshape data for classifier, must be (epochs x (nchans*bands))
+    data = np.swapaxes(data, 0, 1)
+    nepochs, nbands, nchans = np.shape(data)
+    data = data.reshape(nepochs, nchans*nbands, order='F')
     
-    pickle.dump(stageArray, open(fname + "-stageArrays.p", "wb"))
+    # save as pickle files
+    pickle.dump(data, open(fname + "_allArrays.p", "wb"))
+    pickle.dump(stageArray, open(fname + "_stageArrays.p", "wb"))
 
+#%%      
+%reset -f
