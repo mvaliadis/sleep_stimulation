@@ -12,6 +12,7 @@ from reiz import clock
 import reiz
 import threading
 import mne
+import matplotlib.pyplot as plt
 from scipy import signal
 from scipy.signal import butter, filtfilt, welch, resample, resample_poly
 from scipy.integrate import simps
@@ -141,6 +142,48 @@ def unravel_hypnogram(stages, stagelens):
 
 
 #%%
+## Analysis functions
+
+def unravel_hypnogram_visbrain(hypnogram_file, data):  
+    ## TO-DO LATER: integate with other unravel function for NSRR dataset
+    # load hypnogram file
+    hypno = np.genfromtxt(hypnogram_file, delimiter='\t', dtype=str)
+    # define stages 
+    stages = hypno[1::,0]
+    # define stage duration
+    stage_len = np.round(hypno[1::,1].astype(dtype=float))
+    # define length of 30s epoched stage as difference between durations
+    diff = np.diff(stage_len/30)
+    
+    # add first epoch as difference between first epoch and 0 and to iterated list
+    total_diff = [stage_len[0]/30] + list(diff)
+    # parse stageing information to fit total of epochs by stages 
+    stagelens = []
+    for index, length in enumerate(total_diff):
+        print(length)
+        if stages[index] == 'Wake':
+            stagelens.append(np.zeros(int(length)))
+        elif stages[index] == 'N1':
+            stagelens.append(np.ones(int(length)))
+        elif stages[index] == 'N2':
+            stagelens.append(2*np.ones(int(length)))
+        elif stages[index] == 'N3':
+            stagelens.append(3*np.ones(int(length)))
+        elif stages[index] == 'REM':
+            stagelens.append(4*np.ones(int(length)))
+            
+    hypnogram = np.concatenate(stagelens)
+
+    # padding for last epoch if it doesn't last 30s
+    #hypnogram = np.pad(hypnogram, (0, npts_diff), mode='edge')
+    
+    # sanity check - does length of hypnogram match data epoch length
+    if data.shape[0] != len(hypnogram):
+        raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs in the data')
+    
+    return hypnogram 
+
+
 def hjorth_mobility(x):
     return np.sqrt(np.var(np.diff(x))/np.var(x))
 def hjorth_complexity(x):
@@ -195,6 +238,7 @@ def downsample_scaled(data, old_sf, new_sf):
         raise ValueError('The initial or requested sampling rate must both be larger than 128 Hz!')
          
     return data
+
 
 def thresholdcrossings(x, threshold):
     """Find indices of threshold-crossings in a 1D array. 
@@ -251,13 +295,14 @@ def process_raw_EDF(fname):
     annot_train = mne.read_annotations(fname + '-Hypnogram.edf')
         
     # filter data and select channels to use
-    raw_train.pick_types(include=(['EEG Fpz-Cz', 'EOG horizontal', 'EMG submental'])) 
-    raw_train.filter(0.5, 35, picks = ['EEG Fpz-Cz', 'EOG horizontal'])
+    raw_train.pick_types(include=(['EEG Fpz-Cz','EEG Pz-Oz','EOG horizontal', 'EMG submental'])) 
+    raw_train.filter(0.5, 35, picks = ['EEG Fpz-Cz','EEG Pz-Oz','EOG horizontal'])
     raw_train.notch_filter(49)
     raw_train.filter(20, 45, picks = (['EMG submental']))
     
     # select channels for annotations
     mapping = {'EEG Fpz-Cz':'eeg',
+               'EEG Pz-Oz': 'eeg',
                'EOG horizontal': 'eog',
                'EMG submental': 'emg'}
      
@@ -293,6 +338,32 @@ def process_raw_EDF(fname):
     return datArray, stageArray
 
 
+def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=plt.cm.Blues):
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(target_names))
+    plt.xticks(tick_marks, target_names, rotation=45)
+    plt.yticks(tick_marks, target_names)
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+    
+def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
+    plt.figure()
+    plt.plot(fpr, tpr, label='Random Forest Classifier (area = %0.2f)' % rf_roc_auc)
+    plt.plot([0, 1], [0, 1],'r--')
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Receiver operating characteristic')
+    plt.legend(loc="lower right")
+    #plt.savefig('Log_ROC')
+    plt.show()
+    
+#%%
+## Online signal pre-processing functions
 def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
                                  (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True):
