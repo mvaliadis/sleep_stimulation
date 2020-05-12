@@ -190,52 +190,66 @@ def hjorth_complexity(x):
     """ calculates Hjorth complexity of the input time series vector x"""
     return hjorth_mobility(np.diff(x))/hjorth_mobility(x)
 
-def downsample_scaled(data, old_sf, new_sf):
+def downsample_scaled(data, old_sf, new_sf, nint_method='none'):
     """Downsample function 
     
     The following function allows the user to downsample the data, so long 
-    as the new sampling rate is a multiple of 100 or 128 and the ratio of 
-    the old/new sampling rate is an integer number.
-
+    as the new sampling rate is a multiple of 100 or 128. The function can 
+    now also downsample on non-integer scales with scipy fft resampling and
+    polyphase resampling, although the latter is preferable with respect to
+    computation time. 
+    
     Parameters
     ----------
-    data : np.array
-           The data.
+    data : np.array of shape [n_samples, chans]
+          The data.
            
     old_sf : int
-             initial sampling rate.
+            Initial sampling rate.
              
     new_sf : int
-             requested sampling rate.
+            Requested sampling rate.
              
+    nint_method : str 'none' (default), 'resample_fft', 'resample_poly'
+                Non-integer resampling method from scipy.signal.
+                
     Returns
     -------
     data: np.array of shape [n_samples, chans]
         Downsampled data.
     """
-    
-    # first Check if we can downsample to 100 or 128 Hz
-    if old_sf >= 128 and new_sf >= 128: #to-do edit to allow for 100 Hz minimum fs...
+      
+    # first check if we can downsample to 100 or 128 Hz
+    if old_sf >= 128 and new_sf >= 100: 
         if old_sf % 100 == 0 or old_sf % 128 == 0:
             if new_sf % 100 == 0 or new_sf % 128 == 0:
+                decim = old_sf/new_sf
+                epochs, dpnts = data.shape
+                # the following holds true so long as recording > ~25 hrs
+                if epochs < dpnts:
+                    # forcibly alter shape of data 
+                    data = np.transpose(data)
                 if old_sf % new_sf == 0:
-                    decim = int(old_sf/new_sf)
-                    dpnts, epochs = data.shape
-                    # so long as recording is less than 25 hrs, the below is valid
-                    if epochs > dpnts:
-                        data = np.transpose(data)
-                    data = data[::decim]
-                    print(f'Downsampled data by a factor of {decim}')
+                    data = data[::int(decim)]
+                    print(f'Downsampled data by a factor of {int(decim)}')
                 else:
-                    # add resample/resample_poly for non integer numbers
-                    raise ValueError('The ratio of the old and new sampling rate is not an integer value')
+                    if nint_method != 'none':
+                        if nint_method == 'resample_fft':
+                            data = signal.resample(data, int(len(data)*1/decim)) 
+                            print(f'Downsampled data by a factor of {decim}')
+                        elif nint_method == 'resample_poly':
+                            data = signal.resample_poly(data, new_sf, old_sf)
+                            print(f'Downsampled data by a factor of {decim}')
+                        print('Please note that the ratio of the old and new sampling rate is a '
+                              'non-integer value, and will be resampled with the resampling method you selected.')
+                    else:
+                        raise ValueError('When downsampling by a non-integer value, please select a valid resampling method.')
             else:
                 raise ValueError('The requested sampling rate must be a multiple of 100 or 128')
         else:
-            # add resample/resample_poly for non integer numbers
-            raise ValueError('The initial sampling rare is not divisible by 100 or 128!') 
+            raise ValueError('The initial sampling rate is not divisible by 100 or 128!') 
     else:
-        raise ValueError('The initial or requested sampling rate must both be larger than 128 Hz!')
+        raise ValueError('The initial or requested sampling rate must both be larger than 100 Hz!')
          
     return data
 
