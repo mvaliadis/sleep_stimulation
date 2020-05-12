@@ -201,8 +201,8 @@ def downsample_scaled(data, old_sf, new_sf, nint_method='none'):
     
     Parameters
     ----------
-    data : np.array of shape [n_samples, chans]
-          The data.
+    data : np.array of shape [n_epochs, n_samples]
+          The epoched data.
            
     old_sf : int
             Initial sampling rate.
@@ -215,7 +215,7 @@ def downsample_scaled(data, old_sf, new_sf, nint_method='none'):
                 
     Returns
     -------
-    data: np.array of shape [n_samples, chans]
+    data: np.array of shape [n_epochs, n_samples]
         Downsampled data.
     """
       
@@ -375,13 +375,21 @@ def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
     plt.legend(loc="lower right")
     #plt.savefig('Log_ROC')
     plt.show()
+
+# def standardize_features(X_train, X_test):
+#     from sklearn.preprocessing import StandardScaler
+#     sc = StandardScaler()
+#     X_train = sc.fit_transform(X_train)
+#     X_test = sc.transform(X_test)
     
+#     return X_train, X_test
+
 #%%
 ## Online signal pre-processing functions
 def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
                                  (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True):
-    """EEG absolute/relative power band feature extraction.
+    """PSG absolute/relative power band feature extraction.
 
     This function takes a numpy array of the data & creates EEG features based
     on relative power in specific frequency bands that are compatible with
@@ -392,16 +400,26 @@ def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
 
     Parameters
     ----------
-    epochs : Epochs
-        The data.
+    epochs : numpy array --> [n_epochs, n_chans, n_samples] or [n_chans, n_samples]
+        The epoched data.
         
-    fs : sampling rate 
+    fs : int
+        Sampling rate. 
     
-    see 'yasa.bandpower_from_psd_ndarray' for remaining parameters and documentation
-
+    bands : Frequency bands of interest.
+        Feed in bands of interest up to and limited by the Nyquist limit (half of the sampling rate), 
+        beyond the default above. Line noise PSD is used for channel failure detection. 
+    
+    relative : bool 
+        Default is 'True', which takes relative PSD values per epoch of time, otherwise
+        select 'False' for absolute PSD values.
+        
+    see 'yasa.bandpower_from_psd_ndarray' for further documentation related to bandpower extraction.
+    https://raphaelvallat.com/yasa/build/html/generated/yasa.bandpower_from_psd_ndarray.html
+    
     Returns
     -------
-    bp : numpy array of shape [n_bands, chans]
+    bp : numpy array of shape --> [n_epochs, n_bands, n_chans] or [n_bands, n_chans] 
         relative/absolute power of data.
     """
     # Define window length sufficiently long encompassing at least two 2 cycles of the lowest frequency of interest
@@ -415,18 +433,52 @@ def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
     return bp
 
 
-def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
-    ## Safety check 
-    # check data type, convert to float64 if necessary 
-    #if data.dtype != np.float64:
-    #    data == np.asarray(data, dtype=np.float64)
-   
+def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass', method='none'):
+    """PSG data buffer extraction butterworth filter.
+
+    This function takes a numpy array of the data & filters it based on given
+    parameters. The function primarily wraps scipy butterworth filter construction
+    and zero-phase filtfilt implementation. 
+
+    Parameters
+    ----------
+    data : numpy array of [n_samples x n_chans]
+        The data.
+        
+    fs : int/float
+        Sampling rate. 
+    
+    order : int 
+        Order of the filter
+        
+    lfreq : int
+        High-pass filter frequency
+    
+    hfreq : int
+        Low-pass filter frequency
+    
+    btype : str {‘lowpass’, ‘highpass’, ‘bandpass’, ‘bandstop’}, optional
+        The type of filter. Default is ‘bandpass’
+        
+    method : str {'none', 'mne'}
+        If data will be later used with mne, please select 'mne'. 
+        
+    Returns
+    -------
+    data : numpy array of shape [n_samples x n_chans]
+        The filtered data
+    """
+    ## Safety check - check is necessary only when later utilizing MNE, 
+    #  which requires float64 type data 
+    if method == 'mne':
+        if data.dtype != np.float64:
+            data == np.asarray(data, dtype=np.float64)
     ## Construct butter filter (scipy)
     filtparams = butter(order, (lfreq, hfreq), btype=btype, fs = fs)
     # run zero phase digitial filter with butterworth parameters, 
     # but first confirm order of dims
-    chans, dpnts = data.shape
-    if chans > dpnts:
+    dpnts, chans = data.shape
+    if chans < dpnts:
         data = filtfilt(*filtparams, data, axis=0, padtype='odd')
     else:
         data = filtfilt(*filtparams, data, axis=-1, padtype='odd')
@@ -434,23 +486,69 @@ def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass'):
 
 
 def re_reference(data, reference='common average'):
-    # common average method takes ~1.5 ms for 30s of data
-    # to-do: use loop method
+    """EEG data re_referencing function.
+
+    This function takes a numpy array of the data & rereferences the data based on
+    the new selected reference. 
+
+    Parameters
+    ----------
+    data : numpy array of [n_samples x n_chans]
+        The data. Include only EEG channels for this argument!
+        
+    reference : str {‘common average’, ‘mastoids’}
+        The new reference; default is ‘common average’.
+        
+    Returns
+    -------
+    data : numpy array of shape [n_samples x n_chans]
+        The re-referenced data
+    """
+    # %timeit = 97 microseconds for 30s of data (fs = 256 Hz)
+    # Initial safety check to confirm data shape is [n_samples x n_chans]
+    dpnts, chans = data.shape
+    if chans > dpnts:
+        data = np.transpose(data)
     if reference == 'common average':
-        mean_vec = np.mean(data, axis = 1)
-        data -= np.tile(mean_vec, (np.shape(data)[1],1)).T
-    # mastoid average method takes ~115 micro s for 30s of data
+        # Compute mean of each epoch per channel then subtract common average
+        ref_data = data[..., :].mean(-1, keepdims=True)
+        data -= ref_data
     elif reference == 'mastoids':
-        # not true yet, please avoid selecting this option
-        data = data[:,[9,10,11]] - (data[:, [18]] + data[:,[20]])/2
+        # not valid online as mastoid data is not being pulled, 
+        # also confirm electrode numbers...
+        ref_data = data[..., [18,20]].mean(-1, keepdims=True)
+        data -= ref_data
+        print('WARNING: DO NOT UTILIZE THIS OPTION ONLINE!')
     else:
         raise ValueError('Please select a valid reference!')
+    
+    return data
 
         
 def epoch_stage(data, fs):
+    """PSG bandpower feature and classification pre-processing function.
+
+    This function takes a numpy array of the lsl buffer selected data, partitions it into EEG, EMG, 
+    and EOG streams, filters the data, then subsequently recombines the data 
+
+    Parameters
+    ----------
+    data : numpy array of [n_samples x n_chans]
+        The lsl derived data. 
+        
+    fs : int/float
+        Sampling rate derived from lsl buffer.
+        
+    Returns
+    -------
+    win : numpy array of shape [n_epochs x (n_chans*n_bands)]
+        An array containing features for classifier with bands of interest spread across each 
+        channel (i.e., an index of [0 - epoch 1,: 0:5 - bands relative delta-line for channel 1],
+        [1 - epoch 2,: 5:10 - bands relative delta-line for channel 2], etc.) 
+    """
     ## Data selection and filtering
-    # select and re-reference EEG signal to the common average
-    # to-do: take mean of all channels in rereference function
+    # select and re-reference EEG signal to the common average, where 
+    # first 3 should correspond to EEG channels based lsl buffer get_data
     EEG = re_reference(data[:,[0,1,2]], reference='common average')  #Cz, C3, C4
     # EOG data selection
     EOG = data[:,[3]] 
@@ -465,19 +563,43 @@ def epoch_stage(data, fs):
     # combine all data streams back into one array
     data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))#*1e6  
     ## Safety checks
-    assert data.ndim == 2, 'Data must be of shape (nchan, n_samples).'
-    nchan, npts = data.shape
+    assert data.ndim == 2, 'Data must be of 2D (n_samples, n_chans).'
+    npts, nchan = data.shape
     if npts < nchan:
-        data = np.transpose(data) 
+        data = np.transpose(data)
         nchan, npts = data.shape
-    ## Compute bandpower of epoch
+        print('Data was transposed to be in shape [n_samples, n_chans].')
+    ## Compute bandpower of epoch, input: [n_chans, n_samples]
     win = bandpower(data, fs)
-    ## Reshape data for classifier (epochs x (nchans*bands))
+    ## Reshape data for classifier [epochs, (nchans*bands)]
     win = win.reshape(1, nchan*6, order='F')
     return win  
  
     
 def sleep_staging(bfr):
+    """Sleep Stageing function.
+
+    This function takes an lsl buffer argument and will be the sole argument in the 
+    sleep stageing thread, integrating the selection, filtering, re-referencing, channel
+    failure, and classification feature creation functions. Classification occurs every 
+    15 seconds for the last 30 seconds of data.
+
+    Parameters
+    ----------
+    bfr : Object
+        lsl derived data and info object. 
+              
+    Returns
+    -------
+    stage_predictArrays : list of integer values
+        A list containg global variable stage_predictArrays, which corresponds to
+        the classified stage for 30s epoch of extracted data and could either be:
+        0 --> Wake, N1, REM, or 1 --> N2, SWS
+        e.g., [1,1,1,0,1,0,0,....].    
+    channel_failure : list of integer values
+        A list containing the status of selected channels, either if they are intact --> 0,
+        or whether they have failed --> 1.
+    """
     global stage_predictArrays
     global channel_failure
     stage_predictArrays = []
