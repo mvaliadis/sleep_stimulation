@@ -19,10 +19,10 @@ import pickle
 
 
 #%% load classifier models
-rf = pickle.load(open("rf_model.p", "rb"))                  #1 EEG, 1 EOG, 1 EMG
-rf_1EEG = pickle.load(open("rf_model_EEG.p", "rb"))         #1 EEG
-rf_EEG_EOG = pickle.load(open("rf_model_EEG_EOG.p", "rb"))  #1 EEG, 1 EOG
-rf_2EEG = pickle.load(open("rf_model_2EEG.p", "rb"))        #2 EEG
+rf = pickle.load(open("rf_model_2_cfs.p", "rb"))            #1 EEG, 1 EOG, 1 EMG
+rf_2EEG = pickle.load(open("rf_model_3_cfs.p", "rb"))       #2 EEG
+rf_1EEG = pickle.load(open("rf_model_4_cfs.p", "rb"))       #1 EEG
+rf_EEG_EOG = pickle.load(open("rf_model_5_cfs.p", "rb"))    #1 EEG, 1 EOG
 
 #%% set parameters - only do for testing as excel file should contain proper info.
 time_delay = float(input('Please select the participants average peak to peak SO amplitude from the
@@ -95,7 +95,9 @@ if __name__ == '__main__':
     streamargs = [{"name":"eeg_replay"}, {"name":"reiz-marker"}]
     mainfolder = 'C:/Users/neuro/Documents/sleep_stimulation/recordings'
     session = Session(prefix = subj_id, streamargs = streamargs, mainfolder = mainfolder)
-
+  
+    ## Question: this is also being called in the sleep stageing thread; is this is intentional?
+    ## Does this then also apply to any of the other global variables?
     global stage_predictArrays
     stage_predictArrays = []
     
