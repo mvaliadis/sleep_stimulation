@@ -17,27 +17,23 @@ from scipy import signal
 import yasa
 import pickle
 
+
 #%% load classifier models
 rf = pickle.load(open("rf_model.p", "rb"))                  #1 EEG, 1 EOG, 1 EMG
 rf_1EEG = pickle.load(open("rf_model_EEG.p", "rb"))         #1 EEG
 rf_EEG_EOG = pickle.load(open("rf_model_EEG_EOG.p", "rb"))  #1 EEG, 1 EOG
 rf_2EEG = pickle.load(open("rf_model_2EEG.p", "rb"))        #2 EEG
 
-#%% set parameters
-
-
-#%% set up EEG and marker stream
-#-----------------------------
-#----Tip: for development and testing, you can just set up a fake EEG stream by
-#----entering the following into your command line:
-#----liesl mock --type EEG
-
+#%% set parameters - only do for testing as excel file should contain proper info.
+time_delay = float(input('Please select the participants average peak to peak SO amplitude from the
+                   'adaption evening. '))
+volume = int(input('Please select the volume for the experiment, either 0 or 1. '))
 
 #%% load subject code and condition script
+### Create function to make info directly inaccessible to the experimenter for blinding, 
+### instead of more cumbersome decryption, encryption method.
 # subj_cond = np.loadtxt('subject_codes.csv',delimiter=',', dtype='str', skiprows=1)
-
-# ## determine stimulation condition based on recording evening and subject code
-# # to-do later: conditions need to be encrypted at creation point and decrypted here 
+### determine stimulation condition based on recording evening and subject code 
 # cond = int(input('please enter experimental recording evening: ')) 
 # index_pos = []
 # # obtain index position of subject from excel file
@@ -62,29 +58,36 @@ rf_2EEG = pickle.load(open("rf_model_2EEG.p", "rb"))        #2 EEG
 #             time_delay = 0
 #             volume = 1 
 
-     
-        
-#%% put sleep stager into separate thread that can run in the background
+#%% set up EEG and marker stream for testing mock data
+#-----------------------------
+#----Tip: for development and testing, you can just set up a fake EEG stream by
+#----entering the following into your command line:
+#----liesl mock --type EEG
+#----Alternatively, a replay stream can be set-up to test already recorded data,
+#----to determine accuracy of detection, by entering the following:
+#----python -m replay --file <path_to_xdf_file>
 
+    
+#%% put sleep stager into separate thread that can run in the background
 def main():
 
-    sinfo = liesl.get_streaminfos_matching(type = 'EEG')
-    bfr = liesl.RingBuffer(sinfo[0], duration_in_ms = 30000) #30 s buffer to allow sleep staging
-    bfr.start()
-    
-    bfr.await_running()
-    sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
-    
-    # start thread
-    sleep_stager.start()
+     
+     # get sample info and pull data ringbuffer
+     sinfo = liesl.get_streaminfos_matching(type = 'EEG')
+     bfr = liesl.RingBuffer(sinfo[0], duration_in_ms = 30000) #30 s buffer to allow sleep staging
+     bfr.start()
 
-   
-    #%% initialize second thread for SW detection
+     bfr.await_running()
+     sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
 
-    SO_detection()
-    
+     # start thread
+     sleep_stager.start()
 
-    
+
+     #%% initialize second thread for SW detection
+
+     SO_detection()
+     
 
 if __name__ == '__main__':
     from liesl.files.session import Session
@@ -99,7 +102,9 @@ if __name__ == '__main__':
     with session('sleepstim'):
         main()
 
-## to-do: test timing of integrated functions 
-
-## to-do: stage sleep 
-## to-do: encrypt/decrypt subject codes
+       
+## to-do: test timing of integrated functions in simulation 
+## to-do: functionalize subject specific parameters
+## to-do: increase sensitivity of classifier
+## to-do: pilot testing
+## to-do: finalize docstrings 
