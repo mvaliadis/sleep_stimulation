@@ -740,9 +740,8 @@ def channel_failure_test(epochs):
     return channel_failureArray      
   
 
-def SO_detection(nepochsthresh = 2, minamp = -35, 
-                 winshift_in_ms = 20, totalruntime = 12600,
-                 time_delay = time_delay, volume = volume):
+def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35, 
+                 winshift_in_ms = 20, totalruntime = 12600):
     sinfo = liesl.get_streaminfos_matching(type = 'EEG')
 
     bfr2 = liesl.RingBuffer(sinfo[0], duration_in_ms = 30000) 
