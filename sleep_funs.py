@@ -791,12 +791,12 @@ def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35,
             # reiz.marker.push('crit: {}'.format(crit))
             
             ## Change the minamp to reflect the most negative median amplitude from the last 5 seconds
-            minamp = min(min(d[-5* bfr2.fs:]) - np.median(d), -35)
+            minamp = min(min(d[-5* int(bfr2.fs):]) - np.median(d), -35)
             
             ## Linear drift detection
             # Check the peak-to-peak maximum of the current epoch, if it exceeds 500 µV
             # (and -300 µV negative amplitude), reset threshold to -35 & block stimulation for 10s
-            if minamp < -300 and np.ptp(d[-2*bfr2.fs:] - np.median(d[-2*bfr2.fs:])) < 500:
+            if minamp < -300 and np.ptp(d[-2*int(bfr2.fs):] - np.median(d[-2*int(bfr2.fs):])) < 500:
                 minamp = -35
                 block_auditory_stim = True 
                 tblock = clock.now()
