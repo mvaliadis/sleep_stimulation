@@ -628,6 +628,55 @@ def sleep_staging(bfr):
         # pull data every ~15s
         reiz.clock.sleep(15)
 
+        
+def channel_failure_test(epochs):
+    # ~39.7 microseconds computation time, before appending added...
+    global channel_failure_featArray
+    channel_failure_featArray = []
+    channel_failureArray = []
+    ## Initialize all channels as functioning -> 1
+    channel_failureArray = np.ones(5)
+        
+    ## Baseline spectral density ratio levels
+    # calculate relative alpha power for all channels
+    rel_alpha = epochs[:,2::6]
+    # calculate relative line noise power for all channels
+    rel_ln = epochs[:,5::6]
+    # calculate alpha/line ratio for all channels
+    ln_alpha = rel_ln/rel_alpha
+    # combine the above into a list to be able to do baseline/ongoing comparisons
+    channel_failure_feat = list(ln_alpha) 
+    # append into list
+    channel_failure_featArray.append(channel_failure_feat[0])
+    
+    ## Ongoing check to see if threshold is exceeded
+    # individual epoch check (change in ln_alpha ratio)
+    epoch_check = channel_failure_feat[-1] > 5
+    if any(epoch_check): 
+        channel_failureArray[np.where(epoch_check)[0]] = 0
+    else:
+        # channel failure array remains the same
+        channel_failureArray = channel_failureArray
+    # epoch to epoch change in ln_alpha ratio, can only occur 
+    # if list of channel_failure_feats contains more than one index
+    if len(channel_failure_featArray) < 1:
+        epoch_diff = channel_failure_feat[-2] - channel_failure_feat[-1] > 5                                                    
+        if any(epoch_diff): 
+            channel_failureArray[np.where(epoch_diff)[0]] = 0
+        else:
+            # channel failure array remains the same
+            channel_failureArray = channel_failureArray
+    # compare baseline and present epoch (ln_alpha ratio)
+    baseline_check = ln_alpha[-1] - channel_failure_feat[0] > channel_failure_feat[0]*1.3
+    if any(baseline_check):
+        channel_failureArray[np.where(baseline_check)[0]] = 0
+    else:
+        # channel failure array remains the same
+        channel_failureArray = channel_failureArray
+
+    ## Return updated channel_failureArray
+    return channel_failureArray        
+        
 def rf_model_select(epoch_stage_features):
     ## Classifier selection:
     # remove line noise variable for classification
