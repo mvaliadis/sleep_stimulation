@@ -652,7 +652,7 @@ def rf_model_select(epoch_stage_features):
                 stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
             elif 1 and 2 in new_index:
                 epoch_stage_features = epoch_stage_features[:,5:15]
-                stage_predict = rf7.predict(epoch_stage_features)[0]
+                stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
         else:
             print('No available classification streams; waiting until the next iteration of loop...')
     # Classifer to use if EMG fails (1 EEG, 1 EOG) 
