@@ -604,10 +604,16 @@ def sleep_staging(bfr):
     stage_predictArrays = []
     tz = reiz.clock.now()
     ## Loop for 210 minutes (12600s)
+    #%% load classifier models
+    rf = pickle.load(open("rf_model_2_cfs.p", "rb"))            #1 EEG, 1 EOG, 1 EMG
+    rf_2EEG = pickle.load(open("rf_model_3_cfs.p", "rb"))       #2 EEG
+    rf_1EEG = pickle.load(open("rf_model_4_cfs.p", "rb"))       #1 EEG
+    rf_EEG_EOG = pickle.load(open("rf_model_5_cfs.p", "rb"))    #1 EEG, 1 EOG
+
     while reiz.clock.now() - tz < 12600:
         #while True:  
         ## Pull data from EEG, EOG, and EMG
-        data = bfr.get_data()[:,[9,10,11,20,21]]*1e6 
+        data = bfr.get_data()[:,[9,10,11,21,23]]*1e6 
         
         ## Extract bandpower and relative power per epoch
         epoch_stage_features = epoch_psd(data, bfr.fs)
@@ -618,7 +624,7 @@ def sleep_staging(bfr):
         channel_failure = channel_failure_test(epoch_stage_features)  
         
        # select classifier
-        stage_predict = int(rf_model_select(epoch_stage_features)) 
+        stage_predict = int(rf_model_select(epoch_stage_features, rf = rf, rf_2EEG = rf_2EEG, rf_1EEG = rf_1EEG, rf_EEG_EOG = rf_EEG_EOG)) 
              
         ## append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
         print(stage_predict)
@@ -660,14 +666,14 @@ def channel_failure_test(epochs):
     # epoch to epoch change in ln_alpha ratio, can only occur 
     # if list of channel_failure_feats contains more than one index
     if len(channel_failure_featArray) < 1:
-        epoch_diff = channel_failure_feat[-2] - channel_failure_feat[-1] > 5                                                    
+        epoch_diff = channel_failure_featArray[-2] - channel_failure_featArray[-1] > 2                                                    
         if any(epoch_diff): 
             channel_failureArray[np.where(epoch_diff)[0]] = 0
         else:
             # channel failure array remains the same
             channel_failureArray = channel_failureArray
     # compare baseline and present epoch (ln_alpha ratio)
-    baseline_check = ln_alpha[-1] - channel_failure_feat[0] > channel_failure_feat[0]*1.3
+    baseline_check = ln_alpha[-1] - channel_failure_featArray[0] > channel_failure_featArray[0]*1.3
     if any(baseline_check):
         channel_failureArray[np.where(baseline_check)[0]] = 0
     else:
@@ -677,7 +683,7 @@ def channel_failure_test(epochs):
     ## Return updated channel_failureArray
     return channel_failureArray        
         
-def rf_model_select(epoch_stage_features):
+def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
     ## Classifier selection:
     # remove line noise variable for classification
     epoch_stage_features = np.delete(epoch_stage_features, np.arange(5, epoch_stage_features.size, 6), axis=-1)
