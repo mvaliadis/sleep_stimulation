@@ -18,16 +18,10 @@ import yasa
 import pickle
 
 
-#%% load classifier models
-rf = pickle.load(open("rf_model_2_cfs.p", "rb"))            #1 EEG, 1 EOG, 1 EMG
-rf_2EEG = pickle.load(open("rf_model_3_cfs.p", "rb"))       #2 EEG
-rf_1EEG = pickle.load(open("rf_model_4_cfs.p", "rb"))       #1 EEG
-rf_EEG_EOG = pickle.load(open("rf_model_5_cfs.p", "rb"))    #1 EEG, 1 EOG
-
 #%% set parameters - only do for testing as excel file should contain proper info.
-time_delay = float(input('Please select the participants average peak to peak SO amplitude from the
+time_delay = .5#float(input('Please select the participants average peak to peak SO amplitude from the
                    'adaption evening. '))
-volume = int(input('Please select the volume for the experiment, either 0 or 1. '))
+volume = 1#int(input('Please select the volume for the experiment, either 0 or 1. '))
 
 #%% load subject code and condition script
 ### Create function to make info directly inaccessible to the experimenter for blinding, 
@@ -84,9 +78,9 @@ def main():
      sleep_stager.start()
 
 
-     #%% initialize second thread for SW detection
+     ## initialize second thread for SW detection
 
-     SO_detection()
+     SO_detection(time_delay, volume)
      
 
 if __name__ == '__main__':
