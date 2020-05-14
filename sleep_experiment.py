@@ -95,12 +95,7 @@ if __name__ == '__main__':
     streamargs = [{"name":"eeg_replay"}, {"name":"reiz-marker"}]
     mainfolder = 'C:/Users/neuro/Documents/sleep_stimulation/recordings'
     session = Session(prefix = subj_id, streamargs = streamargs, mainfolder = mainfolder)
-  
-    ## Question: this is also being called in the sleep stageing thread; is this is intentional?
-    ## Does this then also apply to any of the other global variables?
-    global stage_predictArrays
-    stage_predictArrays = []
-    
+     
     with session('sleepstim'):
         main()
 
