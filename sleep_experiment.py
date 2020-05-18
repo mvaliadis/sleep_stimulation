@@ -19,38 +19,13 @@ import pickle
 
 
 #%% set parameters - only do for testing as excel file should contain proper info.
-time_delay = .5#float(input('Please select the participants average peak to peak SO amplitude from the
-                   'adaption evening. '))
-volume = 1#int(input('Please select the volume for the experiment, either 0 or 1. '))
+time_delay = .5
+volume = 1
 
-#%% load subject code and condition script
-### Create function to make info directly inaccessible to the experimenter for blinding, 
-### instead of more cumbersome decryption, encryption method.
-# subj_cond = np.loadtxt('subject_codes.csv',delimiter=',', dtype='str', skiprows=1)
-### determine stimulation condition based on recording evening and subject code 
-# cond = int(input('please enter experimental recording evening: ')) 
-# index_pos = []
-# # obtain index position of subject from excel file
-# while index_pos == []:
-#     # to-do later: might be a more elegant way to obtain this
-#     subj = input('Please enter the subject token: ')
-#     index_pos = [i for i,item in enumerate(subj_cond) if subj in item]
-#     if index_pos == []:
-#         print('Subject code is invalid, please enter a valid subject code!')
-#     else:    
-#         ## time delay + volume based on condition
-#         # 0 corresponds to sham (same trigger as up, without volume)
-#         if int(subj_cond[index_pos[0],:][cond]) == 0:
-#             time_delay = .500
-#             volume = 0
-#         # 1 corresponds to up-state targeting 
-#         elif int(subj_cond[index_pos[0],:][cond]) == 1:
-#             time_delay = .500
-#             volume = 1
-#         # 2 corresponds to down-state targeting     
-#         elif int(subj_cond[index_pos[0],:][cond]) == 2:
-#             time_delay = 0
-#             volume = 1 
+#%% set parameters = load subject code and condition script
+#subjID = input('Please enter the correct subject ID: ')
+#evening = int(input(f'Please enter the correct recording session for the subject {subjID}: '))
+#time_delay, volume = subject_param_pull(file='subject_codes', subjID, evening)
 
 #%% set up EEG and marker stream for testing mock data
 #-----------------------------
@@ -79,8 +54,11 @@ def main():
 
 
      ## initialize second thread for SW detection
-
      SO_detection(time_delay, volume)
+    
+     # sleep for the remainder of the evening or until the participant awakens
+     print('Sleep time! The recording will continue, although the stimulation paradigm has officially ended. ')
+     reiz.clock.sleep(30000) 
      
 
 if __name__ == '__main__':
