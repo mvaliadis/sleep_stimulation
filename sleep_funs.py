@@ -785,11 +785,7 @@ def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35,
                                                           
             #%% online SWS detection pre-processing
             d = signal.filtfilt(*filtparams, d)
-          
-            # criterion for SO occurence
-            crit = min(d[-6:]) - np.median(d)
-            # reiz.marker.push('crit: {}'.format(crit))
-            
+                     
             ## Change the minamp to reflect the most negative median amplitude from the last 5 seconds
             minamp = min(min(d[-5* int(bfr2.fs):]) - np.median(d), -35)
             
@@ -800,9 +796,14 @@ def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35,
                 minamp = -35
                 block_auditory_stim = True 
                 tblock = clock.now()
-            if clock.now() - tblock > 10:
-                block_auditory_stim = False 
+                if clock.now() - tblock > 10:
+                    block_auditory_stim = False 
+                    
+            # criterion for SO occurence (last )
+            crit = min(d[-6:]) - np.median(d)
+            # reiz.marker.push('crit: {}'.format(crit))
             
+            # compare criterion with -35/updated minimum amplitude
             if crit < minamp and block_auditory_stim == False: 
                 # wait for 0ms, 500ms, depending on Up/Downstate    
                 clock.sleep(time_delay)
