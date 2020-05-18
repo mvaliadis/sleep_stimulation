@@ -803,16 +803,16 @@ def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35,
             if clock.now() - tblock > 10:
                 block_auditory_stim = False 
             
-                if crit < minamp and block_auditory_stim == False: 
-                    # wait for 0ms, 500ms, depending on Up/Downstate    
-                    clock.sleep(time_delay)
-                    # deliver tone twice with 1.075s interval
-                    n.play()
-                    clock.sleep(1.075)
-                    n.play()
-                    # blocking auditory stimulation for 2.5s
-                    block_auditory_stim = True 
-                    tblock = clock.now()
+            if crit < minamp and block_auditory_stim == False: 
+                # wait for 0ms, 500ms, depending on Up/Downstate    
+                clock.sleep(time_delay)
+                # deliver tone twice with 1.075s interval
+                n.play()
+                clock.sleep(1.075)
+                n.play()
+                # blocking auditory stimulation for 2.5s
+                block_auditory_stim = True 
+                tblock = clock.now()
                 
         clock.sleep_debiased(winshift_in_ms/1000)
 
