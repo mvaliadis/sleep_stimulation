@@ -383,7 +383,62 @@ def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
 #     return X_train, X_test
 
 #%%
-## Online signal pre-processing functions
+## Subject parameter function
+
+def subject_param_pull(file, subjID, evening):
+    """ This function pulls the participant parameter information from excel file to
+        prevent experimenter from directly observing condition relevant information 
+        for blinding purposes.
+
+    Parameters
+    ----------
+    file : str
+        Input file name with subject information minus .csv ending.
+    subjID : str
+        Subject ID #.
+    evening : int, either: {0, 1, 2}
+        Select the experimental recording evening for the participant. 
+
+    Returns
+    -------
+    time_delay : float
+        Returns requisite time delay based on recording evening, either 0 ms for
+        down-state targeting or 500 ms for both sham and up-state targeting.
+    volume : int
+        Returns volume based on recording evening condition, either 0 for sham and
+        1 for both up-state and down-state targeting.
+
+    """
+    # load file with subject specific parameters
+    subj_cond = np.loadtxt(file + 'csv', delimiter=',', dtype='str', skiprows=1) 
+    # load file with adaption peak to peak amplitude information 
+    mean_pk2pk = np.loadtxt(file + 'mean_pk2pk.csv', delimiter=',', dtype='str', skiprows=1) 
+    # determine stimulation condition based on recording evening and subject code 
+    index_pos = []
+    # obtain index position of subject from excel file
+    while index_pos == []:
+        index_pos = [i for i,item in enumerate(subj_cond) if subjID in item]
+        if index_pos == []:
+            raise NameError('Subject code is invalid, please enter a valid subject code! ')
+        else:    
+            ## time delay + volume based on condition
+            # 0 corresponds to sham (same trigger as up, without volume)
+            if int(subj_cond[index_pos[0],:][evening]) == 0:
+                time_delay = int(subj_cond[index_pos[0],:][mean_pk2pk])
+                volume = 0
+            # 1 corresponds to up-state targeting 
+            elif int(subj_cond[index_pos[0],:][evening]) == 1:
+                time_delay = int(subj_cond[index_pos[0],:][mean_pk2pk])
+                volume = 1
+            # 2 corresponds to down-state targeting     
+            elif int(subj_cond[index_pos[0],:][evening]) == 2:
+                time_delay = 0
+                volume = 1 
+                
+    return time_delay, volume
+
+#%%
+## Online processing functions
 def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
                                  (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True):
