@@ -678,15 +678,18 @@ def sleep_staging(bfr):
         # function produces an array matching the functional channels [1,1,1,1,1], 
         # where 0 is dysfunctional and 1 is functional.
         channel_failure = channel_failure_test(epoch_stage_features)  
+        #print(f'{channel_failure} - channel failure')
         
         # select classifier
         stage_predict = int(rf_model_select(epoch_stage_features, rf = rf, rf_2EEG = rf_2EEG, rf_1EEG = rf_1EEG, rf_EEG_EOG = rf_EEG_EOG)) 
    
         ## append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
         print(f'Sleep Stage: {stage_predict}')
-
-        stage_predictArrays.append(stage_predict)
+        reiz.marker.push('{stage_predict}')
         
+        stage_predictArrays.append(stage_predict)
+        print(f'{stage_predictArrays} - previously classified epochs')
+            
         # pull data every ~15s
         reiz.clock.sleep(15)
 
@@ -831,30 +834,28 @@ def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35,
     while reiz.clock.now() - tz < totalruntime:
         reiz.clock.tick()                                                 
         if sum(stage_predictArrays[-nepochsthresh:]) >= nepochsthresh:
-            print(f'{stage_predictArrays} - previously classified epochs')
-            print('SO detection has been invoked!')
+            #print('SO detection has been invoked!')
             if clock.now() - tblock > 2.99:
                 block_auditory_stim = False
-                print(f'{block_auditory_stim} - first timing block')
             #%% Proper channel needs to be selected based on channel failure index from classification thread
             if channel_failure[0] == 1:
                 d = bfr2.get_data()[:,5]*1e6 #C3, main recording channel
+                print('SO detection with channel: C3')
             elif channel_failure[1] == 1: 
                 d = bfr2.get_data()[:,4]*1e6 #Cz, alternative recording channel
+                print('SO detection with channel: Cz')
             elif channel_failure[2] == 1:
                 d = bfr2.get_data()[:,6]*1e6 #C4, second alternative recording channel
+                print('SO detection with channel: C4')
             else:
                 continue
-            print(f'{channel_failure} - channel failure')
-                                                          
+                                                               
             #%% online SWS detection pre-processing
             d = signal.filtfilt(*filtparams, d)
                      
-            ## Change the minamp to reflect the most negative median amplitude from the last 5 seconds, every 2 seconds
-            #minamp = min(min(d[-5* int(bfr2.fs):]) - np.median(d), -35)
-            ## Changed from minamp to 10th percentile of last 5 seconds
+            ## Minamp reflects deviation from the last 5 seconds of data within the 10th percentile of the signal
             minamp = min(np.percentile((d[-5* int(bfr2.fs):] - np.median(d)), 10), -35)
-            print(f'minimum amplitude value: {minamp}')
+            #print(f'minimum amplitude value: {minamp}')
             
             ## Linear drift detection
             # Check the peak-to-peak maximum of the current epoch, if it exceeds 500 µV
@@ -866,7 +867,7 @@ def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35,
             # criterion for SO occurence
             crit = min(d[int(-0.02*bfr2.fs):]) - np.median(d)
             print(f'critical value: {crit}')
-            # reiz.marker.push('crit: {}'.format(crit))
+            #reiz.marker.push('crit: {}'.format(crit))
             
             if crit < minamp and block_auditory_stim == False: 
                 print('target reached')
