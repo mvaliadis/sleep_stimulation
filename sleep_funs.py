@@ -383,7 +383,7 @@ def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
 #     return X_train, X_test
 
 #%%
-## Subject parameter function
+## Subject code based parameter pulling function
 
 def subject_param_pull(file, subjID, evening):
     """ This function pulls the participant parameter information from excel file to
@@ -438,7 +438,7 @@ def subject_param_pull(file, subjID, evening):
     return time_delay, volume
 
 #%%
-## Online processing functions
+## Online signal pre-processing functions
 def bandpower(epochs, fs, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
                                  (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True):
@@ -566,12 +566,12 @@ def re_reference(data, reference='common average'):
         # Compute mean of each epoch per channel then subtract common average
         ref_data = data[..., :].mean(-1, keepdims=True)
         data -= ref_data
+        print('Data will be re-referenced to the common average of all selected EEG electrodes!')
     elif reference == 'mastoids':
-        # not valid online as mastoid data is not being pulled, 
-        # also confirm electrode numbers...
-        ref_data = data[..., [18,20]].mean(-1, keepdims=True)
+        # May change to name indexed instead of numerical index...
+        ref_data = data[..., [3,4]].mean(-1, keepdims=True)
         data -= ref_data
-        print('WARNING: DO NOT UTILIZE THIS OPTION ONLINE!')
+        print('Data will be re-referenced to the average of the mastoids!')
     else:
         raise ValueError('Please select a valid reference!')
     
@@ -600,21 +600,20 @@ def epoch_psd(data, fs):
         [1 - epoch 2,: 5:10 - bands relative delta-line for channel 2], etc.) 
     """
     ## Data selection and filtering
+    # TO-DO: Index based on channel names...
     # select and re-reference EEG signal to the common average, where 
     # first 3 should correspond to EEG channels based lsl buffer get_data
-    EEG = re_reference(data[:,[0,1,2]], reference='common average')  #Cz, C3, C4
+    EEG = re_reference(data[:,[0,1,2]], reference='mastoids')  #Cz, C3, C4
     # EOG data selection
-    EOG = data[:,[3]] 
+    EOG = data[:,[5]] 
     # combine EEG & EOG for filtering (necessary if re-referencing online)
     EEG_EOG = np.concatenate([EEG, EOG], axis=1)
     # bandpass filter data (defaults to 4th order filt, 0.5 - 35 Hz bandpass)
     EEG_EOG = bfr_butter_filt(EEG_EOG, fs)
-    # notch filter data
-    EEG_EOG = bfr_butter_filt(EEG_EOG, fs, lfreq = 49, hfreq = 51, btype='stop')
     # select and filter EMG 
-    EMG = bfr_butter_filt(data[:,[4]], fs, lfreq = 10, hfreq = 100)
+    EMG = bfr_butter_filt(data[:,[6]], fs, lfreq = 10, hfreq = 100)
     # combine all data streams back into one array
-    data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))#*1e6  
+    data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))
     ## Safety checks
     assert data.ndim == 2, 'Data must be of 2D [n_chans, n_samples].'
     nchan, npts = data.shape
@@ -626,8 +625,8 @@ def epoch_psd(data, fs):
     win = bandpower(data, fs)
     ## Reshape data for classifier [epochs, (nchans*bands)]
     win = win.reshape(1, nchan*6, order='F')
-    return win 
- 
+    return win  
+  
     
 def sleep_staging(bfr):
     """Sleep Stageing function.
@@ -665,25 +664,27 @@ def sleep_staging(bfr):
     rf_1EEG = pickle.load(open("rf_model_4_cfs.p", "rb"))       #1 EEG
     rf_EEG_EOG = pickle.load(open("rf_model_5_cfs.p", "rb"))    #1 EEG, 1 EOG
 
-    while reiz.clock.now() - tz < 12600:
-        #while True:  
+    while reiz.clock.now() - tz < 12600: #True 
         ## Pull data from EEG, EOG, and EMG
-        data = bfr.get_data()[:,[9,10,11,21,23]]*1e6 
-        
+        #data = bfr.get_data()[:,[5,4,6,12,13]]*1e6  #single electrodes 
+        data = bfr.get_data()[:,[4,5,6,12,13,14,15]]*1e6 #cap - index based ideally...
         ## Extract bandpower and relative power per epoch
         epoch_stage_features = epoch_psd(data, bfr.fs)
-
+        
+        # TO-DO: Compute relative values while ignoring 30 Hz - 49 Hz band, perhaps
+        # re-write yasa function...
+        
         ## Baseline and ongoing channel failure calculation comparison
         # function produces an array matching the functional channels [1,1,1,1,1], 
         # where 0 is dysfunctional and 1 is functional.
         channel_failure = channel_failure_test(epoch_stage_features)  
         
-       # select classifier
+        # select classifier
         stage_predict = int(rf_model_select(epoch_stage_features, rf = rf, rf_2EEG = rf_2EEG, rf_1EEG = rf_1EEG, rf_EEG_EOG = rf_EEG_EOG)) 
-             
+   
         ## append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
-        print(stage_predict)
-        #stage_predict = 1 # for testing
+        print(f'Sleep Stage: {stage_predict}')
+
         stage_predictArrays.append(stage_predict)
         
         # pull data every ~15s
@@ -747,6 +748,7 @@ def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
         index = np.r_[0:5,15:25] #bands for: ch0, ch3, ch4
         epoch_stage_features = epoch_stage_features[:,[index]][0]
         stage_predict = rf.predict(epoch_stage_features)[0]
+        reiz.marker.push('rf_base_model')
     # Classifer to use if bipolar channels fail (2 EEG)          
     elif all(channel_failure[3::]==0) and all(channel_failure[0:3] == 1):
         index = np.where(channel_failure[0:3] == 1)[0]
@@ -763,6 +765,7 @@ def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
             elif 1 and 2 in new_index:
                 epoch_stage_features = epoch_stage_features[:,5:15]
                 stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
+            reiz.marker.push('rf_2EEG_model')
         else:
             print('No available classification streams; waiting until the next iteration of loop...')
     # Classifer to use if EMG fails (1 EEG, 1 EOG) 
@@ -784,6 +787,7 @@ def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
                 stage_predict = rf_EEG_EOG.predict(epoch_stage_features)[0]
             else:
                 print('No available classification streams; waiting until the next iteration of loop...')
+            reiz.marker.push('rf_EEG_EOG_model')
     # Classifer to use if bipolar channels + 2 EEG channels fail (1 EEG)
     elif sum(channel_failure[0:3])==1 and sum(channel_failure[4:5])==0:
         index = np.where(channel_failure[0:3] == 1)[0]
@@ -799,8 +803,10 @@ def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
             stage_predict = rf_1EEG.predict(epoch_stage_features)[0]
         else:
             print('No available classification streams; waiting until the next iteration of loop...') 
+        reiz.marker.push('rf_1EEG_model')
     else:
         print('No available classification streams; waiting until the next iteration of loop...')
+        stage_predict = 0
         #continue
     
     return stage_predict
@@ -824,49 +830,53 @@ def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35,
     tz = reiz.clock.now()
     while reiz.clock.now() - tz < totalruntime:
         reiz.clock.tick()                                                 
-        if sum(stage_predictArrays[-nepochsthresh:]) >= nepochsthresh: 
-            if clock.now() - tblock > 2.4:
+        if sum(stage_predictArrays[-nepochsthresh:]) >= nepochsthresh:
+            print(f'{stage_predictArrays} - previously classified epochs')
+            print('SO detection has been invoked!')
+            if clock.now() - tblock > 2.99:
                 block_auditory_stim = False
-                
+                print(f'{block_auditory_stim} - first timing block')
             #%% Proper channel needs to be selected based on channel failure index from classification thread
             if channel_failure[0] == 1:
-                d = bfr2.get_data()[:,9]*1e6 #C3, main recording channel
+                d = bfr2.get_data()[:,5]*1e6 #C3, main recording channel
             elif channel_failure[1] == 1: 
-                d = bfr2.get_data()[:,10]*1e6 #Cz, alternative recording channel
+                d = bfr2.get_data()[:,4]*1e6 #Cz, alternative recording channel
             elif channel_failure[2] == 1:
-                d = bfr2.get_data()[:,11]*1e6 #C4, second alternative recording channel
+                d = bfr2.get_data()[:,6]*1e6 #C4, second alternative recording channel
             else:
                 continue
+            print(f'{channel_failure} - channel failure')
                                                           
             #%% online SWS detection pre-processing
             d = signal.filtfilt(*filtparams, d)
                      
-            ## Change the minamp to reflect the most negative median amplitude from the last 5 seconds
-            minamp = min(min(d[-5* int(bfr2.fs):]) - np.median(d), -35)
+            ## Change the minamp to reflect the most negative median amplitude from the last 5 seconds, every 2 seconds
+            #minamp = min(min(d[-5* int(bfr2.fs):]) - np.median(d), -35)
+            ## Changed from minamp to 10th percentile of last 5 seconds
+            minamp = min(np.percentile((d[-5* int(bfr2.fs):] - np.median(d)), 10), -35)
+            print(f'minimum amplitude value: {minamp}')
             
             ## Linear drift detection
             # Check the peak-to-peak maximum of the current epoch, if it exceeds 500 µV
             # (and -300 µV negative amplitude), reset threshold to -35 & block stimulation for 10s
             if minamp < -300 and np.ptp(d[-2*int(bfr2.fs):] - np.median(d[-2*int(bfr2.fs):])) < 500:
                 minamp = -35
-                block_auditory_stim = True 
-                tblock = clock.now()
-                if clock.now() - tblock > 10:
-                    block_auditory_stim = False 
-                    
-            # criterion for SO occurence (last )
-            crit = min(d[-6:]) - np.median(d)
+                reiz.clock.sleep(10)
+             
+            # criterion for SO occurence
+            crit = min(d[int(-0.02*bfr2.fs):]) - np.median(d)
+            print(f'critical value: {crit}')
             # reiz.marker.push('crit: {}'.format(crit))
             
-            # compare criterion with -35/updated minimum amplitude
             if crit < minamp and block_auditory_stim == False: 
-                # wait for 0ms, 500ms, depending on Up/Downstate    
+                print('target reached')
+                # wait for 0ms, ~500ms, depending on Up/Downstate    
                 clock.sleep(time_delay)
                 # deliver tone twice with 1.075s interval
                 n.play()
                 clock.sleep(1.075)
                 n.play()
-                # blocking auditory stimulation for 2.5s
+                # blocking auditory stimulation for 3s refractory period
                 block_auditory_stim = True 
                 tblock = clock.now()
                 
