@@ -603,15 +603,15 @@ def epoch_psd(data, fs):
     # TO-DO: Index based on channel names...
     # select and re-reference EEG signal to the common average, where 
     # first 3 should correspond to EEG channels based lsl buffer get_data
-    EEG = re_reference(data[:,[0,1,2]], reference='mastoids')  #Cz, C3, C4
+    EEG = re_reference(data[:,[0,1,2]], reference='common average')  #Cz, C3, C4
     # EOG data selection
-    EOG = data[:,[5]] 
+    EOG = data[:,[3]] 
     # combine EEG & EOG for filtering (necessary if re-referencing online)
     EEG_EOG = np.concatenate([EEG, EOG], axis=1)
     # bandpass filter data (defaults to 4th order filt, 0.5 - 35 Hz bandpass)
     EEG_EOG = bfr_butter_filt(EEG_EOG, fs)
     # select and filter EMG 
-    EMG = bfr_butter_filt(data[:,[6]], fs, lfreq = 10, hfreq = 100)
+    EMG = bfr_butter_filt(data[:,[4]], fs, lfreq = 10, hfreq = 100)
     # combine all data streams back into one array
     data = np.transpose(np.concatenate([EEG_EOG, EMG], axis=1))
     ## Safety checks
@@ -655,6 +655,7 @@ def sleep_staging(bfr):
     # %timeit measured at 9.5 ms per 30s before classification 
     global stage_predictArrays
     global channel_failure
+    global channel_failureArray
     stage_predictArrays = []
     tz = reiz.clock.now()
     ## Loop for 210 minutes (12600s)
@@ -667,7 +668,7 @@ def sleep_staging(bfr):
     while reiz.clock.now() - tz < 12600: #True 
         ## Pull data from EEG, EOG, and EMG
         #data = bfr.get_data()[:,[5,4,6,12,13]]*1e6  #single electrodes 
-        data = bfr.get_data()[:,[4,5,6,12,13,14,15]]*1e6 #cap - index based ideally...
+        data = bfr.get_data()[:,[4,5,6,14,15]]*1e6 #cap - index based ideally...
         ## Extract bandpower and relative power per epoch
         epoch_stage_features = epoch_psd(data, bfr.fs)
         
@@ -743,6 +744,7 @@ def channel_failure_test(epochs):
     return channel_failureArray        
         
 def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
+    stage_predict = 0
     ## Classifier selection:
     # remove line noise variable for classification
     epoch_stage_features = np.delete(epoch_stage_features, np.arange(5, epoch_stage_features.size, 6), axis=-1)
@@ -815,7 +817,7 @@ def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
     return stage_predict
 
 
-def SO_detection(time_delay, volume, nepochsthresh = 2, minamp = -35, 
+def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35, 
                  winshift_in_ms = 20, totalruntime = 12600):
     sinfo = liesl.get_streaminfos_matching(type = 'EEG')
 
