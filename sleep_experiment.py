@@ -21,13 +21,12 @@ import pickle
 
 #%% set parameters - only do for testing as excel file should contain proper info.
 ## load subject code and condition script
-# file = 'subject_codes.csv'
-# subjID = input('Please enter the correct subject ID: ')
-# evening = int(input(f'Please enter the correct recording session for the subject {subjID}: '))
-# time_delay, volume = subject_param_pull(file='subject_codes.csv', subjID, evening)
+file = 'subject_codes.csv'
+subjID = input('Please enter the correct subject ID: ')
+evening = int(input(f'Please enter the correct recording session for the subject {subjID}: '))
 
-time_delay = 0#float(input('Please select the participants average peak to peak SO amplitude from the adaption evening. '))
-volume = 1#int(input('Please select the volume for the experiment, either 0 or 1. '))
+#time_delay = float(input('Please select the participants average peak to peak SO amplitude from the adaption evening. '))
+#volume = int(input('Please select the volume for the experiment, either 0 or 1. '))
 
 #%% set up EEG and marker stream for testing mock data
 #-----------------------------
@@ -58,7 +57,12 @@ def main():
 
 
      # initialize second thread for SW detection
-     SO_detection(time_delay, volume)
+     if evening!='adaption':
+        SO_detection(time_delay, volume = subject_param_pull(file='subject_codes.csv', subjID, evening))
+     else:
+        SO_detection(time_delay=0, volume=0)
+        
+    
      
      # sleep for the remainder of the evening or until participant awakens
      print('Sleep time! The recording will continue, although the stimulation paradigm has officially ended!')
@@ -70,16 +74,14 @@ def main():
 if __name__ == '__main__':
     from liesl.files.session import Session
     #reiz.marker.start()
-    subj_id = subjID
+    rec_id = subjID + evening
     streamargs = [{"name":"eego"}, {"name":"reiz-marker"}]
-    #streamargs = [{'type':'EEG','type':'Markers'}]
     mainfolder = 'C:/Users/neuro/Documents/sleep_stimulation/recordings'
-    session = Session(prefix = subj_id, streamargs = streamargs, mainfolder = mainfolder)
+    session = Session(prefix = rec_id, streamargs = streamargs, mainfolder = mainfolder)
      
     with session('sleepstim'):
         main()
       
 ## to-do: test timing of integrated functions in simulation 
 ## to-do: increase sensitivity of classifier
-## to-do: pilot testing
 ## to-do: finalize docstrings
