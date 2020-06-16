@@ -13,8 +13,10 @@ import yasa
 from scipy.signal import welch
 from os import chdir as cd
 from os import listdir
-cd('/users/neuro/sleep_stimulation')
+cd('/home/administrator/sleep_stimulation-development')
 from sleep_funs import process_raw_EDF, process_raw_EDF_cfs, bandpower
+#cd('/users/neuro/sleep_stimulation')
+cd('/media/administrator/data/cfs/polysomnography')
 
 #%%
 ## Physionet data
@@ -51,7 +53,8 @@ for idx, fname in enumerate(files):
 ## NSRR Cleveland Sleep Study
 #cd('/users/neuro/cfs/polysomnography')
 
-files = list(set([f.split('.')[0] for f in sorted(listdir()) if f.endswith('.xml') or f.endswith('.edf')]))
+#files = list(set([f.split('.')[0] for f in sorted(listdir()) if f.endswith('.xml') or f.endswith('.edf')]))
+files = list(set([f.split('.')[0] for f in sorted(listdir()) if f.endswith('.edf')]))
 
 allArrays = []
 stageArrays = []
@@ -64,7 +67,7 @@ for idx, fname in enumerate(files):
     # compute power spectral density with welch's method
     data = bandpower(datArray, fs=128, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
-                                 (16, 30, 'Beta')], relative=True)
+                                 (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True)
     
     # reshape data for classifier, must be (epochs x (nchans*bands))
     data = np.swapaxes(data, 0, 1)
