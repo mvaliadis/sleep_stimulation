@@ -410,9 +410,9 @@ def subject_param_pull(file, subjID, evening):
 
     """
     # load file with subject specific parameters
-    subj_cond = np.loadtxt(file + 'csv', delimiter=',', dtype='str', skiprows=1) 
+    subj_cond = np.loadtxt(file + '.csv', delimiter=',', dtype='str', skiprows=1) 
     # load file with adaption peak to peak amplitude information 
-    mean_pk2pk = np.loadtxt(file + 'mean_pk2pk.csv', delimiter=',', dtype='str', skiprows=1) 
+    #mean_pk2pk = np.loadtxt(file + 'mean_pk2pk.csv', delimiter=',', dtype='str', skiprows=1) 
     # determine stimulation condition based on recording evening and subject code 
     index_pos = []
     # obtain index position of subject from excel file
@@ -424,11 +424,13 @@ def subject_param_pull(file, subjID, evening):
             ## time delay + volume based on condition
             # 0 corresponds to sham (same trigger as up, without volume)
             if int(subj_cond[index_pos[0],:][evening]) == 0:
-                time_delay = int(subj_cond[index_pos[0],:][mean_pk2pk])
+                #time_delay = int(subj_cond[index_pos[0],:][mean_pk2pk])
+                time_delay = int(subj_cond[index_pos[0],:][evening])
                 volume = 0
             # 1 corresponds to up-state targeting 
             elif int(subj_cond[index_pos[0],:][evening]) == 1:
-                time_delay = int(subj_cond[index_pos[0],:][mean_pk2pk])
+                #time_delay = int(subj_cond[index_pos[0],:][mean_pk2pk])
+                time_delay = int(subj_cond[index_pos[0],:][evening])
                 volume = 1
             # 2 corresponds to down-state targeting     
             elif int(subj_cond[index_pos[0],:][evening]) == 2:
@@ -603,7 +605,8 @@ def epoch_psd(data, fs):
     # TO-DO: Index based on channel names...
     # select and re-reference EEG signal to the common average, where 
     # first 3 should correspond to EEG channels based lsl buffer get_data
-    EEG = re_reference(data[:,[0,1,2]], reference='common average')  #Cz, C3, C4
+    # EEG = re_reference(data[:,[0,1,2]], reference='common average')  #Cz, C3, C4
+    EEG = data[:,[0,1,2]]
     # EOG data selection
     EOG = data[:,[3]] 
     # combine EEG & EOG for filtering (necessary if re-referencing online)
@@ -660,20 +663,17 @@ def sleep_staging(bfr):
     tz = reiz.clock.now()
     ## Loop for 210 minutes (12600s)
     #%% load classifier models
-    rf = pickle.load(open("rf_model_2_cfs.p", "rb"))            #1 EEG, 1 EOG, 1 EMG
-    rf_2EEG = pickle.load(open("rf_model_3_cfs.p", "rb"))       #2 EEG
-    rf_1EEG = pickle.load(open("rf_model_4_cfs.p", "rb"))       #1 EEG
-    rf_EEG_EOG = pickle.load(open("rf_model_5_cfs.p", "rb"))    #1 EEG, 1 EOG
+    rf_1 = pickle.load(open("rf_model_1_cfs.p", "rb"))            #2 EEG, 1 EOG, 1 EMG
+    rf_2 = pickle.load(open("rf_model_2_cfs.p", "rb"))            #1 EEG, 1 EOG, 1 EMG
+    rf_3 = pickle.load(open("rf_model_3_cfs.p", "rb"))            #2 EEG, 1 EOG
+    #rf_EEG_EOG = pickle.load(open("rf_model_5_cfs.p", "rb"))     #DNU - 1 EEG, 1 EOG
 
     while reiz.clock.now() - tz < 12600: #True 
         ## Pull data from EEG, EOG, and EMG
         #data = bfr.get_data()[:,[5,4,6,12,13]]*1e6  #single electrodes 
-        data = bfr.get_data()[:,[4,5,6,14,15]]*1e6 #cap - index based ideally...
+        data = bfr.get_data()[:,[8,9,10,22,24]]*1e6 #cap - index based ideally...
         ## Extract bandpower and relative power per epoch
         epoch_stage_features = epoch_psd(data, bfr.fs)
-        
-        # TO-DO: Compute relative values while ignoring 30 Hz - 49 Hz band, perhaps
-        # re-write yasa function...
         
         ## Baseline and ongoing channel failure calculation comparison
         # function produces an array matching the functional channels [1,1,1,1,1], 
@@ -682,11 +682,24 @@ def sleep_staging(bfr):
         #print(f'{channel_failure} - channel failure')
         
         # select classifier
-        stage_predict = int(rf_model_select(epoch_stage_features, rf = rf, rf_2EEG = rf_2EEG, rf_1EEG = rf_1EEG, rf_EEG_EOG = rf_EEG_EOG)) 
-   
+        #stage_predict = int(rf_model_select(epoch_stage_features, rf = rf, rf_2EEG = rf_2EEG, rf_1EEG = rf_1EEG, rf_EEG_EOG = rf_EEG_EOG)) 
+        # remove line noise variable for classification
+        epoch_stage_features = np.delete(epoch_stage_features, np.arange(5, epoch_stage_features.size, 6), axis=-1)
+        epoch_stage_features_2 = epoch_stage_features[:,10:25]
+        # 1 EEG, 1 EOG, 1 EMG
+        stage_predict = int(rf_2.predict(epoch_stage_features_2)[0])
+        reiz.marker.push('rf_2_model')
+        
         ## append stage arrays (1 = N2/3; 0 = Wake/N1/REM)
         print(f'Sleep Stage: {stage_predict}')
-        reiz.marker.push('{stage_predict}')
+        reiz.marker.push('stage_predict')
+        
+        ## Change this to reflect 0 or 1 for SO detection
+        # stage_predict[stage_predict == 0] = 0
+        # stage_predict[stage_predict == 1] = 0
+        # stage_predict[stage_predict == 2] = 1 
+        # stage_predict[stage_predict == 3] = 1
+        # stage_predict[stage_predict == 4] = 0
         
         stage_predictArrays.append(stage_predict)
         print(f'{stage_predictArrays} - previously classified epochs')
@@ -745,79 +758,81 @@ def channel_failure_test(epochs):
         
 def rf_model_select(epoch_stage_features, rf, rf_2EEG, rf_1EEG, rf_EEG_EOG):
     stage_predict = 0
-    ## Classifier selection:
-    # remove line noise variable for classification
-    epoch_stage_features = np.delete(epoch_stage_features, np.arange(5, epoch_stage_features.size, 6), axis=-1)
-    # Classifer to use when all channels are functional (1 EEG, 1 EOG, 1 EMG)
-    if all(channel_failure==1):
-        index = np.r_[0:5,15:25] #bands for: ch0, ch3, ch4
-        epoch_stage_features = epoch_stage_features[:,[index]][0]
-        stage_predict = rf.predict(epoch_stage_features)[0]
-        reiz.marker.push('rf_base_model')
-    # Classifer to use if bipolar channels fail (2 EEG)          
-    elif all(channel_failure[3::]==0) and all(channel_failure[0:3] == 1):
-        index = np.where(channel_failure[0:3] == 1)[0]
-        if index.size == 0:
-            # randomly select two functioning EEG channels
-            new_index = sorted(random.sample(list(index), k=2))
-            if 0 and 1 in new_index:
-                epoch_stage_features = epoch_stage_features[:,0:10]
-                stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
-            elif 0 and 2 in new_index:
-                index = np.r_[0:5,10:15]
-                epoch_stage_features = epoch_stage_features[:,[index]][0]
-                stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
-            elif 1 and 2 in new_index:
-                epoch_stage_features = epoch_stage_features[:,5:15]
-                stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
-            reiz.marker.push('rf_2EEG_model')
-        else:
-            print('No available classification streams; waiting until the next iteration of loop...')
-    # Classifer to use if EMG fails (1 EEG, 1 EOG) 
-    elif channel_failure[4]==0 and channel_failure[3]==1:
-        if sum(channel_failure[0:3] >= 1):
-            index = np.where(channel_failure[0:3] == 1)[0]
-            # randomly select one functioning EEG channel
-            new_index = random.choice(list(index))
-            if new_index == 0:
-                index = np.r_[0:5,15:20]
-                epoch_stage_features = epoch_stage_features[:,[index]][0]
-                stage_predict = rf_EEG_EOG.predict(epoch_stage_features)[0]
-            if new_index == 1:
-                index = np.r_[5:10,15:20]
-                epoch_stage_features = epoch_stage_features[:,[index]][0]
-                stage_predict = rf_EEG_EOG.predict(epoch_stage_features)[0]
-            elif new_index == 2:
-                epoch_stage_features = epoch_stage_features[:,10:20]
-                stage_predict = rf_EEG_EOG.predict(epoch_stage_features)[0]
-            else:
-                print('No available classification streams; waiting until the next iteration of loop...')
-            reiz.marker.push('rf_EEG_EOG_model')
-    # Classifer to use if bipolar channels + 2 EEG channels fail (1 EEG)
-    elif sum(channel_failure[0:3])==1 and sum(channel_failure[4:5])==0:
-        index = np.where(channel_failure[0:3] == 1)[0]
-        new_index = random.choice(list(index))
-        if new_index == 0:
-            epoch_stage_features = epoch_stage_features[:,0:5]
-            stage_predict = rf_1EEG.predict(epoch_stage_features)[0]
-        elif new_index == 1:
-            epoch_stage_features = epoch_stage_features[:,5:10]
-            stage_predict = rf_1EEG.predict(epoch_stage_features)[0]
-        elif new_index == 2:
-            epoch_stage_features = epoch_stage_features[:,10:15]
-            stage_predict = rf_1EEG.predict(epoch_stage_features)[0]
-        else:
-            print('No available classification streams; waiting until the next iteration of loop...') 
-        reiz.marker.push('rf_1EEG_model')
-    else:
-        print('No available classification streams; waiting until the next iteration of loop...')
-        stage_predict = 0
-        #continue
+    stage_predict = rf_2.predict(epoch_stage_features)[0]
+    reiz.marker.push('rf_2_model')
+    # ## Classifier selection:
+    # # remove line noise variable for classification
+    # epoch_stage_features = np.delete(epoch_stage_features, np.arange(5, epoch_stage_features.size, 6), axis=-1)
+    # # Classifer to use when all channels are functional (1 EEG, 1 EOG, 1 EMG)
+    # if all(channel_failure==1):
+    #     index = np.r_[0:5,15:25] #bands for: ch0, ch3, ch4
+    #     epoch_stage_features = epoch_stage_features[:,[index]][0]
+    #     stage_predict = rf.predict(epoch_stage_features)[0]
+    #     reiz.marker.push('rf_base_model')
+    # # Classifer to use if bipolar channels fail (2 EEG)          
+    # elif all(channel_failure[3::]==0) and all(channel_failure[0:3] == 1):
+    #     index = np.where(channel_failure[0:3] == 1)[0]
+    #     if index.size == 0:
+    #         # randomly select two functioning EEG channels
+    #         new_index = sorted(random.sample(list(index), k=2))
+    #         if 0 and 1 in new_index:
+    #             epoch_stage_features = epoch_stage_features[:,0:10]
+    #             stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
+    #         elif 0 and 2 in new_index:
+    #             index = np.r_[0:5,10:15]
+    #             epoch_stage_features = epoch_stage_features[:,[index]][0]
+    #             stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
+    #         elif 1 and 2 in new_index:
+    #             epoch_stage_features = epoch_stage_features[:,5:15]
+    #             stage_predict = rf_2EEG.predict(epoch_stage_features)[0]
+    #         reiz.marker.push('rf_2EEG_model')
+    #     else:
+    #         print('No available classification streams; waiting until the next iteration of loop...')
+    # # Classifer to use if EMG fails (1 EEG, 1 EOG) 
+    # elif channel_failure[4]==0 and channel_failure[3]==1:
+    #     if sum(channel_failure[0:3] >= 1):
+    #         index = np.where(channel_failure[0:3] == 1)[0]
+    #         # randomly select one functioning EEG channel
+    #         new_index = random.choice(list(index))
+    #         if new_index == 0:
+    #             index = np.r_[0:5,15:20]
+    #             epoch_stage_features = epoch_stage_features[:,[index]][0]
+    #             stage_predict = rf_EEG_EOG.predict(epoch_stage_features)[0]
+    #         if new_index == 1:
+    #             index = np.r_[5:10,15:20]
+    #             epoch_stage_features = epoch_stage_features[:,[index]][0]
+    #             stage_predict = rf_EEG_EOG.predict(epoch_stage_features)[0]
+    #         elif new_index == 2:
+    #             epoch_stage_features = epoch_stage_features[:,10:20]
+    #             stage_predict = rf_EEG_EOG.predict(epoch_stage_features)[0]
+    #         else:
+    #             print('No available classification streams; waiting until the next iteration of loop...')
+    #         reiz.marker.push('rf_EEG_EOG_model')
+    # # Classifer to use if bipolar channels + 2 EEG channels fail (1 EEG)
+    # elif sum(channel_failure[0:3])==1 and sum(channel_failure[4:5])==0:
+    #     index = np.where(channel_failure[0:3] == 1)[0]
+    #     new_index = random.choice(list(index))
+    #     if new_index == 0:
+    #         epoch_stage_features = epoch_stage_features[:,0:5]
+    #         stage_predict = rf_1EEG.predict(epoch_stage_features)[0]
+    #     elif new_index == 1:
+    #         epoch_stage_features = epoch_stage_features[:,5:10]
+    #         stage_predict = rf_1EEG.predict(epoch_stage_features)[0]
+    #     elif new_index == 2:
+    #         epoch_stage_features = epoch_stage_features[:,10:15]
+    #         stage_predict = rf_1EEG.predict(epoch_stage_features)[0]
+    #     else:
+    #         print('No available classification streams; waiting until the next iteration of loop...') 
+    #     reiz.marker.push('rf_1EEG_model')
+    # else:
+    #     print('No available classification streams; waiting until the next iteration of loop...')
+    #     stage_predict = 0
+    #     #continue
     
     return stage_predict
 
 
-def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35, 
+def SO_detection(time_delay, volume, nepochsthresh = 10, minamp = -35, 
                  winshift_in_ms = 20, totalruntime = 12600):
     sinfo = liesl.get_streaminfos_matching(type = 'EEG')
 
@@ -834,7 +849,7 @@ def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35,
     tblock = 0
     tz = reiz.clock.now()
     while reiz.clock.now() - tz < totalruntime:
-        reiz.clock.tick()                                                 
+        reiz.clock.tick()                   
         if sum(stage_predictArrays[-nepochsthresh:]) >= nepochsthresh:
             #print('SO detection has been invoked!')
             if clock.now() - tblock > 2.99:
@@ -868,7 +883,7 @@ def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35,
              
             # criterion for SO occurence
             crit = min(d[int(-0.02*bfr2.fs):]) - np.median(d)
-            print(f'critical value: {crit}')
+            #print(f'critical value: {crit}')
             #reiz.marker.push('crit: {}'.format(crit))
             
             if crit < minamp and block_auditory_stim == False: 
@@ -887,7 +902,7 @@ def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35,
 
  
 class PinkNoise():
-    def generate_noise(self,duration_in_s = 0.05, fs = 48000, ncols=16):
+    def generate_noise(self,duration_in_s = .05, fs = 48000, ncols=16):
         """Generates pink noise using the Voss-McCartney algorithm.
         
         nrows: number of values to generate
@@ -940,9 +955,9 @@ class PinkNoise():
         self.p = pyaudio.PyAudio()
         self.open_stream()
         self.reizmarker = True
-        self.play()
-        self.play()
-        self.play()
+        # self.play()
+        # self.play()
+        # self.play()
         if not reiz.marker.available():
             print('Marker Server not available!')
             self.reizmarker = False

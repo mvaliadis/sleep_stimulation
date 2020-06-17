@@ -21,10 +21,11 @@ import pickle
 
 #%% set parameters - only do for testing as excel file should contain proper info.
 ## load subject code and condition script
-file = 'subject_codes.csv'
+file = 'subject_codes'
 subjID = input('Please enter the correct subject ID: ')
-evening = int(input(f'Please enter the correct recording session for the subject {subjID}: '))
-
+#evening: adaption for adaption, 1 for first experimental evening, 2 for second, 3 for third
+evening = input(f'Please enter the correct recording session for the subject {subjID}: ')
+  
 #time_delay = float(input('Please select the participants average peak to peak SO amplitude from the adaption evening. '))
 #volume = int(input('Please select the volume for the experiment, either 0 or 1. '))
 
@@ -37,7 +38,6 @@ evening = int(input(f'Please enter the correct recording session for the subject
 #----to determine accuracy of detection, by entering the following:
 #----python -m replay --file <path_to_xdf_file>
 
-    
 #%% put sleep stager into separate thread that can run in the background
 def main():
 
@@ -48,7 +48,7 @@ def main():
      bfr.start()
 
      bfr.await_running()
-     reiz.clock.sleep(5)
+     reiz.clock.sleep(30)
      
      sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
 
@@ -58,11 +58,10 @@ def main():
 
      # initialize second thread for SW detection
      if evening!='adaption':
-        SO_detection(time_delay, volume = subject_param_pull(file='subject_codes.csv', subjID, evening))
+        SO_detection(time_delay, volume = subject_param_pull(file, subjID, int(evening)))
      else:
-        SO_detection(time_delay=0, volume=0)
-        
-    
+        # change to delay of 0 alternating adaption nights 
+        SO_detection(time_delay=.500, volume=0)
      
      # sleep for the remainder of the evening or until participant awakens
      print('Sleep time! The recording will continue, although the stimulation paradigm has officially ended!')
@@ -74,7 +73,7 @@ def main():
 if __name__ == '__main__':
     from liesl.files.session import Session
     #reiz.marker.start()
-    rec_id = subjID + evening
+    rec_id = subjID + '_' + evening
     streamargs = [{"name":"eego"}, {"name":"reiz-marker"}]
     mainfolder = 'C:/Users/neuro/Documents/sleep_stimulation/recordings'
     session = Session(prefix = rec_id, streamargs = streamargs, mainfolder = mainfolder)
