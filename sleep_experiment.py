@@ -66,11 +66,11 @@ def main():
         # sleep for 10s
         reiz.clock.sleep(10)
         # set up sleep stageing thread 
-        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
+        #sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
         # start thread
-        sleep_stager.start()
+        #sleep_stager.start()
         # initiate SO detection - change to delay of 0 alternating adaption nights 
-        SO_detection(time_delay=.500, volume=0, totalruntime = 28800)
+        #SO_detection(time_delay=.500, volume=0, totalruntime = 28800)
         # sleep until participant awakens
         print('The recording will continue until the participant is awoken.')
         reiz.clock.sleep(6000)  
