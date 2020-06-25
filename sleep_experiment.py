@@ -49,16 +49,16 @@ def main():
      # initialize second thread for SW detection
      if evening!='adaption':
         # enter runtime for experiment - should place 210 in the beginning
-        totalruntime = int(input('Please enter the remaining amount of time in the sleep stimulation in minutes (enter 210 at the beginning): '))*60 
+        #totalruntime = int(input('Please enter the remaining amount of time in the sleep stimulation in minutes (enter 210 at the beginning): '))*60 
         # sleep for 10s
-        reiz.clock.sleep(10)
+        #reiz.clock.sleep(10)
         # set up sleep stageing thread 
-        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
+        #sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
         # start thread
-        sleep_stager.start()
+        #sleep_stager.start()
         # initiate SO detection - TODO: Fix subject_param_pull function
-        time_delay, volume = subject_param_pull(file, subjID, int(evening), mean_pk2pk)
-        SO_detection(time_delay, volume, totalruntime = totalruntime)
+        #time_delay, volume = subject_param_pull(file, subjID, int(evening), mean_pk2pk)
+        #SO_detection(time_delay, volume, totalruntime = totalruntime)
         # sleep for the remainder of the evening or until participant awakens
         print('Sleep time! The recording will continue, although the stimulation paradigm has officially ended!')
         reiz.clock.sleep(18000) 
