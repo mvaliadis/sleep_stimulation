@@ -25,8 +25,6 @@ file = 'subject_codes'
 subjID = input('Please enter the correct subject ID: ')
 #evening: adaption for adaption, 1 for first experimental evening, 2 for second, 3 for third
 evening = input(f'Please enter the correct recording session for the subject {subjID}: ')
-#adaptation info from sheet 
-mean_pk2pk = float(input('Please select the participants average peak to peak SO amplitude from the adaption evening (Please enter in seconds). '))
 
 #%% set up EEG and marker stream for testing mock data
 #-----------------------------
@@ -48,17 +46,19 @@ def main():
      
      # initialize second thread for SW detection
      if evening!='adaption':
+        #adaptation info from sheet 
+        mean_pk2pk = float(input('Please select the participants average peak to peak SO amplitude from the adaption evening (Please enter in seconds). '))
         # enter runtime for experiment - should place 210 in the beginning
-        #totalruntime = int(input('Please enter the remaining amount of time in the sleep stimulation in minutes (enter 210 at the beginning): '))*60 
+        totalruntime = int(input('Please enter the remaining amount of time in the sleep stimulation in minutes (enter 210 at the beginning): '))*60 
         # sleep for 10s
-        #reiz.clock.sleep(10)
+        reiz.clock.sleep(10)
         # set up sleep stageing thread 
-        #sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
+        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
         # start thread
-        #sleep_stager.start()
+        sleep_stager.start()
         # initiate SO detection - TODO: Fix subject_param_pull function
-        #time_delay, volume = subject_param_pull(file, subjID, int(evening), mean_pk2pk)
-        #SO_detection(time_delay, volume, totalruntime = totalruntime)
+        time_delay, volume = subject_param_pull(file, subjID, int(evening), mean_pk2pk)
+        SO_detection(time_delay, volume, totalruntime = totalruntime)
         # sleep for the remainder of the evening or until participant awakens
         print('Sleep time! The recording will continue, although the stimulation paradigm has officially ended!')
         reiz.clock.sleep(18000) 
@@ -66,14 +66,14 @@ def main():
         # sleep for 10s
         reiz.clock.sleep(10)
         # set up sleep stageing thread 
-        #sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
+        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
         # start thread
-        #sleep_stager.start()
+        sleep_stager.start()
         # initiate SO detection - change to delay of 0 alternating adaption nights 
-        #SO_detection(time_delay=.500, volume=0, totalruntime = 28800)
+        SO_detection(time_delay=.500, volume=0, totalruntime = 28800)
         # sleep until participant awakens
         print('The recording will continue until the participant is awoken.')
-        reiz.clock.sleep(6000)  
+        reiz.clock.sleep(30000)  
 
 
     
@@ -81,7 +81,7 @@ def main():
 
 if __name__ == '__main__':
     from liesl.files.session import Session
-    #reiz.marker.start()
+    reiz.marker.start()
     rec_id = subjID + '_' + evening
     streamargs = [{"name":"eego"}, {"name":"reiz-marker"}]
     mainfolder = 'C:/Users/neuro/Documents/sleep_stimulation/recordings'
