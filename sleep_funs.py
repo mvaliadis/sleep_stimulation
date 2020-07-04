@@ -627,8 +627,7 @@ def epoch_psd(data, fs):
     win = win.reshape(1, nchan*6, order='F')
     return win  
   
-    
-def sleep_staging(bfr):
+def sleep_staging(bfr, indices_to_pull):
     """Sleep Stageing function.
 
     This function takes an lsl buffer argument and will be the sole argument in the 
@@ -669,7 +668,8 @@ def sleep_staging(bfr):
     
     while reiz.clock.now() - tz < 29700: 
         ## Pull data from EEG, EOG, and EMG
-        data = bfr.get_data()[:,[8,9,10,22,23,24,25,26,27]]*1e6 #cap - index based ideally...
+        # data = bfr.get_data()[:,[8,9,10,22,23,24,25,26,27]]*1e6 #cap
+        data = bfr.get_data()[:,indices_to_pull]*1e6
         ## Extract bandpower and relative power per epoch
         epoch_stage_features = epoch_psd(data, bfr.fs)
         
@@ -937,13 +937,13 @@ def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35,
                 block_auditory_stim = False
             #%% Proper channel needs to be selected based on channel failure index from classification thread
             if channel_failure[0] == 1:
-                d = bfr2.get_data()[:,9]*1e6 #C3, main recording channel
-                print('SO detection with channel: C3')
+                d = bfr2.get_data()[:,9]*1e6 #C3, main recording channel - TO DO: use index
+                #print('SO detection with channel: C3')
             elif channel_failure[1] == 1: 
-                d = bfr2.get_data()[:,8]*1e6 #Cz, alternative recording channel
+                d = bfr2.get_data()[:,8]*1e6 #Cz, alternative recording channel - TO DO: use index
                 print('SO detection with channel: Cz')
             elif channel_failure[2] == 1:
-                d = bfr2.get_data()[:,10]*1e6 #C4, second alternative recording channel
+                d = bfr2.get_data()[:,10]*1e6 #C4, second alternative recording channel - TO DO: use index
                 print('SO detection with channel: C4')
             else:
                 continue

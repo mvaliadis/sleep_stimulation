@@ -5,11 +5,8 @@ Created on Mon Feb 17 09:36:25 2020
 @author: neuro
 """
 
-<<<<<<< HEAD
-=======
 from os import chdir
 chdir('C:/Users/neuro/Documents/projects/sleep_stimulation-development')
->>>>>>> origin/development
 import liesl
 import reiz.marker
 from sleep_funs import SO_detection, sleep_staging, subject_param_pull
@@ -20,19 +17,6 @@ import threading
 from scipy import signal
 import yasa
 import pickle
-<<<<<<< HEAD
-
-
-#%% set parameters - only do for testing as excel file should contain proper info.
-## load subject code and condition script
-# file = 'subject_codes'
-# subjID = input('Please enter the correct subject ID: ')
-# evening = int(input(f'Please enter the correct recording session for the subject {subjID}: '))
-# time_delay, volume = subject_param_pull(file='subject_codes.csv', subjID, evening)
-
-time_delay = .5#float(input('Please select the participants average peak to peak SO amplitude from the adaption evening. '))
-volume = 1#int(input('Please select the volume for the experiment, either 0 or 1. '))
-=======
 
 
 #%% set parameters - only do for testing as excel file should contain proper info.
@@ -41,7 +25,6 @@ file = 'subject_codes'
 subjID = input('Please enter the correct subject ID: ')
 #evening: adaption for adaption, 1 for first experimental evening, 2 for second, 3 for third
 evening = input(f'Please enter the correct recording session for the subject {subjID}: ')
->>>>>>> origin/development
 
 #%% set up EEG and marker stream for testing mock data
 #-----------------------------
@@ -52,39 +35,19 @@ evening = input(f'Please enter the correct recording session for the subject {su
 #----to determine accuracy of detection, by entering the following:
 #----python -m replay --file <path_to_xdf_file>
 
-<<<<<<< HEAD
-    
-#%% put sleep stager into separate thread that can run in the background
-def main():
-
-     
-=======
 #%% put sleep stager into separate thread that can run in the background
 def main(): 
     
->>>>>>> origin/development
      # get sample info and pull data ringbuffer
      sinfo = liesl.get_streaminfos_matching(type = 'EEG')
      bfr = liesl.RingBuffer(sinfo[0], duration_in_ms = 30000) #30 s buffer to allow sleep staging
      bfr.start()
-<<<<<<< HEAD
-
      bfr.await_running()
-     reiz.clock.sleep(5)
-     sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
-
-     # start thread
-     sleep_stager.start()
-
-
-     # initialize second thread for SW detection
-     SO_detection(time_delay, volume)
      
-     # sleep for the remainder of the evening or until participant awakens
-     print('Sleep time! The recording will continue, although the stimulation paradigm has officially ended!')
-     reiz.clock.sleep(18000) 
-=======
-     bfr.await_running()
+     infostruct = bfr.info['desc']['channels']['channel']
+     chanlabels = [infostruct[i]['label'] for i in range(len(infostruct))]
+     chanselection = ['Cz', 'C3', 'C4', 'M1', 'M2', 'EOG_L', 'EOG_R', 'EMG_L', 'EMG_R']
+     indices_to_pull = np.array([ix for ix,val in enumerate(chanlabels) if val in chanselection])
      
      # initialize second thread for SW detection
      if evening!='adaption':
@@ -95,7 +58,7 @@ def main():
         # sleep for 10s
         reiz.clock.sleep(10)
         # set up sleep stageing thread 
-        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
+        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr, indices_to_pull))
         # start thread
         sleep_stager.start()
         # initiate SO detection - TODO: Fix subject_param_pull function
@@ -108,7 +71,7 @@ def main():
         # sleep for 10s
         reiz.clock.sleep(10)
         # set up sleep stageing thread 
-        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr,))
+        sleep_stager = threading.Thread(target = sleep_staging, args = (bfr, indices_to_pull))
         # start thread
         sleep_stager.start()
         # initiate SO detection - change to delay of 0 alternating adaption nights 
@@ -119,35 +82,19 @@ def main():
 
 
     
->>>>>>> origin/development
-
 
 
 if __name__ == '__main__':
     from liesl.files.session import Session
-<<<<<<< HEAD
-    #reiz.marker.start()
-    subj_id = subjID
-    streamargs = [{"name":"eego"}, {"name":"reiz-marker"}]
-    #streamargs = [{'type':'EEG','type':'Markers'}]
-    mainfolder = 'C:/Users/neuro/Documents/sleep_stimulation/recordings'
-    #mainfolder = 'C:/Users/mvali/Documents/Sleep_classification/recordings'
-    session = Session(prefix = subj_id, streamargs = streamargs, mainfolder = mainfolder)
-=======
     reiz.marker.start()
     rec_id = subjID + '_' + evening
     streamargs = [{"name":"eego"}, {"name":"reiz-marker"}]
     mainfolder = 'C:/Users/neuro/Documents/sleep_stimulation/recordings'
     session = Session(prefix = rec_id, streamargs = streamargs, mainfolder = mainfolder)
->>>>>>> origin/development
      
     with session('sleepstim'):
         main()
       
 ## to-do: test timing of integrated functions in simulation 
 ## to-do: increase sensitivity of classifier
-<<<<<<< HEAD
-## to-do: pilot testing
-=======
->>>>>>> origin/development
 ## to-do: finalize docstrings
