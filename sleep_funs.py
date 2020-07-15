@@ -145,6 +145,14 @@ def unravel_hypnogram(stages, stagelens):
 #%%
 ## Analysis functions
 
+def load_xdf(path: str):
+    streams, fileheader = pyxdf.load_xdf(path)
+    stream_dict = {}
+    for ix, stream in enumerate(streams):
+        streamname = stream['info']['name'][0]
+        stream_dict[streamname] = stream
+    return stream_dict
+
 def unravel_hypnogram_visbrain(hypnogram_file, data):  
     ## TO-DO LATER: integate with other unravel function for NSRR dataset
     # load hypnogram file
