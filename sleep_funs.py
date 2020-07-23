@@ -153,50 +153,50 @@ def load_xdf(path: str):
         stream_dict[streamname] = stream
     return stream_dict
 
- def channel_parser(info, data):
-        ch_names = []
-        ch_types = [] 
-        for i in range(np.size(data,1)):
-            chan = info['desc'][0]['channels'][0]['channel'][i]['label'][0]  
-            chtype = info['desc'][0]['channels'][0]['channel'][i]['type'][0]
-            if chan == 'EMG_L':
-                ch_names.append(chan)
-                chtype = 'emg'
-                ch_types.append(chtype)
-            elif chan == 'EMG_R':
-                ch_names.append(chan)
-                chtype = 'emg'
-                ch_types.append(chtype)
-            elif chan == 'bipECG':
-                ch_names.append(chan)
-                chtype = 'ecg'
-                ch_types.append(chtype)
-            elif chan == 'EOG_L':
-                ch_names.append(chan)
-                chtype = 'eog'
-                ch_types.append(chtype)
-            elif chan == 'EOG_R':
-                ch_names.append(chan)
-                chtype = 'eog'
-                ch_types.append(chtype)
-            elif chan == 'EmptyChan':
-                ch_names.append(chan)
-                chtype = 'none'
-                ch_types.append(chtype)
-            elif chan == 'EmptyChan1':
-                ch_names.append(chan)
-                chtype = 'none'
-                ch_types.append(chtype)
-            elif chan == 'EmptyChan2':
-                ch_names.append(chan)
-                chtype = 'none'
-                ch_types.append(chtype)
-            elif chtype == 'EEG':
-                chtype = 'eeg'
-                ch_names.append(chan)
-                ch_types.append(chtype)
-                
-        return ch_names, ch_types
+def channel_parser(info, data):
+    ch_names = []
+    ch_types = [] 
+    for i in range(np.size(data,1)):
+        chan = info['desc'][0]['channels'][0]['channel'][i]['label'][0]  
+        chtype = info['desc'][0]['channels'][0]['channel'][i]['type'][0]
+        if chan == 'EMG_L':
+            ch_names.append(chan)
+            chtype = 'emg'
+            ch_types.append(chtype)
+        elif chan == 'EMG_R':
+            ch_names.append(chan)
+            chtype = 'emg'
+            ch_types.append(chtype)
+        elif chan == 'bipECG':
+            ch_names.append(chan)
+            chtype = 'ecg'
+            ch_types.append(chtype)
+        elif chan == 'EOG_L':
+            ch_names.append(chan)
+            chtype = 'eog'
+            ch_types.append(chtype)
+        elif chan == 'EOG_R':
+            ch_names.append(chan)
+            chtype = 'eog'
+            ch_types.append(chtype)
+        elif chan == 'EmptyChan':
+            ch_names.append(chan)
+            chtype = 'none'
+            ch_types.append(chtype)
+        elif chan == 'EmptyChan1':
+            ch_names.append(chan)
+            chtype = 'none'
+            ch_types.append(chtype)
+        elif chan == 'EmptyChan2':
+            ch_names.append(chan)
+            chtype = 'none'
+            ch_types.append(chtype)
+        elif chtype == 'EEG':
+            chtype = 'eeg'
+            ch_names.append(chan)
+            ch_types.append(chtype)
+
+    return ch_names, ch_types
     
 def unravel_hypnogram_visbrain(hypnogram_file, data):  
     ## TO-DO LATER: integate with other unravel function for NSRR dataset
@@ -746,7 +746,7 @@ def sleep_staging(bfr, indices_to_pull):
             stage_predict_binary = 0
         
         stage_predictArrays.append(stage_predict_binary)
-        print(f'{stage_predictArrays} - previously classified epochs')
+        #print(f'{stage_predictArrays} - previously classified epochs')
             
         # pull data every ~15s
         reiz.clock.sleep(15)
@@ -1022,7 +1022,7 @@ def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35,
             #reiz.marker.push('crit: {}'.format(crit))
             
             if crit < minamp and block_auditory_stim == False: 
-                print('target reached')
+                #print('target reached')
                 # wait for 0ms, ~500ms, depending on Up/Downstate    
                 clock.sleep(time_delay)
                 # deliver tone twice with 1.075s interval
