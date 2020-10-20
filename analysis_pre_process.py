@@ -25,7 +25,7 @@ from meegkit import dss, star
 from meegkit.utils import demean, normcol
 from os import chdir as cd
 from os import listdir
-import os
+import os, shutil
 cd('/home/administrator/sleep_stimulation-development')
 from sleep_funs import bfr_butter_filt, process_raw_EDF_cfs, bandpower, unravel_hypnogram_visbrain, downsample_scaled, load_xdf, channel_parser, thresholdcrossings
 sns.set(style='darkgrid', font_scale=1.2)
@@ -59,7 +59,7 @@ class Data_Struct:
 
 #%%
 
-path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/9PJZ8Z8F_3'
+path = '/media/administrator/data/Study_1_data/Raw_data/Adaption/EQDORXF6_adaption'
 cd(path)
 
 def preprocess_sleep_data(path):
@@ -171,7 +171,6 @@ def preprocess_sleep_data(path):
         # save as pickle file
         pickle.dump([data, new_chans, new_chtypes, eego_times, pinknoise_timestamps, classifier_predict, classifier_timestamps, sf], open(save_path + subjID_cond + '_preproc_data.p', "wb"))
 
-    
 #%%
  
 def plot_multitaper_spectrogram(data, sf, ch_names, hypno=None, coi ='F3', fmin=0.5, fmax=30):
@@ -282,8 +281,26 @@ def artifact_detect_hypno(data, hypno_path, sf, downsample=False, method='covar'
 
 #%%
 
-path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/9PJZ8Z8F_3_preproc_data.p'
-hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/9PJZ8Z8F_3_hypno.txt'
+def unblind_files(file):
+    
+    # =============================================================================
+    # USE SHUTIL PACKAGE TO COPY AND THEN RENAME NEW FILES BASED ON CONDITION
+    # =============================================================================
+    
+    subj_cond = np.loadtxt(file, delimiter=',', dtype='str', skiprows=1) 
+    cond_dict = {'sham':0,'up':1,'down':2}
+    for i,_ in enumerate(subj_cond):
+        subj = subj_cond[i,0]
+        first_cond, second_cond, third_cond = int(subj_cond[i,1]), int(subj_cond[i,2]), int(subj_cond[i,3])
+        data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/' + subj + 
+        '0RCB4IRJ_3_preproc_data.p'
+        
+
+    return files
+
+#%%
+path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/0RCB4IRJ_3_preproc_data.p'
+hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/0RCB4IRJ_3_hypno.txt'
 def SW_analysis(path, hypno_path, filter_data=True, downsample=True, sw_detection_method='abs', save=True):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     hypno_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(hypno_path) for i in files])
@@ -291,7 +308,7 @@ def SW_analysis(path, hypno_path, filter_data=True, downsample=True, sw_detectio
     for i, (data_files, hypno_files) in enumerate(zip(files_list, hypno_list)):
         pass 
         # load pre-processed data
-        data, ch_names, ch_types, time_stamps, pinknoise_timestamps, classifier_predict, classifier_timestamps, sf = pickle.load(open(data_files,"rb"))
+        data, ch_names, ch_types, time_stamps, pinknoise_timestamps, classifier_predict, classifier_timestamps = pickle.load(open(data_files,"rb"))
         # convert to object
         Data = Data_Struct(data, ch_names, ch_types, time_stamps, pinknoise_timestamps, classifier_predict, classifier_timestamps, sfreq=512)
         
@@ -322,14 +339,14 @@ def SW_analysis(path, hypno_path, filter_data=True, downsample=True, sw_detectio
         
         # SW detection approach #1 - see Massimini et al., 2004 for more detail
         if sw_detection_method=='abs':
-            sw = yasa.sw_detect(Data.data[:,eeg_index].T, Data.sfreq, ch_names = Data.chans[0:len(eeg_index)], hypno = Data.hypno, include=(2,3), freq_sw=(0.5, 2.0),
+            sw = yasa.sw_detect(Data.data[:,eeg_index].T, Data.sfreq, ch_names = Data.chans[0:len(eeg_index)], hypno = Data.hypno_with_art, include=(2,3), freq_sw=(0.5, 2.0),
                dur_neg=(0.3, 1.5), dur_pos=(0.1, 1), amp_neg=(35, 300), amp_pos=(10, 200), amp_ptp=(75, 400), remove_outliers=True)
         
         # SW detection approach #2 - see Muehlroth & Werkle-Bergner, 2020 for more detail 
         if sw_detection_method=='rel_zscore':
             thresh = np.percentile(np.abs(Data.data[:,Data.chans.index('C3')][Data.hypno_with_art==3]), 75)
             print('75th percentile threshold: %.2f uV' % thresh)
-            sw = yasa.sw_detect(Data.data[:,Data.chans.index('C3')].T, Data.sfreq, ch_names = ['C3'], hypno = Data.hypno, include=(2,3), freq_sw=(0.5, 2.0),
+            sw = yasa.sw_detect(Data.data[:,Data.chans.index('C3')].T, Data.sfreq, ch_names = ['C3'], hypno = Data.hypno_with_art, include=(2,3), freq_sw=(0.5, 2.0),
                amp_neg=(None, None), amp_pos=(None, None), amp_ptp=(thresh, np.inf), remove_outliers=True)
         
         # SW detection approach #3 - see Helfrich et al., 2018 for more detail
@@ -337,7 +354,7 @@ def SW_analysis(path, hypno_path, filter_data=True, downsample=True, sw_detectio
             data_zscored = zscore(Data.data[:,Data.chans.index('C3')])
             # Detect all events with a relative peak-to-peak amplitude between 3 to 10 z-scores, 
             # and positive/negative peaks amplitude > 1 standard deviations
-            sw = yasa.sw_detect(data_zscored, sf = Data.sfreq, ch_names = ['C3'], hypno = Data.hypno, include=(2,3), freq_sw=(0.5, 2.0),
+            sw = yasa.sw_detect(data_zscored, sf = Data.sfreq, ch_names = ['C3'], hypno = Data.hypno_with_art, include=(2,3), freq_sw=(0.5, 2.0),
                            amp_neg=(1, None), amp_pos=(1, None), amp_ptp=(3, 10))
         
         # SW summary
@@ -375,46 +392,74 @@ def SW_analysis(path, hypno_path, filter_data=True, downsample=True, sw_detectio
 
 #%%
 
-Data.pinknoise_timestamps_sync = [Data.times[np.abs(Data.times - Data.pinknoise_times[ix]).argmin()] for ix in range(len(Data.pinknoise_times)) if sw_times]
-Data.pinknoise_timestamps_sync_adj = np.asarray(Data.pinknoise_timestamps_sync)*Data.sfreq
-first_bursts = Data.pinknoise_timestamps_sync_adj[::2] 
+## Pass the following functions into the Data struct
+def synchronize_timestamps(Data):
+    Data.pinknoise_timestamps_sync = [Data.times[np.abs(Data.times - Data.pinknoise_times[ix]).argmin()] for ix in range(len(Data.pinknoise_times))]
+    Data.pinknoise_timestamps_sync_adj = np.asarray(Data.pinknoise_timestamps_sync)*Data.sfreq
+    return Data
 
+# def first_bursts(Data):    
+#     return Data.pinknoise_timestamps_sync_adj[::2] 
 
-Data.sw_sync_C3 = [Data.times[np.abs(Data.times - Data.pinknoise_times[ix]).argmin()] for ix in range(len(Data.pinknoise_times))]
-sw_times = Data.times[np.argwhere(~np.isnan(sw_highlight[Data.chans.index('C3'),:])).ravel()]
-
-
-insp_ix = []
-for i in range(len(first_bursts)):
-    insp_indx = np.where(Data.times*Data.sfreq == first_bursts[i])[0][0]
-    insp_ix.append(insp_indx) 
-
-events = []
-for i in range(len(insp_ix)):
-    event = [insp_ix[i],1,1]
-    events.append(event)
+first_bursts = Data.pinknoise_timestamps_sync_adj[::2]
     
-event_id = dict(pinknoise=1)
-events = np.asarray(events)
+def sw_times(Data, sw_highlight):
+    sw_times_bool = ~np.isnan(sw_highlight[Data.chans.index('C3'),:])
+    sw_times_idx = np.where(~np.isnan(sw_highlight[Data.chans.index('C3'),:]))[0]
+    sw_times_times = Data.times[np.argwhere(~np.isnan(sw_highlight[Data.chans.index('C3'),:])).ravel()]
+    return sw_times_bool, sw_times_idx, sw_times_times
 
-center, _ = yasa.get_centered_indices(Data.data[:,Data.chans.index('C3')], np.asarray(insp_ix), 
-                                      npts_before=Data.sfreq*2, npts_after=Data.sfreq*4)
-C3_filtered_sync = C3_filtered[center]
-C3_unfiltered_sync = C3_unfiltered[center]
+def sw_epochs(Data):
+    insp_ix = []
+    for i in range(len(first_bursts)):
+        insp_indx = np.where(Data.times*Data.sfreq == first_bursts[i])[0][0]
+        insp_ix.append(insp_indx) 
+    
+    events = []
+    for i in range(len(insp_ix)):
+        event = [insp_ix[i],1,1]
+        events.append(event)
+    
+    event_id = dict(pinknoise=1)
+    events = np.asarray(events)
+        
+    center, _ = yasa.get_centered_indices(Data.data[:,Data.chans.index('C3')], 
+                                          np.asarray(insp_ix), npts_before = Data.sfreq*2, npts_after = Data.sfreq*4)
+           
+    a = []
+    for idx, times in enumerate(center):
+        a.append(np.where(sw_times_bool[center[idx,:]])[0])
+        
+    s = [i for i in range(len(a)) if len(a[i])>1]
+    center = center[s,:]  
+    
+    # C3_yasa = Data.data[:,Data.chans.index('C3')][center]
+    # C3_avg = C3_yasa[...,:].mean(0, keepdims=False)
+    # plt.plot(C3_avg)
 
-filtparams_lp = signal.butter(4, 4, fs = Data.sfreq)
-C3_bandpass_low = signal.filtfilt(*filtparams_lp, C3_unfiltered)
-            
-C3_bandpass_low_sync = C3_bandpass_low[center]
+    # C3_filtered_sync = C3_filtered[center]
+    # C3_unfiltered_sync = C3_unfiltered[center]
+    
+    # filtparams_lp = signal.butter(4, 4, fs = Data.sfreq)
+    # C3_bandpass_low = signal.filtfilt(*filtparams_lp, C3_unfiltered)
+                
+    # C3_bandpass_low_sync = C3_bandpass_low[center]
 
-info = mne.create_info(ch_names=Data.chans, sfreq=512, ch_types=Data.chtypes)
-raw = mne.io.RawArray(data.T/1e6, info)
-raw.filter(0.5, 2)
-
-epochs = mne.Epochs(raw, events, event_id, tmin = -2, tmax = 4, baseline= None, event_repeated = 'drop').get_data()*1e6
-C3_mne = epochs[:,Data.chans.index('C3'),:]
-C3_avg = C3_mne[...,:].mean(0, keepdims=False)
-
+    # info = mne.create_info(ch_names=Data.chans, sfreq=512, ch_types=Data.chtypes)
+    # raw = mne.io.RawArray(data.T/1e6, info)
+    # raw.filter(0.5, 2)
+    
+    info = mne.create_info(ch_names=['C3'], sfreq=512, ch_types=['eeg'])
+    epochs = mne.EpochsArray(np.expand_dims(Data.data[:, Data.chans.index('C3')][center]/1e6, 1), info, tmin = -2)
+    
+    
+    #epochs = mne.Epochs(raw, events, event_id, tmin = -2, tmax = 4, baseline= None, event_repeated = 'drop')
+    #C3_mne = epochs[:,Data.chans.index('C3'),:]
+    #C3_avg = C3_mne[...,:].mean(0, keepdims=False)
+    
+    epochs.average('C3').plot()
+    epochs.plot_image('C3')
+    
 #%%        
 # plot artifacts
 avg_data = data[..., eeg_index].mean(-1, keepdims=True)
