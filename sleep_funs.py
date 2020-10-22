@@ -13,6 +13,7 @@ import reiz
 import threading
 import mne
 import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy import signal
 from scipy.signal import butter, filtfilt, welch, resample, resample_poly
 from scipy.integrate import simps
@@ -20,7 +21,10 @@ import pickle
 import liesl
 import yasa
 import random
+import pyxdf
 import xml.etree.ElementTree as ET
+import numpy as np
+import logging
 
 #%%
 ## NSRR Cleveland Sleep Dataset Classifier training functions
@@ -198,7 +202,7 @@ def channel_parser(info, data):
 
     return ch_names, ch_types
     
-def unravel_hypnogram_visbrain(hypnogram_file, data):  
+def unravel_hypnogram_visbrain(hypnogram_file, data=None):  
     ## TO-DO LATER: integate with other unravel function for NSRR dataset
     # load hypnogram file
     hypno = np.genfromtxt(hypnogram_file, delimiter='\t', dtype=str)
@@ -214,8 +218,9 @@ def unravel_hypnogram_visbrain(hypnogram_file, data):
     # parse stageing information to fit total of epochs by stages 
     stagelens = []
     for index, length in enumerate(total_diff):
-        print(length)
         if stages[index] == 'Wake':
+            stagelens.append(np.zeros(int(length)))
+        elif stages[index] == 'Art':
             stagelens.append(np.zeros(int(length)))
         elif stages[index] == 'N1':
             stagelens.append(np.ones(int(length)))
@@ -224,13 +229,14 @@ def unravel_hypnogram_visbrain(hypnogram_file, data):
         elif stages[index] == 'N3':
             stagelens.append(3*np.ones(int(length)))
         elif stages[index] == 'REM':
-            stagelens.append(5*np.ones(int(length)))
+            stagelens.append(4*np.ones(int(length)))
             
     hypnogram = np.concatenate(stagelens)
    
     # sanity check - does length of hypnogram match data epoch length
-    if data.shape[0] != len(hypnogram):
-        raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs in the data')
+    if data != None:   
+        if data.shape[0] != len(hypnogram):
+            raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs in the data')
     
     return hypnogram 
 
@@ -435,6 +441,8 @@ def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
     
 #     return X_train, X_test
 
+#%%
+# Transitional matrix calculation and plotting
 def transition_matrix(transitions):
     # the function takes a list with states labeled as successive integers and
     # returns a transition matrix, trans_max of all transitions between given states
@@ -453,12 +461,9 @@ def transition_matrix(transitions):
 
 def transition_matrix_prob(trans_matrix):
     # convert occurences to a transitional probability matrix to indicate the 
-    # probability of transitioning from one state to the next
-    probs = []   
-    for row in trans_matrix:
-        prob = row / row.sum(axis=-1, keepdims=True)
-        probs.append(prob)
-        
+    # probability of transitioning from one state to the next  
+    probs = [row/row.sum(axis=-1, keepdims=True) for row in np.asarray(trans_matrix)]
+
     return np.round(np.array(probs).astype(float), 4) 
  
 def transition_matrix_plot(probs):
