@@ -18,17 +18,19 @@ import pyxdf
 import yasa 
 import mne
 import logging
+import time
 import seaborn as sns
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import zscore
+from sklearn.metrics import cohen_kappa_score, confusion_matrix
 from meegkit import dss, star
 from meegkit.utils import demean, normcol
 from os import chdir as cd
 from os import listdir
 import os, shutil
 cd('/home/administrator/sleep_stimulation-development')
-from sleep_funs import bfr_butter_filt, process_raw_EDF_cfs, bandpower, unravel_hypnogram_visbrain, downsample_scaled, load_xdf, channel_parser, thresholdcrossings
-sns.set(style='darkgrid', font_scale=1.2)
+from sleep_funs import bfr_butter_filt, process_raw_EDF_cfs, bandpower, unravel_hypnogram_visbrain, downsample_scaled, load_xdf, channel_parser, thresholdcrossings, plot_confusion_matrix
+# sns.set(style='darkgrid', font_scale=1.2)
 
 class Data_Struct:
     def __init__(self, data, chans, chtypes, times, pinknoise_times, classif_predict, classif_times, sfreq):
@@ -59,7 +61,7 @@ class Data_Struct:
 
 #%%
 
-path = '/media/administrator/data/Study_1_data/Raw_data/Adaption/EQDORXF6_adaption'
+path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/EQDORXF6_1'
 cd(path)
 
 def preprocess_sleep_data(path):
@@ -281,25 +283,81 @@ def artifact_detect_hypno(data, hypno_path, sf, downsample=False, method='covar'
 
 #%%
 
-def unblind_files(file):
-    
-    # =============================================================================
-    # USE SHUTIL PACKAGE TO COPY AND THEN RENAME NEW FILES BASED ON CONDITION
-    # =============================================================================
-    
-    subj_cond = np.loadtxt(file, delimiter=',', dtype='str', skiprows=1) 
-    cond_dict = {'sham':0,'up':1,'down':2}
-    for i,_ in enumerate(subj_cond):
-        subj = subj_cond[i,0]
-        first_cond, second_cond, third_cond = int(subj_cond[i,1]), int(subj_cond[i,2]), int(subj_cond[i,3])
-        data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/' + subj + 
-        '0RCB4IRJ_3_preproc_data.p'
-        
+subj_night = 'HTXEYPW6_2'
+base_rater = 'Mike'
+comp_rater = 'Sydney'
 
-    return files
+def compare_hypnograms(subj_night : str, base_rater : str, comp_rater : str):
+    path = '/media/administrator/data/Study_1_data/Hypnograms/Scoring_comparison/'
+    base_hypno = unravel_hypnogram_visbrain(path + subj_night + '_hypno_' + base_rater + '.txt')
+    comp_hypno = unravel_hypnogram_visbrain(path + subj_night + '_hypno_' + comp_rater + '.txt')
+    agreement = np.mean(base_hypno == comp_hypno).round(3)*100
+    print(f'Overall agreement between {base_rater} and {comp_rater} for {subj_night} hypnogram is {agreement} %')
+    
+    # Matrix of stage counts
+    # counts_base = np.vstack(np.unique(base_hypno, return_counts=True))
+    # counts_comp = np.vstack(np.unique(comp_hypno, return_counts=True))
+    
+    # Sleep statistics based on hypnogram
+    stats_base = yasa.sleep_statistics(base_hypno, 1/30); 
+    stats_comp = yasa.sleep_statistics(comp_hypno, 1/30)
+    
+    # Compute interrater reliability
+    inter_agreement = cohen_kappa_score(base_hypno, comp_hypno).round(2)
+    print(f'The inter-rate agreement between {base_rater} and {comp_rater} for {subj_night} hypnogram is K = {inter_agreement}')
+       
+    # Compute accuracy by stage
+    for idx, stage in enumerate(['Wake','N1','N2','N3','REM']):
+        stage_acc = globals()[stage + '_acc'] = np.mean(comp_hypno[np.where(base_hypno==idx)] == idx).round(3)*100
+        print(f'{comp_rater} has an accuracy of {stage_acc} % for stage {stage}')
+    
+    # Compute where disgareement lies
+    disagreement = ((np.where(base_hypno!=comp_hypno)[0] + 1)*30/60)
+    print(f'{base_rater} and {comp_rater} disagree on the epochs at the given minute intervals: {disagreement}')
+ 
+   
+    # Compute confusion matrix
+    event_id ={'Wake':0,'Stage 1':1,'Stage 2':2,'Stage 3':3,'REM':4}
+    target_names=event_id.keys()
+    cm = confusion_matrix(base_hypno, comp_hypno)
+    np.set_printoptions(precision=1)
+    print(f'Confusion matrix: \n {cm}')
+    plt.figure()
+    plot_confusion_matrix(cm, target_names)
+
 
 #%%
-path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/0RCB4IRJ_3_preproc_data.p'
+def unblind_files(sheet, recording_file=None):
+    
+    # =============================================================================
+    # USE SHUTIL PACKAGE TO COPY AND MOVE FILES THEN OS RENAME NEW FILES BASED ON CONDITION
+    # =============================================================================
+    
+    subj_cond = np.loadtxt(sheet, delimiter=',', dtype='str', skiprows=1) 
+    cond_dict = {0:'sham', 1:'up', 2:'down'}
+    if recording_file:
+        path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/' + recording_file
+    else:
+        path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/'
+    target_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded'
+    exp_files = sorted(os.listdir(path))
+    for j, files in enumerate(exp_files):
+        subj = files.split('_')[0]
+        sub_pos = np.where(subj == subj_cond[:,0])[0][0]
+        
+        if '1' in files.split('_')[1]:
+            cond = int(subj_cond[sub_pos,:][1])
+        elif '2' in files.split('_')[1]:
+            cond = int(subj_cond[sub_pos,:][2])
+        elif '3' in files.split('_')[1]:
+            cond = int(subj_cond[sub_pos,:][3])
+                     
+        shutil.copy(path + files, target_path + '/' + subj + '_' + cond_dict[cond] + '.p')
+        print(f'Copying file: {files} into target path: {target_path} and renaming file: {files} with condition: {cond_dict[cond]}' )
+        time.sleep(1)
+                
+#%%
+path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/EQDORXF6_adaption_preproc_data.p'
 hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/0RCB4IRJ_3_hypno.txt'
 def SW_analysis(path, hypno_path, filter_data=True, downsample=True, sw_detection_method='abs', save=True):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
@@ -469,10 +527,28 @@ plt.vlines(np.where(hypno_with_art==-1)[0]/128, ymin=-1000, ymax=1000, colors='k
 plt.vlines(np.where(hypno_with_art_std==-1)[0]/128, ymin=-750, ymax=750, colors='r',linestyles='dotted')
 
 # Plot multitaper spectrogram with hypno (no artifact)
-yasa.plot_spectrogram(data[:,1], sf, hypno_unsampled, fmax=30, cmap='Spectral_r');
+yasa.plot_spectrogram(data[:,1], sf, hypno = hypno_unsampled, fmax=30, cmap='Spectral_r');
 
 # Plot new hypnogram and spectrogram on Fz (with artifact)
-yasa.plot_spectrogram(data[:,0], sf=128, hypno_with_art, fmax=30, cmap='Spectral_r');
+yasa.plot_spectrogram(data[:,0], sf=128, hypno = hypno_with_art, fmax=30, cmap='Spectral_r');
+
+
+#%%
+
+def load_mult_xdf(path: str):
+    data=[]
+    marker=[]
+    for file in sorted(os.listdir(path)):
+        if file.endswith(".xdf"):
+            streams, fileheader = pyxdf.load_xdf(file)
+            data.append(streams[0]['time_series'])
+            marker.append(streams[0]['time_stamps'])
+
+ 
+data = np.concatenate(data)
+times = np.concatenate(marker)
+C3 = mne.filter.filter_data(data[:,4].astype('float64'), sfreq=500, l_freq=0.5, h_freq=35)*1e6
+C3_notched = mne.filter.notch_filter(C3, Fs=500, freqs=(50,100,150))
 
 #%%
 
