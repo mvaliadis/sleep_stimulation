@@ -234,7 +234,7 @@ def unravel_hypnogram_visbrain(hypnogram_file, data=None):
     hypnogram = np.concatenate(stagelens)
    
     # sanity check - does length of hypnogram match data epoch length
-    if data != None:   
+    if data is not None:   
         if data.shape[0] != len(hypnogram):
             raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs in the data')
     
