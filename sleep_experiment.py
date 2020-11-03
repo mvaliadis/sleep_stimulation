@@ -57,12 +57,13 @@ def main():
         totalruntime = int(input('Please enter the remaining amount of time in the sleep stimulation in minutes (enter 210 at the beginning): '))*60 
         # sleep for 10s
         reiz.clock.sleep(10)
+	# create time delay and volume based on subject condition list, also will not allow thread to run if wrong!
+        time_delay, volume = subject_param_pull(file, subjID, int(evening), mean_pk2pk)
         # set up sleep stageing thread 
         sleep_stager = threading.Thread(target = sleep_staging, args = (bfr, indices_to_pull))
         # start thread
         sleep_stager.start()
-        # initiate SO detection - TODO: Fix subject_param_pull function
-        time_delay, volume = subject_param_pull(file, subjID, int(evening), mean_pk2pk)
+        # initiate SO detection
         SO_detection(time_delay, volume, totalruntime = totalruntime)
         # sleep for the remainder of the evening or until participant awakens
         print('Sleep time! The recording will continue, although the stimulation paradigm has officially ended!')
