@@ -10,6 +10,7 @@ import pickle
 import mne
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from clusterperm_LMM import permutation_cluster_test_multilevel, mixedlm_cond_grp
 
@@ -67,14 +68,23 @@ Down_sub = Down_sub.astype(np.int64)
 Sham_sub = Sham_sub.astype(np.int64)
 
 # making data shorter for testing
-Up = Up[:,::100]
-Down = Down[:,::100]
-Sham = Sham[:,::100]
+Up = Up[:,::10]
+Down = Down[:,::10]
+Sham = Sham[:,::10]
 
 X_list = [Up, Down, Sham]
 groups = [Up_sub, Down_sub, Sham_sub]
 
+# run stats
+t_obs, clusters, cluster_pv, H0 = permutation_cluster_test_multilevel(X_list, n_permutations = 10, stat_fun_ml=mixedlm_cond_grp, mm_groups=groups)
 
 
+# plotting results
+for i in range(len(clusters)):
+    plt.axvspan(clusters[i][0].start, clusters[i][0].stop, facecolor='r', alpha=0.2)
+    
+plt.plot(np.mean(Up, axis = 0))
+plt.plot(np.mean(Down, axis = 0))
+plt.plot(np.mean(Sham, axis = 0))
 
-max_cluster_sums = permutation_cluster_test_multilevel(X_list, n_permutations = 10, stat_fun_ml=mixedlm_cond_grp, mm_groups=groups)
+plt.legend(('Up', 'Down', 'Sham'))
