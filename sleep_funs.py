@@ -185,15 +185,15 @@ def channel_parser(info, data):
             ch_types.append(chtype)
         elif chan == 'EmptyChan':
             ch_names.append(chan)
-            chtype = 'none'
+            chtype = 'misc'
             ch_types.append(chtype)
         elif chan == 'EmptyChan1':
             ch_names.append(chan)
-            chtype = 'none'
+            chtype = 'misc'
             ch_types.append(chtype)
         elif chan == 'EmptyChan2':
             ch_names.append(chan)
-            chtype = 'none'
+            chtype = 'misc'
             ch_types.append(chtype)
         elif chtype == 'EEG':
             chtype = 'eeg'
@@ -234,7 +234,7 @@ def unravel_hypnogram_visbrain(hypnogram_file, data=None):
     hypnogram = np.concatenate(stagelens)
    
     # sanity check - does length of hypnogram match data epoch length
-    if data is not None:   
+    if data is not None:
         if data.shape[0] != len(hypnogram):
             raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs in the data')
     
@@ -247,7 +247,7 @@ def hjorth_complexity(x):
     """ calculates Hjorth complexity of the input time series vector x"""
     return hjorth_mobility(np.diff(x))/hjorth_mobility(x)
 
-def downsample_scaled(data, old_sf, new_sf, nint_method='none'):
+def downsample_scaled(data, old_sf, new_sf, nint_method='resample_poly'):
     """Downsample function 
     
     The following function allows the user to downsample the data, so long 
@@ -409,7 +409,7 @@ def process_raw_EDF(fname):
     return datArray, stageArray
 
 
-def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=plt.cm.Blues):
+def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=plt.cm.Blues, save=False, save_name='default'):
     plt.imshow(cm, interpolation='nearest', cmap=cmap)
     plt.title(title)
     plt.colorbar()
@@ -419,6 +419,8 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=plt.c
     plt.tight_layout()
     plt.ylabel('True label')
     plt.xlabel('Predicted label')
+    if save:
+        plt.savefig(f'confusion_matrix_{save_name}')
     
 def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
     plt.figure()
@@ -441,8 +443,6 @@ def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
     
 #     return X_train, X_test
 
-#%%
-# Transitional matrix calculation and plotting
 def transition_matrix(transitions):
     # the function takes a list with states labeled as successive integers and
     # returns a transition matrix, trans_max of all transitions between given states
@@ -459,14 +459,15 @@ def transition_matrix(transitions):
         
     return trans_matrix
 
+ 
 def transition_matrix_prob(trans_matrix):
     # convert occurences to a transitional probability matrix to indicate the 
     # probability of transitioning from one state to the next  
     probs = [row/row.sum(axis=-1, keepdims=True) for row in np.asarray(trans_matrix)]
 
     return np.round(np.array(probs).astype(float), 4) 
- 
-def transition_matrix_plot(probs):
+
+def transition_matrix_plot(probs, save=False):
     grid_kws = {"height_ratios": (.9, .05), "hspace": .1}
     f, (ax, cbar_ax) = plt.subplots(2, gridspec_kw=grid_kws, figsize=(5, 5))
     sns.heatmap(probs, ax=ax, square=False, vmin=0, vmax=1, cbar=True,
@@ -477,7 +478,8 @@ def transition_matrix_plot(probs):
     ax.xaxis.tick_top()
     ax.set_ylabel("From sleep stage")
     ax.xaxis.set_label_position('top')
-    # plt.savefig('transition.png', dpi=100, bbox_inches='tight')
+    if save:
+        plt.savefig('transition.png', dpi=100, bbox_inches='tight')
     
 #%%
 ## Subject code based parameter pulling function
@@ -1140,4 +1142,3 @@ class PinkNoise():
         if not reiz.marker.available():
             print('Marker Server not available!')
             self.reizmarker = False
-   
