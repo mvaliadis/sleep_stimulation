@@ -376,8 +376,6 @@ def _do_permutations_multilevel(X_full, slices, threshold, tail, adjacency, stat
         # allocate buffer, so we don't need to allocate memory during loop
         X_buffer = [np.empty((len(X_full[s]), buffer_size), dtype=X_full.dtype)
                     for s in slices]
-        mm_groups_buffer = [np.empty((len(np.hstack(mm_groups)[s]), buffer_size), dtype=X_full.dtype)
-                    for s in slices]
 
     for seed_idx, order in enumerate(orders):
         # shuffle sample indices
@@ -409,14 +407,15 @@ def _do_permutations_multilevel(X_full, slices, threshold, tail, adjacency, stat
                 for i, idx in enumerate(idx_shuffle_list):
                     X_buffer[i][:, :n_var_loop] =\
                         X_full[idx, pos: pos + n_var_loop]
-                    mm_groups_buffer[i][:, :n_var_loop] =\
-                        np.hstack(mm_groups)[idx, pos: pos + n_var_loop]
+                mm_groups_shuffle_list = [np.hstack(mm_groups)[idx] for idx in idx_shuffle_list]
+            
+                assert np.all([np.all(mm_groups[i] == mm_groups_shuffle_list[i]) for i in range(len(mm_groups))]), "something went wrong when shuffling groups"
 
                 # apply stat_fun and store result
                 cond = []
                 for c, x in enumerate(X_buffer):
                     cond.append(c*np.ones(x.shape[0]))
-                tmp = stat_fun_ml(np.vstack(X_buffer), np.hstack(cond), np.hstack(mm_groups_buffer))
+                tmp = stat_fun_ml(np.vstack(X_buffer), np.hstack(cond), np.hstack(mm_groups_shuffle_list))
                 # tmp = stat_fun(*X_buffer)
                 t_obs_surr[pos: pos + n_var_loop] = tmp[:n_var_loop]
 
