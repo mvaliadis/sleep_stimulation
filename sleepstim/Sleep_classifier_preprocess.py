@@ -13,9 +13,7 @@ import yasa
 from scipy.signal import welch
 from os import chdir as cd
 from os import listdir
-cd('/home/administrator/sleep_stimulation-development')
-from sleep_funs import process_raw_EDF, process_raw_EDF_cfs, bandpower
-#cd('/users/neuro/sleep_stimulation')
+from sleepstim.sleep_funs import process_raw_EDF, process_raw_EDF_cfs, bandpower
 cd('/media/administrator/data/cfs/polysomnography')
 
 #%%

@@ -27,9 +27,8 @@ import seaborn as sns
 from os import chdir as cd
 from os import listdir
 import os, shutil
-# cd('/home/administrator/sleep_stimulation-development/Analysis')
-from analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
-                                  label_artifacts, load_preprocessed_data, Data_SW)
+from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
+                                                     label_artifacts, load_preprocessed_data, Data_SW)
 
 #%%
 ## Step 1 - Pre-process data ##

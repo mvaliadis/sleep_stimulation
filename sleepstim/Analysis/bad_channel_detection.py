@@ -24,9 +24,8 @@ from autoreject import Ransac
 from autoreject.utils import interpolate_bads
 from os import chdir as cd
 from os import listdir
-cd('/home/administrator/sleep_stimulation-development/Analysis')
-from analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
-                                  label_artifacts, load_preprocessed_data, Data_SW)
+from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
+                                                     label_artifacts, load_preprocessed_data, Data_SW)
 
 #%%
 path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded/'

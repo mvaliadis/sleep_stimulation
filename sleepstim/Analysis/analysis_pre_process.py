@@ -34,11 +34,12 @@ from meegkit.utils import demean, normcol
 from os import chdir as cd
 from os import listdir
 import os, shutil
-cd('/home/administrator/sleep_stimulation-development')
-from sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
-                        downsample_scaled, load_xdf, channel_parser, thresholdcrossings, plot_confusion_matrix)
+from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
+                                  downsample_scaled, load_xdf, channel_parser, thresholdcrossings, 
+                                  plot_confusion_matrix)
 sns.set(style='darkgrid', font_scale=1.2)
 
+#%%
 class Data_Struct:
     def __init__(self, data, chans, chtypes, times, pinknoise_times, classif_predict, classif_times, sfreq):
         self.data = data

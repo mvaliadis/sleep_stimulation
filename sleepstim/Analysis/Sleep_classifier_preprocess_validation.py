@@ -28,9 +28,9 @@ import pandas as pd
 # from scipy.signal import welch
 from os import chdir as cd
 from os import listdir
-cd('/home/administrator/sleep_stimulation-development')
-from sleep_funs import bandpower, unravel_hypnogram_visbrain, plot_confusion_matrix, load_preprocessed_data, Data_Struct
-cd('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded_cleaned')
+from sleepstim.sleep_funs import bandpower, unravel_hypnogram_visbrain, plot_confusion_matrix
+from sleepstim.Analysis.analysis_pre_process import load_preprocessed_data, Data_Struct
+#cd('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded_cleaned')
 
 #%%
 ## Study 1 data 

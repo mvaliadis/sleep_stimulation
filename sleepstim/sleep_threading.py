@@ -5,10 +5,9 @@ Created on Mon Feb 17 09:36:25 2020
 @author: neuro
 """
 from os import chdir
-chdir('C:/Users/neuro/Documents/development/sleep_stimulation')
 import liesl
 import reiz.marker
-from sleep_funs import PinkNoise
+from sleepstim.sleep_funs import PinkNoise
 import matplotlib.pyplot as plt
 from reiz import clock
 import numpy as np

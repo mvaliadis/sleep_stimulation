@@ -9,8 +9,7 @@ Created on Tue Mar  3 10:17:18 2020
 import numpy as np
 import random
 from os import chdir as cd
-cd('/home/administrator/Documents/Scripts')
-from generate_subject_code import generate_subject_code as sc
+from sleepstim.generate_subject_code import generate_subject_code as sc
 
 
 subjects=[]

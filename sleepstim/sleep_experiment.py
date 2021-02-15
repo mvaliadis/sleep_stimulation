@@ -6,10 +6,9 @@ Created on Mon Feb 17 09:36:25 2020
 """
 
 from os import chdir
-chdir('C:/Users/neuro/Documents/projects/sleep_stimulation-development')
 import liesl
 import reiz.marker
-from sleep_funs import SO_detection, sleep_staging, subject_param_pull
+from sleepstim.sleep_funs import SO_detection, sleep_staging, subject_param_pull
 import matplotlib.pyplot as plt
 from reiz import clock
 import numpy as np

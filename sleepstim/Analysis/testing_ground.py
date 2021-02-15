@@ -27,10 +27,9 @@ from sklearn.metrics import cohen_kappa_score, confusion_matrix
 from os import chdir as cd
 from os import listdir
 import os
-from analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
+from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
                                   label_artifacts, load_preprocessed_data, Data_SW)
-cd('/home/administrator/sleep_stimulation-development')
-from sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
+from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
                         downsample_scaled, load_xdf, channel_parser, thresholdcrossings, plot_confusion_matrix)
 
 sns.set(style='darkgrid', font_scale=1.2)

@@ -8,8 +8,8 @@ Created on Mon Feb 17 13:58:01 2020
 import pyaudio
 import numpy as np
 import pandas as pd
-from reiz import clock
-import reiz
+# from reiz import clock
+# import reiz
 import threading
 import mne
 import matplotlib.pyplot as plt

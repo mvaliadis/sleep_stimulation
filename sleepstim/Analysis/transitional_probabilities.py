@@ -11,9 +11,9 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import logging
 from os import chdir as cd
-cd('/home/administrator/sleep_stimulation-development')
-from sleep_funs import transition_matrix, transition_matrix_prob, transition_matrix_plot
+from sleepstim.sleep_funs import transition_matrix, transition_matrix_prob, transition_matrix_plot
 
+#%%
 def transition_matrix(transitions):
     # the function takes a list with states labeled as successive integers and
     # returns a transition matrix, trans_max of all transitions between given states
