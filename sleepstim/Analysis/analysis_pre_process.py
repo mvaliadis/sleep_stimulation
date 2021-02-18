@@ -37,7 +37,7 @@ import os, shutil
 from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
                                   downsample_scaled, load_xdf, channel_parser, thresholdcrossings, 
                                   plot_confusion_matrix)
-sns.set(style='darkgrid', font_scale=1.2)
+# sns.set(style='darkgrid', font_scale=1.2)
 
 #%%
 class Data_Struct:

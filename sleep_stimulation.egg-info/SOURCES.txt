@@ -6,6 +6,7 @@ sleep_stimulation.egg-info/dependency_links.txt
 sleep_stimulation.egg-info/top_level.txt
 sleepstim/Sleep_classifier_RF.py
 sleepstim/Sleep_classifier_preprocess.py
+sleepstim/__init__.py
 sleepstim/generate_subject_code.py
 sleepstim/live_plotting.py
 sleepstim/sleep_calibration.py

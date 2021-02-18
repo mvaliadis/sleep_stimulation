@@ -119,6 +119,7 @@ viterbi(obs,
 
 
 #%%
-from prml.markov import *
-CategoricalHMM(initial_proba, transition_proba, means)
+from prml.markov import CategoricalHMM
+categorical_hmm = CategoricalHMM(initial_proba={'Wake': 0.2, 'N1': 0.2, 'N2': 0.2, 'N3': 0.2, 'REM': 0.2},
+                                 transition_proba=transition_probs, means = np.vstack([counts, obs]).T)
 

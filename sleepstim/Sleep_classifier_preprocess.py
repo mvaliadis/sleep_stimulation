@@ -65,7 +65,7 @@ for idx, fname in enumerate(files):
     # compute power spectral density with welch's method
     data = bandpower(datArray, fs=128, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
                                  (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
-                                 (16, 30, 'Beta'), (49, 51, 'Line noise')], relative=True)
+                                 (16, 30, 'Beta'), (59, 61, 'Line noise')], relative=True)
     
     # reshape data for classifier, must be (epochs x (nchans*bands))
     data = np.swapaxes(data, 0, 1)

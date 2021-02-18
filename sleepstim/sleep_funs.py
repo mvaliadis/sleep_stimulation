@@ -8,6 +8,7 @@ Created on Mon Feb 17 13:58:01 2020
 import pyaudio
 import numpy as np
 import pandas as pd
+from itertools import cycle
 # from reiz import clock
 # import reiz
 import threading
@@ -17,6 +18,7 @@ import seaborn as sns
 from scipy import signal
 from scipy.signal import butter, filtfilt, welch, resample, resample_poly
 from scipy.integrate import simps
+from sklearn.metrics import roc_auc_score, auc, roc_curve
 import pickle
 import liesl
 import yasa
@@ -409,7 +411,7 @@ def process_raw_EDF(fname):
     return datArray, stageArray
 
 
-def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=plt.cm.Blues, save=False, save_name='default'):
+def plot_confusion_matrix(path, cm, target_names, title='Confusion matrix', cmap=plt.cm.Blues, save=False, save_name='default'):
     plt.imshow(cm, interpolation='nearest', cmap=cmap)
     plt.title(title)
     plt.colorbar()
@@ -420,7 +422,7 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix', cmap=plt.c
     plt.ylabel('True label')
     plt.xlabel('Predicted label')
     if save:
-        plt.savefig(f'confusion_matrix_{save_name}')
+        plt.savefig(path + f'confusion_matrix_{save_name}')
     
 def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
     plt.figure()
@@ -435,6 +437,80 @@ def ROC_curve_plot(rf_roc_auc, fpr, tpr, thresholds):
     #plt.savefig('Log_ROC')
     plt.show()
 
+def plot_multiclass_ROC(level, path, y_test_all, y_score_all, n_classes = 5, multi_class=True, save=True, save_name='bla bla'):
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    n_classes = 5  #class labels
+    for i in range(n_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_test_all==i, y_score_all[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+    
+    # Compute micro-average ROC curve and ROC area - take this calc. with a grain of salt....   
+    # to-do research differences between micro and macro ROC averages                                                                                                                      
+    for i in range(n_classes):
+        fpr["micro"], tpr["micro"], _ = roc_curve(y_test_all==i, y_score_all[:,i].ravel())
+        roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
+            
+    # Plot of a ROC curve for a specific class
+    if multi_class==False:  
+        stage = int(input('Please select the sleep stage ROC of interest (0,1,2,3,4): '))
+        plt.figure()
+        plt.plot(fpr[stage], tpr[stage], color='darkorange',
+                 lw=2, label='ROC curve (area = %0.2f)' % roc_auc[stage])
+        plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title(f'ROC: Sleep Stage {stage} ')
+        plt.legend(loc="lower right")
+        plt.show()
+    else:
+        # First aggregate all false positive rates
+        all_fpr = np.unique(np.concatenate([fpr[i] for i in range(n_classes)]))
+        
+        # Then interpolate all ROC curves at this points
+        mean_tpr = np.zeros_like(all_fpr)
+        for i in range(n_classes):
+            mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
+        
+        # Finally average it and compute AUC
+        mean_tpr /= n_classes
+        
+        fpr["macro"] = all_fpr
+        tpr["macro"] = mean_tpr
+        roc_auc["macro"] = auc(fpr["macro"], tpr["macro"])
+        
+        # Plot all ROC curves
+        plt.figure()
+        plt.plot(fpr["micro"], tpr["micro"],
+                 label='micro-average ROC curve (area = {0:0.2f})'
+                       ''.format(roc_auc["micro"]),
+                 color='deeppink', linestyle=':', linewidth=4)
+        
+        plt.plot(fpr["macro"], tpr["macro"],
+                 label='macro-average ROC curve (area = {0:0.2f})'
+                       ''.format(roc_auc["macro"]),
+                 color='navy', linestyle=':', linewidth=4)
+        
+        colors = cycle(['aqua', 'darkorange', 'cornflowerblue'])
+        for i, color in zip(range(n_classes), colors):
+            plt.plot(fpr[i], tpr[i], color=color, lw=2,
+                     label='ROC curve of class {0} (area = {1:0.2f})'
+                     ''.format(i, roc_auc[i]))
+        
+        plt.plot([0, 1], [0, 1], 'k--', lw=2)
+        plt.xlim([0.0, 1.0])
+        plt.ylim([0.0, 1.05])
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.title('Multi-class ROC ' + level)
+        plt.legend(loc="lower right")
+        plt.show()
+        if save:
+            plt.savefig(path + f'ROC_multiclass_{save_name}')
+        
 # def standardize_features(X_train, X_test):
 #     from sklearn.preprocessing import StandardScaler
 #     sc = StandardScaler()
