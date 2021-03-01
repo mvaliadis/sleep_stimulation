@@ -18,3 +18,4 @@ for i, files in enumerate(files_list):
     highlevel.anonymize_edf(files, new_file= save_path + 'anonymized_' + str(i) + '.edf', 
                             to_remove=['patientname', 'patientcode', 'birthdate', 'gender', 'admincode'],
                             new_values=['anonymized', 'anonymized', '', '', ''])
+    

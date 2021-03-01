@@ -28,10 +28,10 @@ from os import chdir as cd
 from os import listdir
 import os, shutil
 from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
-                                                     label_artifacts, load_preprocessed_data, Data_SW)
+                                                     label_artifacts, load_preprocessed_data, Data_SW, sleep_data_validation)
 
 #%%
-## Step 1 - Pre-process data ##
+## Step 1a - Pre-process data ##
 ## The following function allows for preprocessing of data yet to be processed from requisite given path 
 ## by checking whether files have been preprocessed. The end result is a data object which contains the data, 
 ## channels, channel types, time stamps, pinknoise timestamps, classifier predict, classifier timestamps, 
@@ -52,6 +52,14 @@ from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sle
 # also can select different rereferencing techniques 
 path = '/media/administrator/data/Study_1_data/Raw_data/'
 preprocess_sleep_data(path, save=True, reference='mastoids', stageing=False)
+
+## Step 1b - Pre-process data (classifier valiadation)
+path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/'
+sleep_data_validation(path, save=True, validation='classsifier')
+
+## Step 1c - Pre-process data (auditory stimulation validation)
+path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/'
+sleep_data_validation(path, save=True, validation='auditory')
 
 #%%
 ## Step 2a - Sleep stageing ## 
