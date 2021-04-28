@@ -18,7 +18,7 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, roc_curve, auc, RocCurveDisplay
 from sklearn.model_selection import cross_val_score, GroupShuffleSplit
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, cohen_kappa_score
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle 
@@ -153,6 +153,10 @@ for idx, (fname, hypno_files) in enumerate(zip(exist_exp_files, exist_hyp_files)
         np.set_printoptions(precision=2)
         print(f'Confusion matrix: \n {cm}' + '\n')
         
+        # Compute interrater reliability
+        inter_agreement = cohen_kappa_score(y_test, y_pred).round(2)
+        print(f'The inter-rate agreement is K = {inter_agreement}' + '\n')
+       
     
         accArrays.append([y_test, y_pred, y_score, idx])
         

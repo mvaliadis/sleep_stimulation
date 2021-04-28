@@ -12,6 +12,7 @@ Created on Wed Jul 15 13:35:47 2020
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import cm
 from matplotlib.backends.backend_pdf import PdfPages
 import pickle 
 import pandas as pd
@@ -34,10 +35,11 @@ from meegkit.utils import demean, normcol
 from os import chdir as cd
 from os import listdir
 import os, shutil
+from autoreject import Ransac
 from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
                                   downsample_scaled, load_xdf, channel_parser, thresholdcrossings, 
                                   plot_confusion_matrix)
-# sns.set(style='darkgrid', font_scale=1.2)
+#sns.set(style='darkgrid', font_scale=1.2)
 
 #%%
 class Data_Struct:
@@ -47,11 +49,30 @@ class Data_Struct:
         self.chtypes = chtypes
         self.times = times - times[0]
         self.pinknoise_times = pinknoise_times - times[0]
+        self.pinknoise_times_sync = [np.argmin(np.abs(self.times - ts)) for ts in self.pinknoise_times]  
         self.classif_times = classif_times - times[0]
+        self.classif_times_sync = [np.argmin(np.abs(self.times - ts)) for ts in self.classif_times]  
         self.classif_predict = classif_predict
         self.sfreq = sfreq
+        self.hypno = []
+        self.hypno_with_art = []
+        self.bad_chans = []
+        self.sws = []
+        self.spindles = []
         print('Creating RawArray with %s data, of length %s minutes, containing %s channels'
               % (self.data.dtype, round(data.shape[0]/sfreq/60, 2), data.shape[1]))
+        
+    def detect_bad_chans(self, method='RANSAC'):
+        _, epoched_data = yasa.sliding_window(self.data.T, sf=self.sfreq, window=30)
+        info = mne.create_info(ch_names=self.chans, sfreq=self.sfreq, ch_types=self.chtypes)
+        epochs = mne.EpochsArray(epoched_data/1e6, info, tmin = 0, baseline=(None), verbose=0) 
+        epochs.set_montage(mne.channels.make_standard_montage('standard_1005'), verbose=0)
+        picks = mne.pick_types(epochs.info, eeg=True, stim=False, eog=False,
+                               include=[], exclude=[])
+        ransac = Ransac(verbose=False, picks=picks, n_jobs=-1)
+        ransac.fit_transform(epochs)
+        logging.warning(f'The RANSAC algorithm detected the following as bad channels: {ransac.bad_chs_}!')
+        self.bad_chans = ransac.bad_chs_
         
     def downsample(self, new_sfreq):
         self.data = downsample_scaled(self.data, self.sfreq, new_sfreq)
@@ -61,11 +82,80 @@ class Data_Struct:
     def fir_filter(self, l_freq, h_freq):
         eeg_index = [i for i, x in enumerate(self.chtypes) if x == "eeg"]
         self.data = mne.filter.filter_data(self.data[:, eeg_index].T, self.sfreq, l_freq, h_freq).T
-    
+        
+    def notch_filter(self, freqs):
+         self.data = mne.filter.notch_filter(x = self.data.T, Fs = self.sfreq, freqs=freqs).T
+             
+    def art_detection(self, method='covar', window=2, downsample=False, hypno_path = ''):
+        # apply artifact detection for a selct number of core EEG channels
+        eeg_index = np.r_[self.chans.index('F3'), self.chans.index('Fz'), self.chans.index('F4'), 
+                          self.chans.index('C3'), self.chans.index('Cz'), self.chans.index('C4'), 
+                          self.chans.index('P3'), self.chans.index('Pz'), self.chans.index('P4')]
+        # epoch data
+        _, epoched_data = yasa.sliding_window(self.data.T, sf=self.sfreq, window=30)
+        # eliminate bad channels from covariance artifact detection approach
+        bad_idx = np.asarray([np.r_[self.chans.index(self.bad_chans[i])][0] for i in range(len(self.bad_chans))])
+        good_idx = np.asarray([item for item in eeg_index if item not in bad_idx])
+        
+        # apply artifact detection
+        self.hypno_with_art, self.hypno = artifact_detect_hypno(self.data[:,good_idx], hypno_path = hypno_path, 
+                                                                downsample=downsample, sf=self.sfreq, method=method, 
+                                                                window=window)  
+        
+    def plot_zscore_signal(self, zscore_val=3, chan='C3'):
+        """
+        Returns plotted signal with z_score deviations
+        
+        """
+        plt.plot(self.times, self.data[:,self.chans.index(chan)])
+        plt.vlines(self.times[zscore(np.abs(self.data[:,self.chans.index(chan)]))>zscore_val], ymin=np.min(self.data), ymax=np.max(self.data))
+        
+    def sw_detection(self):
+        eeg_index = [i for i, x in enumerate(self.chtypes) if x == "eeg"]
+        if self.hypno_with_art != []:
+            hypno = self.hypno_with_art
+        else:
+            hypno = None
+        self.sws = yasa.sw_detect(self.data[:,eeg_index].T, self.sfreq, ch_names = np.asarray(self.chans)[eeg_index], 
+                                  hypno = hypno, include=(2,3), freq_sw=(0.5, 1.5), dur_neg=(0.3, 1.5), 
+                                  dur_pos=(0.1, 1), amp_neg=(35, 300), amp_pos=(10, 200), amp_ptp=(75, 400), 
+                                  coupling=False, freq_sp=None, remove_outliers=True)
+        
+    def sp_detection(self):
+        eeg_index = [i for i, x in enumerate(self.chtypes) if x == "eeg"]
+        if self.hypno_with_art != []:
+            hypno = self.hypno_with_art
+        else:
+            hypno = None
+        self.spindles = yasa.spindles_detect(self.data[:,eeg_index].T, sf=self.sfreq, ch_names=np.asarray(self.chans)[eeg_index], 
+                                             hypno=hypno, include=(2, 3), freq_sp=(9, 16), freq_broad=(1, 30),
+                                             duration=(0.5, 2), min_distance=500,
+                                             thresh={'rel_pow': 0.2, 'corr': 0.65, 'rms': 1.5},
+                                             multi_only=False, remove_outliers=False, verbose=False)
         
 #%%
          
-def _pre_process_sleep_data(files, reference='mastoids', stageing=False):
+def _pre_process_sleep_data(files, reference='mastoids', validation=None, stageing=False, line_noise_removal='spectrum_fit'):
+    """
+
+    Parameters
+    ----------
+    files : TYPE
+        DESCRIPTION.
+    reference : TYPE, {'mastoids', 'surface laplacian', 'common average', or None}
+        DESCRIPTION. The default is 'mastoids'.
+    validation : TYPE, {None, 'auditory', 'classifier'}
+        DESCRIPTION. The default is None.
+    stageing : TYPE, optional
+        DESCRIPTION. The default is False.
+    line_noise_removal : TYPE, {'spectrum_fit' or 'dss'}
+        DESCRIPTION. The default is 'spectrum_fit'.
+    Returns
+    -------
+    Data : TYPE
+        DESCRIPTION.
+
+    """
     # parse data
     stream_dict = load_xdf(files) 
     # select data and marker streams
@@ -91,6 +181,13 @@ def _pre_process_sleep_data(files, reference='mastoids', stageing=False):
     sf = int(info['nominal_srate'][0])
     # find channel names and types
     ch_names, ch_types = channel_parser(info, data) 
+    if 'Cpz' in ch_names:
+        # ch_types[ch_names.index('Cpz')] = 'misc'
+        data = np.delete(data, ch_names.index('Cpz'), axis=-1)
+        ch_types.pop(ch_names.index('Cpz'))
+        ch_names.remove('Cpz')
+    if 'OZ' in ch_names:
+        ch_names[ch_names.index('OZ')] = 'Oz'
     # chans of interest for stageing
     if stageing:
         EEG_index = np.r_[ch_names.index('F3'), ch_names.index('Fz'), ch_names.index('F4'), 
@@ -103,19 +200,34 @@ def _pre_process_sleep_data(files, reference='mastoids', stageing=False):
     mastoids_index = np.r_[ch_names.index('M1'), ch_names.index('M2')]
 
     # filter data 
-    EEG = bfr_butter_filt(data[:,EEG_index], sf, lfreq=0.5, hfreq=35) 
-    EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=50, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)
-    EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=100, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)
-    EOG_L = bfr_butter_filt(data[:,[ch_names.index('EOG_L')]], sf, lfreq=0.5, hfreq=35)
-    EOG_L, _ = dss.dss_line(EOG_L, fline=50, sfreq=sf, nfft=4*sf)
-    EOG_L, _ = dss.dss_line(EOG_L, fline=100, sfreq=sf, nfft=4*sf) 
-    EOG_R = bfr_butter_filt(data[:,[ch_names.index('EOG_R')]], sf, lfreq=0.5, hfreq=35)
-    EOG_R, _ = dss.dss_line(EOG_R, fline=50, sfreq=sf, nfft=4*sf)
-    EOG_R, _ = dss.dss_line(EOG_R, fline=100, sfreq=sf, nfft=4*sf) 
+    EEG = bfr_butter_filt(data[:,EEG_index], sf, lfreq=0.3, hfreq=35) 
+    EOG_L = bfr_butter_filt(data[:,[ch_names.index('EOG_L')]], sf, lfreq=0.3, hfreq=35)
+    EOG_R = bfr_butter_filt(data[:,[ch_names.index('EOG_R')]], sf, lfreq=0.3, hfreq=35)
     
-    #EMG processing
+    if validation is None:
+        if line_noise_removal == 'dss':
+            EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=50, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)
+            EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=100, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)
+            EOG_L, _ = dss.dss_line(EOG_L, fline=50, sfreq=sf, nfft=4*sf)
+            EOG_L, _ = dss.dss_line(EOG_L, fline=100, sfreq=sf, nfft=4*sf) 
+            EOG_R, _ = dss.dss_line(EOG_R, fline=50, sfreq=sf, nfft=4*sf)
+            EOG_R, _ = dss.dss_line(EOG_R, fline=100, sfreq=sf, nfft=4*sf) 
+        else:
+            EEG = mne.filter.notch_filter(EEG.T, Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50), 
+                                          mt_bandwidth=2, p_value=0.01, filter_length='10s').T
+            EOG_L = mne.filter.notch_filter(EOG_L.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50), 
+                                            mt_bandwidth=2, p_value=0.01, filter_length='10s')
+            EOG_R = mne.filter.notch_filter(EOG_L.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50),
+                                            mt_bandwidth=2, p_value=0.01, filter_length='10s')
+    
+    #EMG processing (butterworth filter + multitaper spectrum fit interpolation)
     EMG_L = bfr_butter_filt(data[:,[ch_names.index('EMG_L')]], sf, lfreq=10, hfreq=100)
     EMG_R = bfr_butter_filt(data[:,[ch_names.index('EMG_R')]], sf, lfreq=10, hfreq=100)
+    if validation is None:
+        EMG_L = mne.filter.notch_filter(np.squeeze(EMG_L), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50), 
+                                        mt_bandwidth=2, p_value=0.01, filter_length='10s')
+        EMG_R = mne.filter.notch_filter(np.squeeze(EMG_R), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50),
+                                        mt_bandwidth=2, p_value=0.01, filter_length='10s')
 
     # re-reference EEG channels to average of mastoids/common average/surface laplacian
     if reference=='surface laplacian':
@@ -125,50 +237,42 @@ def _pre_process_sleep_data(files, reference='mastoids', stageing=False):
         # ignore non-EEG channels! 
         raw.pick_types(eeg=True)
         EEG = mne.preprocessing.compute_current_source_density(raw).get_data()
-    elif reference!='surface laplacian':
-        if reference=='mastoids':
+    elif reference!='surface laplacian' and validation!='auditory':
+        if reference=='mastoids' or validation == 'classifier':
             ref_data = EEG[:,mastoids_index][..., :].mean(-1, keepdims=True)
         elif reference=='common average':
             ref_data = EEG[..., :].mean(-1, keepdims=True)
-        EEG -= ref_data  
-    
-    if 'bipECG' in ch_names:
-        ECG = bfr_butter_filt(data[:,[ch_names.index('bipECG')]], sf, lfreq=0.5, hfreq=70)
-        ECG, _ = dss.dss_line(ECG, fline=50, sfreq=sf, nfft=4*sf)
-        ECG, _ = dss.dss_line(ECG, fline=100, sfreq=sf, nfft=4*sf)
-        # re-combine data
-        data = np.concatenate([EEG, EOG_L, EOG_R, ECG], axis=1)
-    else: 
-        # re-combine data
-        data = np.concatenate([EEG, EOG_L, EOG_R], axis=1)
-     
+        EEG -= ref_data 
+    elif reference==None or validation=='auditory':
+        EEG = EEG
+ 
     # edit channel names and types based on new selection 
     new_chans = [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
     new_chtypes = [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
-    
-    #EMG epoching for time complexity reduction  
-    if 'calibration' in files:
-        EMG_L = mne.filter.notch_filter(np.squeeze(EMG_L), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50))
-        EMG_R = mne.filter.notch_filter(np.squeeze(EMG_R), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50))
+        
+    if 'bipECG' in ch_names:
+        ECG = bfr_butter_filt(data[:,[ch_names.index('bipECG')]], sf, lfreq=0.3, hfreq=70)
+        if validation is None:
+            if line_noise_removal == 'dss':
+                ECG, _ = dss.dss_line(ECG, fline=50, sfreq=sf, nfft=4*sf)
+                ECG, _ = dss.dss_line(ECG, fline=100, sfreq=sf, nfft=4*sf)
+            else:
+                ECG = mne.filter.notch_filter(ECG.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50),
+                                              mt_bandwidth=2, p_value=0.01, filter_length='10s')
+            # add EMG data back
+            data = np.concatenate([EEG, np.expand_dims(EOG_L, 1), np.expand_dims(EOG_R, 1), 
+                                   np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1), 
+                                   np.expand_dims(ECG,1)], axis=1)*1e6
+        else:
+            # add EMG data back
+            data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R, ECG], axis=1)*1e6
+    elif validation != 'auditory': 
+        # re-combine data
+        data = np.concatenate([EEG, np.expand_dims(EOG_L,1), np.expand_dims(EOG_R,1), 
+                               np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1)], axis=1)*1e6
     else:
-        cutindx = np.linspace(0,len(EMG_L), 100).astype(int)
-        
-        EMG_L_cut = [EMG_L[cutindx[i]:cutindx[i+1]] for i in range(len(cutindx)-1)] 
-        epoched_data_EMG_L = []
-        for i in range(len(EMG_L_cut)):  
-            EMG_L_chunks = mne.filter.notch_filter(np.squeeze(EMG_L_cut[i]), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50))
-            epoched_data_EMG_L.append(EMG_L_chunks)
-        EMG_L = np.concatenate(epoched_data_EMG_L, axis=0)
-        
-        EMG_R_cut = [EMG_R[cutindx[i]:cutindx[i+1]] for i in range(len(cutindx)-1)]
-        epoched_data_EMG_R = []
-        for i in range(len(EMG_L_cut)):  
-            EMG_R_chunks = mne.filter.notch_filter(np.squeeze(EMG_R_cut[i]), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50))
-            epoched_data_EMG_R.append(EMG_R_chunks)
-        EMG_R = np.concatenate(epoched_data_EMG_R, axis=0)
+        data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R], axis=1)*1e6
     
-    # add EMG data back
-    data = np.concatenate([data, np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1)], axis=1)*1e6
     # create data object
     Data = Data_Struct(data, new_chans, new_chtypes, eego_times, pinknoise_timestamps, classifier_predict, classifier_timestamps, sf)
         
@@ -180,26 +284,33 @@ def save_preprocess_sleep_data(*args, path):
     # save as pickle file
     pickle.dump(var, open(path, "wb"))  
       
-def preprocess_sleep_data(path, save=True, reference='mastoids', stageing=False):
+def preprocess_sleep_data(path, save=True, reference='mastoids', validation=None, stageing=False):
     files_list = [os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files]
     for i, files in enumerate(files_list):
         # select subject ID + cond identifier
         subjID_cond = files.split('/')[-2]
         if 'Experimental' in files:
             save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/'
+            if validation == 'classifier':
+                new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + subjID_cond + '_preproc_data_cv.p'
         elif 'adaption_calibration' in files:
             save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Calibration/'
         elif 'Calibration' in files:
             save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Calibration/'
         elif 'Adaption' in files:
             save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/'
+            if validation == 'classifier':
+                new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + subjID_cond + '_preproc_data_cv.p'
         else:
             raise NameError('Please verify that the file name contains an appropriate recording type! ')
         # check if file exists
-        new_path = save_path + subjID_cond + '_preproc_data.p'
+        if validation == 'classifier':
+            new_path = new_path
+        elif validation is None:
+            new_path = save_path + subjID_cond + '_preproc_data.p'
         if not os.path.exists(new_path):
             print(f'Pre-processing the dataset for subject and condition: {subjID_cond} !')
-            Data = _pre_process_sleep_data(files, reference=reference, stageing=stageing)
+            Data = _pre_process_sleep_data(files, reference=reference, validation=validation, stageing=stageing)
             # check if a second recording file exists, then combine after preprocessing
             if int(files.split('/')[-1].split('.')[0][-1])!= 1:
                 new_path = save_path + subjID_cond + '_preproc_data_' + files.split('/')[-1].split('.')[0][-1] + '.p'
@@ -219,106 +330,10 @@ def load_preprocessed_data(file):
     return var
 
 def to_do_combine_recordings():
+    combined = []
     return combined
 
-def sleep_data_validation(path, save=True, validation='classifier'):
-    """
-    
-    Parameters
-    ----------
-    path : TYPE
-        DESCRIPTION.
-    save : TYPE, optional
-        DESCRIPTION. The default is True.
-    validation : TYPE, {'classifier' or 'auditory'}
-        DESCRIPTION. Choose between respective data preprocessing validation methods.
-
-    Returns
-    -------
-    Data : TYPE
-        DESCRIPTION.
-
-    """
-    files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
-    for i, files in enumerate(files_list):
-        if validation == 'classifier':
-            new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + files.split('/')[-2] + '_preproc_data_cv.p'
-        elif validation == 'auditory':
-            new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/' + files.split('/')[-2] + '_preproc_data_av.p'
-        if not os.path.exists(new_path):
-            print(f'Pre-processing the dataset for subject and condition: {files.split("/")[-2]} !')
-            stream_dict = load_xdf(files) 
-            # select data and marker streams
-            try:
-                rec_type = 'eeg_replay'
-                stream_dict[rec_type]
-            except:
-                rec_type = 'eego'
-                stream_dict[rec_type]
-            
-            data = stream_dict[rec_type]['time_series']
-            eego_times = stream_dict[rec_type]['time_stamps']
-            marker = stream_dict['reiz-marker']
-            classifier_predict = [marker['time_series'][ix] for ix in range(len(marker['time_series'])) if 'rf' in marker['time_series'][ix][0]]
-            classifier_timestamps = [marker['time_stamps'][ix] for ix in range(len(marker['time_stamps'])) if 'rf' in marker['time_series'][ix][0]]
-            pinknoise_timestamps = [marker['time_stamps'][ix] for ix in range(len(marker['time_stamps'])) if marker['time_series'][ix][0] == 'pinknoise']
-            # load hdr
-            info = stream_dict[rec_type]['info'] 
-            # delete stream_dict for memory sake
-            del stream_dict
-            
-            stageing = False
-            
-            sf = int(info['nominal_srate'][0])
-            # find channel names and types
-            ch_names, ch_types = channel_parser(info, data) 
-            # chans of interest for stageing
-            if stageing:
-                EEG_index = np.r_[ch_names.index('F3'), ch_names.index('Fz'), ch_names.index('F4'), 
-                                  ch_names.index('C3'), ch_names.index('Cz'), ch_names.index('C4'), 
-                                  ch_names.index('P3'), ch_names.index('P4'), ch_names.index('O1'), 
-                                  ch_names.index('O2')]
-            else:
-                EEG_index = [i for i, x in enumerate(ch_types) if x == "eeg"]
-            
-            
-            # set filtering params
-            if validation=='classsifier':
-                filtparams = butter(4, (0.5, 35), btype='bandpass', fs = 512)
-                mastoids_index = np.r_[ch_names.index('M1'), ch_names.index('M2')]
-            elif validation=='auditory':
-                filtparams = butter(4, 4, fs = 512)
-        
-            EEG = filtfilt(*filtparams, data[:,EEG_index], axis=0, padtype='odd')
-            EOG_L = bfr_butter_filt(data[:,[ch_names.index('EOG_L')]], sf, lfreq=0.5, hfreq=35)
-            EOG_R = bfr_butter_filt(data[:,[ch_names.index('EOG_R')]], sf, lfreq=0.5, hfreq=35)
-            EMG_L = bfr_butter_filt(data[:,[ch_names.index('EMG_L')]], sf, lfreq=10, hfreq=100)
-            EMG_R = bfr_butter_filt(data[:,[ch_names.index('EMG_R')]], sf, lfreq=10, hfreq=100)
-            
-            if validation=='classsifier':
-                ref_data = EEG[:,mastoids_index][..., :].mean(-1, keepdims=True)
-                EEG -= ref_data  
-            
-            if 'bipECG' in ch_names:
-                ECG = bfr_butter_filt(data[:,[ch_names.index('bipECG')]], sf, lfreq=0.5, hfreq=70)
-                data = np.concatenate([EEG, EOG_L, EOG_R, ECG], axis=1)
-            else:
-                data = np.concatenate([EEG, EOG_L, EOG_R], axis=1)
-                
-            new_chans = [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
-            new_chtypes = [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
-            data = np.concatenate([data, EMG_L, EMG_R], axis=1)*1e6
-            Data = Data_Struct(data, new_chans, new_chtypes, eego_times, pinknoise_timestamps, classifier_predict, classifier_timestamps, sf)
-            
-            # save data
-            if save:
-                save_preprocess_sleep_data(Data, new_path + files.split('/')[-2] + '_preproc_data_cv.p') 
-            else:
-                return Data
-        else:
-            print(f'The dataset for subject and condition: {files.split("/")[-2]} has already been pre-processed! ')
-            continue
-        
+     
 #%%
 ## SNR computation
 
@@ -327,24 +342,14 @@ def sleep_data_validation(path, save=True, validation='classifier'):
 
 #%%
 
-def plot_zscore_signal(data, zscore_val=3, sf=512, chan='C3'):
-    """
-    Returns plotted signal with z_score deviations
-    TO:DO: Need to revise for object implementation as no new_chans index exists.
-    
-    """
-    times = np.arange(len(data))/sf
-    plt.plot(times, data[:,new_chans.index(chan)])
-    plt.vlines(times[zscore(np.abs(data[:,new_chans.index(chan)]))>zscore_val], ymin=np.min(data), ymax=np.max(data))
-    
 def artifact_detect_hypno(data, hypno_path, sf, downsample=False, method='covar', window=2, inspection=False): 
     
     # epoch data 
     _, epochs = yasa.sliding_window(data.T, sf=512, window=30)
             
     # load hypnogram
-    hypnogram = unravel_hypnogram_visbrain(hypno_path, epochs)
-    
+    hypnogram = unravel_hypnogram_visbrain(hypno_path, epochs)   
+        
     # optional downsamling
     if downsample:
         data = downsample_scaled(data, old_sf=512, new_sf=128, nint_method='resample_poly')
@@ -356,17 +361,17 @@ def artifact_detect_hypno(data, hypno_path, sf, downsample=False, method='covar'
     # Covariance based artifact rejection
     if method=='covar':
         art, zscores = yasa.art_detect(data.T, sf=sf, window=2, hypno=hypno_unsampled, include=(0, 1, 2, 3, 4), 
-                                   method='covar', threshold=3, n_chan_reject=4, verbose='info')
+                                   method='covar', threshold=3, n_chan_reject=3, verbose='info')
     # Standard deviation based artifact rejection
     elif method=='std':
         art, zscores = yasa.art_detect(data.T, sf=sf, window=2, hypno=hypno_unsampled, include=(0, 1, 2, 3, 4), 
-                                      method='std', threshold=3, n_chan_reject=4, verbose='info')
+                                      method='std', threshold=3, n_chan_reject=3, verbose='info')
    # Calculate both for the sake of comparison...     
     elif method=='both':
         art, zscores = yasa.art_detect(data.T, sf=sf, window=2, hypno=hypno_unsampled, include=(0, 1, 2, 3, 4), 
-                           method='covar', threshold=3, n_chan_reject=4, verbose='info')
+                           method='covar', threshold=3, n_chan_reject=3, verbose='info')
         art_std, zscores_std = yasa.art_detect(data.T, sf=sf, window=2, hypno=hypno_unsampled, include=(0, 1, 2, 3, 4), 
-                                       method='std', threshold=3, n_chan_reject=4, verbose='info')
+                                       method='std', threshold=3, n_chan_reject=3, verbose='info')
         # Correlation between covariance and std based artifact rejection
         print(f'The correlation between the two methods is r = {np.corrcoef(art, art_std)[0, 1]:.2f}')
     
@@ -437,10 +442,7 @@ def artifact_detect_hypno(data, hypno_path, sf, downsample=False, method='covar'
         plt.vlines(np.where(hypno_with_art==-1)[0]/sf, ymin=-5000, ymax=5000, label='Detected artifacts')
         plt.legend(frameon=False);
         
-
 #%%
-#path = '/media/administrator/data/Study_1_data/Hypnograms/'
-
 def plot_multitaper_spectrogram(data, sf, ch_names, hypno=None, coi ='F3', fmin=0.5, fmax=30):
     if hypno:
         plot = yasa.plot_spectrogram(data[:,[ch_names.index(coi)]], sf, hypno, fmin, fmax, trimperc=5, cmap='Spectral_r');
@@ -494,7 +496,7 @@ def compare_hypnograms(subj_night : str, group : int, base_rater : str, comp_rat
         out.write(f'{comp_rater} has an accuracy of {stage_acc} % for stage {stage}' + '\n')
     
     # Compute where disgareement lies
-    disagreement = ((np.where(base_hypno!=comp_hypno)[0] + 1)*30/60)
+    disagreement = ((np.where(base_hypno!=comp_hypno)[0])*30/60)
     out.write(f'{base_rater} and {comp_rater} disagree on the epochs at the given minute intervals: \n {disagreement}' + '\n')
  
    
@@ -505,7 +507,7 @@ def compare_hypnograms(subj_night : str, group : int, base_rater : str, comp_rat
     np.set_printoptions(precision=1)
     out.write(f'Confusion matrix: \n {cm}' + '\n')
     plt.figure()
-    plot_confusion_matrix(cm, target_names)
+    plot_confusion_matrix(cm=cm, target_names=target_names, path=None)
     plt.savefig(path + 'Stat_reports/' + 'Normalized_confusion_matrix_' + subj_night)
     
     # close txt file
@@ -603,11 +605,30 @@ def label_artifacts(path, hypno_path, save=True):
         if not check_file_exists(data_save_path) and not check_file_exists(hypno_save_path):
             # load pre-processed data
             Data = load_preprocessed_data(file=path + data_files)[0]
+            
             # apply artifact detection for a selct number of core EEG channels
             eeg_index = np.r_[Data.chans.index('F3'), Data.chans.index('Fz'), Data.chans.index('F4'), 
                               Data.chans.index('C3'), Data.chans.index('Cz'), Data.chans.index('C4'), 
                               Data.chans.index('P3'), Data.chans.index('Pz'), Data.chans.index('P4')]
-            Data.hypno_with_art, Data.hypno = artifact_detect_hypno(Data.data[:,eeg_index], hypno_path = hypno_path + hypno_files, 
+            
+            # eliminate bad channels from covariance artifact detection approach
+            _, epoched_data = yasa.sliding_window(Data.data.T, sf=Data.sfreq, window=30)
+            info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)
+            epochs = mne.EpochsArray(epoched_data/1e6, info, tmin = 0, baseline=(None)) 
+            epochs.set_montage(mne.channels.make_standard_montage('standard_1005'))
+        
+            picks = mne.pick_types(epochs.info, eeg=True, stim=False, eog=False,
+                                    include=[], exclude=[])
+            ransac = Ransac(verbose='progressbar', picks=picks, n_jobs=-1)
+            ransac.fit_transform(epochs)
+            logging.warning(f'The RANSAC algorithm detected the following as bad channels: {ransac.bad_chs_}!')
+            
+            # detected and repaired channels
+            bad_idx = np.asarray([np.r_[Data.chans.index(ransac.bad_chs_[i])][0] for i in range(len(ransac.bad_chs_))])
+            good_idx = np.asarray([item for item in eeg_index if item not in bad_idx])
+            
+            # apply artifact detection
+            Data.hypno_with_art, Data.hypno = artifact_detect_hypno(Data.data[:,good_idx], hypno_path = hypno_path + hypno_files, 
                                                                     downsample=False, sf=Data.sfreq, method='covar', window=2)  
             # save data
             if save:
@@ -718,7 +739,7 @@ def SW_summary(Data, subj_cond, sw_detection_method='abs', sp_coupling=False, sp
     return Data.sw_summary
 
 #%%
-def Data_SW(path, hypno_path):
+def Data_SW(path, hypno_path, save=True):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     hypno_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(hypno_path) for i in files])
     for i, (data_files, hypno_files) in enumerate(zip(files_list, hypno_list)):
@@ -742,13 +763,15 @@ def Data_SW(path, hypno_path):
             # Data.sw_summary.ngo = SW_summary(Data, subj_cond=data_files.split('/')[-1].split('.')[0],
             #                                  sw_detection_method='ngo', sp_coupling=False, save=True)
             #print(f'The slow wave detection method calculated {Data.sw_summary}')
-            
-            #return Data
+            # if save:
+            #     pickle.dump(Data, open(f''/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded/' + subj_cond + '.p',"wb"))
+            # else:
+            #     return Data
         else:
             continue
 
 #%% 
-path = '/media/administrator/data/Study_1_data/Statistics/SW_summary/'
+#path = '/media/administrator/data/Study_1_data/Statistics/SW_summary/'
 def SW_spindle_PAC(path):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     Up, Down, Sham = [], [], []
@@ -796,7 +819,7 @@ def SW_ERPs(path, filter_data=False, downsample=False, inspection=False):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     for i, data_files in enumerate(files_list):
         # load pre-processed data
-        Data = pickle.load(open(data_files,"rb")) 
+        Data = load_preprocessed_data(file = data_files) 
 
         # filter data
         if filter_data:
@@ -816,9 +839,15 @@ def SW_ERPs(path, filter_data=False, downsample=False, inspection=False):
             start, end = 'start', 'end'
         else:
             start, end = 'Start', 'End'
+            
+        # load sw summaries 
+        sw_summary_path = '/media/administrator/data/Study_1_data/Statistics/SW_summary/' + data_files.split('/')[-1].split('.')[0] + '_sw_summary_abs.p'
+        Data.sw_summary = load_preprocessed_data(file=sw_summary_path)
+        
+        # update time series index to include SW occurences
         idx_ev = yasa.others._index_to_events(Data.sw_summary[[start, end]].to_numpy() * Data.sfreq)
         mask[:, idx_ev] = 1
-        sw_highlight = np.squeeze(Data.data[:,Data.chans.index('C3')] * mask)
+        sw_highlight = Data.data[:,eeg_index].T * mask
         sw_highlight[sw_highlight == 0] = np.nan  
                     
         # time point synchronization
@@ -827,9 +856,9 @@ def SW_ERPs(path, filter_data=False, downsample=False, inspection=False):
         first_bursts = Data.pinknoise_timestamps_sync_adj[::2]
         
         # sw times in bool, index, and raw times
-        sw_times_bool = ~np.isnan(sw_highlight[Data.chans.index('C3'),:])
-        sw_times_idx = np.where(~np.isnan(sw_highlight[Data.chans.index('C3'),:]))[0]
-        sw_times_times = Data.times[np.argwhere(~np.isnan(sw_highlight[Data.chans.index('C3'),:])).ravel()]
+        sw_times_bool = ~np.isnan(sw_highlight[eeg_index,:])
+        sw_times_idx = np.where(~np.isnan(sw_highlight[eeg_index,:]))[0]
+        sw_times_times = Data.times[np.argwhere(~np.isnan(sw_highlight[eeg_index,:])).ravel()]
         
         # find pinknoise burst times imposed onto signal 
         insp_ix = [np.where(Data.times*Data.sfreq == first_bursts[i])[0][0] for i in range(len(first_bursts))]
@@ -844,7 +873,7 @@ def SW_ERPs(path, filter_data=False, downsample=False, inspection=False):
                                                   np.asarray(insp_ix), npts_before = Data.sfreq*1, npts_after = Data.sfreq*1)
             
             # check if slow wave is contained in pinknoise ERP epoch
-            sync_sw_noise_idx = [np.where(sw_times_bool[center[idx,:]])[0] for idx, times in enumerate(center)]  
+            sync_sw_noise_idx = [np.where(sw_times_bool[Data.chans.index('C3'),:][center[idx,:]])[0] for idx, times in enumerate(center)]  
             
             # update center events where it is 
             center = center[[i for i in range(len(sync_sw_noise_idx)) if len(sync_sw_noise_idx[i])>1],:]
@@ -859,7 +888,7 @@ def SW_ERPs(path, filter_data=False, downsample=False, inspection=False):
             # center2, _ = yasa.get_centered_indices(data[:,Data.chans.index('C3')], np.where(np.asarray(pn_highlight_bool[center])), 
             #                                       npts_before = Data.sfreq*2, npts_after = Data.sfreq*4)
             
-            # neg peaks of detected slow waves 
+            # neg peaks of detected slow waves - only for C3!
             mask = np.zeros(Data.data[:,[Data.chans.index('C3')]].T.shape, dtype=int)
             idx_ev = yasa.others._index_to_events(Data.sw_summary[['NegPeak', 'NegPeak']][Data.sw_summary['Channel']=='C3'].to_numpy() * Data.sfreq)
             mask[:, idx_ev] = 1
@@ -892,13 +921,13 @@ def SW_ERPs(path, filter_data=False, downsample=False, inspection=False):
             new_center, _ = yasa.get_centered_indices(Data.data[:,Data.chans.index('C3')], np.asarray(c), 
                                                       npts_before = Data.sfreq*2, npts_after = Data.sfreq*4)
             
+            # create mne epochs object for all eeg channels
+            eeg_chans = [Data.chans[i] for i in [j for j, x in enumerate(Data.chtypes) if x == "eeg"]]
+            eeg_chtypes = [Data.chtypes[i] for i in [j for j, x in enumerate(Data.chtypes) if x == "eeg"]]
+            info = mne.create_info(ch_names=eeg_chans, sfreq=512, ch_types=eeg_chtypes)
+            epochs = mne.EpochsArray(Data.data[:, eeg_index][new_center].swapaxes(1,2)/1e6, info, tmin = -2, 
+                                     baseline=(-2.0, 4.0), proj=False)
             
-                
-            info = mne.create_info(ch_names=['C3'], sfreq=512, ch_types=['eeg'])
-            epochs = mne.EpochsArray(np.expand_dims(Data.data[:, Data.chans.index('C3')][new_center]/1e6, 1), info, tmin = -2, baseline=None)
-            
-            # info = mne.create_info(ch_names=Data.chans[0:len(eeg_index)], sfreq=512, ch_types=Data.chtypes[0:len(eeg_index)])
-            # epochs = mne.EpochsArray(Data.data[:, eeg_index][new_center].swapaxes(1,2)/1e6, 1, info, tmin = -2, baseline=None)
             
             if inspection: 
                 sns.set(style='darkgrid', font_scale=1.2)
@@ -950,24 +979,25 @@ def group_SW_ERPs(path, output='df'):
     for i, data_files in enumerate(files_list):
         if data_files.endswith('up_epochs.p'):
             epochs = pickle.load(open(data_files,"rb"))
-            Up.append(epochs.get_data()*1e6)
+            Up.append(np.expand_dims(epochs.get_data()[:,epochs.ch_names.index('C3'),:],1)*1e6)
             Up_sub.append(Up[-1].shape[0]*[data_files.split('/')[-1].split('_')[0]]*epochs.get_data().shape[-1])
         elif data_files.endswith('down_epochs.p'):
             epochs = pickle.load(open(data_files,"rb"))
-            Down.append(epochs.get_data()*1e6)
+            Down.append(np.expand_dims(epochs.get_data()[:,epochs.ch_names.index('C3'),:],1)*1e6)
             Down_sub.append(Down[-1].shape[0]*[data_files.split('/')[-1].split('_')[0]]*epochs.get_data().shape[-1])
         elif data_files.endswith('sham_epochs.p'):
             epochs = pickle.load(open(data_files,"rb"))
-            Sham.append(epochs.get_data()*1e6)
+            Sham.append(np.expand_dims(epochs.get_data()[:,epochs.ch_names.index('C3'),:],1)*1e6)
             Sham_sub.append(Sham[-1].shape[0]*[data_files.split('/')[-1].split('_')[0]]*epochs.get_data().shape[-1])
             
+    #info = mne.create_info(ch_names=epochs.ch_names, sfreq=512, ch_types=np.asarray(len(chans)*('eeg',)))
     info = mne.create_info(ch_names=['C3'], sfreq=512, ch_types=['eeg'])
     epochs_up = mne.EpochsArray(np.concatenate(Up)/1e6, info, tmin = -2, baseline=None)
     epochs_down = mne.EpochsArray(np.concatenate(Down)/1e6, info, tmin = -2, baseline=None)
     epochs_sham = mne.EpochsArray(np.concatenate(Sham)/1e6, info, tmin = -2, baseline=None)
       
-    df = pd.concat([epochs_down.to_data_frame(), epochs_up.to_data_frame(),
-                    epochs_sham.to_data_frame()], keys=['Down', 'Up', 'Sham'],
+    df = pd.concat([epochs_down.to_data_frame(picks='C3'), epochs_up.to_data_frame(picks='C3'),
+                    epochs_sham.to_data_frame(picks='C3')], keys=['Down', 'Up', 'Sham'],
                     names=['Condition'], axis=0)
     
     df['time'] = df['time']/1000
@@ -1078,96 +1108,6 @@ def permutation_cluster_test_plot(epochs : list, times, T_obs, clusters, cluster
 # max_peak_time = np.where(mean_epochs == np.max(mean_epochs))[0][0]
 
 #%%
-## plot spectrogram - Daniela method 
-
-def mne_wavelet_tutorial():
-    freqs = np.arange(0, 256.5,.5)
-    n_cycles = freqs / 2.
-    vmin, vmax = -3., 3.  # Define our color limits.
-    power = mne.time_frequency.tfr_array_morlet(epochs_up.get_data(), sfreq=epochs.info['sfreq'],
-                             freqs=freqs, n_cycles=n_cycles,
-                             output='avg_power')
-    mne.baseline.rescale(power, epochs.times, (0., 0.1), mode='mean', copy=False)
-    fig, ax = plt.subplots()
-    x, y = mne.viz.centers_to_edges(epochs.times * 1000, freqs)
-    mesh = ax.pcolormesh(x, y, power[0], cmap='RdBu_r', vmin=vmin, vmax=vmax)
-    ax.set_title('TFR calculated on a numpy array')
-    ax.set(ylim=freqs[[0, -1]], xlabel='Time (ms)')
-    fig.colorbar(mesh)
-    plt.tight_layout()
-    plt.show()
-
-def get_band_power_wavelet(win_sig, win_size_s, low, high, fs, scale = ''):
-      
-    win_sig = np.array(win_sig)
-    f = np.logspace(-1, 3, 150)
-    f = f[f>low]
-    f = f[f<high]
-    n_cyc = np.linspace(.5,17, num = len(f))
-    # n_cyc = n_cyc[np.mod(n_cyc,2)!=0]
-    # n_cyc = n_cyc[range(len(f))]
-    Sxx = cwt_morlet(win_sig, fs, f, use_fft=False, n_cycles=n_cyc)
-    t=np.arange(0,win_size_s,1/fs)
-    Sxx = np.abs(Sxx)
-    Sxx = np.median(Sxx, axis=0)
-    
-    if scale == 'dB':
-        Sxx = 10 * np.log10(Sxx)
-    # # plt.plot(freqs,psd)astype
-    # Sxx_mean = Sxx_sum/c
-    # Sxx_std = np.sqrt(Sxx_sum2/c)
-    
-    return f, t, Sxx
-
-def plot_spectrogram(ax, f, t, Sxx, win_size_s, low, high, title, clim):
-    from matplotlib import cm
-    cmap = cm.Spectral_r
-    Sxx = np.asarray(Sxx)
-    if len(Sxx.shape) > 1:
-        i = np.logical_and(f >= low, f <= high)
-        try:
-            fig, ax = plt.subplots()
-            CM = ax.pcolormesh(t-win_size_s/2, f[i], Sxx[i], shading='gouraud', cmap=cmap, rasterized = True, vmin=clim[0], vmax=clim[1])
-        except AttributeError:
-            print('creating new figure ...')
-            fig, ax = plt.subplots()
-            CM = ax.pcolormesh(t-win_size_s/2, f[i], Sxx[i], shading='gouraud', cmap=cmap, rasterized = True, vmin=clim[0], vmax=clim[1])
-       
-        ax.set_ylabel('Frequency [Hz]')
-        ax.set_xlabel('Time [sec]')
-        cbar = plt.colorbar(CM, ax=ax)
-    else:
-        i = np.logical_and(f >= low, f <= high)
-        ax.plot(f[i],Sxx[i])
-        ax.set_ylabel('signal power')
-        ax.set_ylabel('Frequency [Hz]')
-   
-    ax.set_yscale('log')
-    ax.set_title(str(title))
- 
-# f, t, Sxx3 = scipy.signal.spectrogram(np.squeeze(epochs_up.get_data())[0,:]*1e6, fs=512, nperseg=1024)
-
-# Sxx = np.squeeze(Sxx)
-
-# plot_spectrogram(ax=[], f=f, t=t, Sxx=Sxx, win_size_s=0, low=0.5, high=30, title='nothing', clim=[np.min(Sxx), np.max(Sxx)])
- 
-
-#%%        
-# # plot artifacts
-# avg_data = data[..., eeg_index].mean(-1, keepdims=True)
-# times = np.arange(0, len(data))/sf
-# plt.plot(times, data[:,0:7])
-# plt.vlines(np.where(hypno_with_art==-1)[0]/128, ymin=-1000, ymax=1000, colors='k', linestyles='dotted')
-# plt.vlines(np.where(hypno_with_art_std==-1)[0]/128, ymin=-750, ymax=750, colors='r',linestyles='dotted')
-
-# # Plot multitaper spectrogram with hypno (no artifact)
-# yasa.plot_spectrogram(data[:,1], sf, hypno = hypno_unsampled, fmax=30, cmap='Spectral_r');
-
-# # Plot new hypnogram and spectrogram on Fz (with artifact)
-# yasa.plot_spectrogram(data[:,0], sf=128, hypno = hypno_with_art, fmax=30, cmap='Spectral_r');
-
-
-#%%
 
 def load_mult_xdf(path: str):
     data=[]
@@ -1178,19 +1118,8 @@ def load_mult_xdf(path: str):
             data.append(streams[0]['time_series'])
             marker.append(streams[0]['time_stamps'])
 
- 
-# data = np.concatenate(data)
-# times = np.concatenate(marker)
-# C3 = mne.filter.filter_data(data[:,4].astype('float64'), sfreq=500, l_freq=0.5, h_freq=35)*1e6
-# C3_notched = mne.filter.notch_filter(C3, Fs=500, freqs=(50,100,150))
-
 #%%
-# path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/6QJ3ITMT_adaption_preproc_data.p'
-# hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Adaption/6QJ3ITMT_adaption_hypno.txt'
-
-# # load pre-processed data
-# Data = pickle.load(open(path,"rb"))
-        
+       
 def peak2peak_SW_duration(data, hypno_path, ch_names, chan='C3', sf=512, data_len=210):
     # epoch data
     _, epochs = yasa.sliding_window(data[:,ch_names.index(chan)].T, sf, window=30)
@@ -1204,6 +1133,7 @@ def peak2peak_SW_duration(data, hypno_path, ch_names, chan='C3', sf=512, data_le
                    amp_ptp=(75, 400), remove_outliers=True)
     # print summary
     sw2 = sw.summary()
+    print(f'Channel {chan} contains {len(sw2)} detected slow waves in the first {data_len} minutes of data.')
     
     # return mean peak to peak time duration
     return sw2['PosPeak'].mean() - sw2['NegPeak'].mean()
@@ -1430,9 +1360,3 @@ def peak2peak_SW_duration(data, hypno_path, ch_names, chan='C3', sf=512, data_le
 # plt.plot(time, data_narrow[3,:])
 # plt.vlines(time[crossings], ymin=-1000, ymax=1000)
 # plt.vlines(pinknoise_timestamps - time_stamps[0], ymin=-750, ymax=750, colors='r')
-
-
-
-
-
-

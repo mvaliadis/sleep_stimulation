@@ -21,7 +21,7 @@ from scipy.linalg import eigh
 from scipy.interpolate import RectBivariateSpline
 from scipy.signal import find_peaks, welch, detrend
 from inerlinc.plugins.eeg.source import surface_laplacian
-from sleep_funs import load_preprocessed_data, Data_Struct
+from sleepstim.Analysis.analysis_pre_process import load_preprocessed_data, Data_Struct
 sns.set(context='notebook', font_scale=1.3)
 
 #%% Spindle detection
@@ -58,186 +58,238 @@ sns.set(context='notebook', font_scale=1.3)
 # 
 # =============================================================================
 
-path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded_cleaned/'    
-hypno_path= '/media/administrator/data/Study_1_data/Hypnograms/Unblinded_clean/'
+path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded/'    
+hypno_path= '/media/administrator/data/Study_1_data/Hypnograms/Experimental_unblinded/'
 
-def Data_spindle(path, hypno_path):
+def Data_spindle(path, hypno_path, pre_method='Cox', surface_laplacian = True):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     hypno_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(hypno_path) for i in files])
     for i, (data_files, hypno_files) in enumerate(zip(files_list, hypno_list)):
+        print(i, data_files.split('/')[-1], hypno_files.split('/')[-1])
         Data = load_preprocessed_data(data_files)
-        eeg_index = [i for i, x in enumerate(Data.chtypes) if x == "eeg"]
+        # eeg_index = [i for i, x in enumerate(Data.chtypes) if x == "eeg"]
+        eeg_index = np.r_[Data.chans.index('F3'), Data.chans.index('Fz'), Data.chans.index('F4'),
+                          Data.chans.index('C3'), Data.chans.index('Cz'), Data.chans.index('C4'),
+                          Data.chans.index('P3'), Data.chans.index('Pz'), Data.chans.index('P4')]
+        nrem = np.logical_or(Data.hypno_with_art == 2, Data.hypno_with_art == 3) 
         
-        ## Method 1 - Spindles-based slow/fast peak detection
-        # =============================================================================
-        #       1. Run the multi-channel detection with the default parameters
-        #       2. Plot the distribution of spindles frequency for the frontal and parietal channels separately
-        #       3. Fit a Gaussian curve to the distributions
-        #       4. Identifity the peaks of the Gaussian distributions
-        # =============================================================================
+        if pre_method == 'topo_apriori':
+            
+            ## Method 1 - Spindles-based slow/fast peak detection
+            # =============================================================================
+            #       1. Run the multi-channel detection with the default parameters
+            #       2. Plot the distribution of spindles frequency for the frontal and parietal channels separately
+            #       3. Fit a Gaussian curve to the distributions
+            #       4. Identifity the peaks of the Gaussian distributions
+            # =============================================================================
+            
+            # Run the detection on all 9 channels (should take 20 to 60 seconds)
+            # Notice how we use .summary() at the end to directly get the full detection dataframe
+            sp = yasa.spindles_detect(data = Data.data[:,eeg_index].T, sf = Data.sfreq, ch_names = np.asarray(Data.chans[0:len(eeg_index)]), 
+                                      hypno= Data.hypno_with_art, include=(2,3), freq_sp=(10, 16), freq_broad=(1, 30), duration=(0.5, 2), 
+                                      min_distance=500, thresh={'rel_pow': 0.2, 'corr': 0.65, 'rms': 1.5}, multi_only=False, remove_outliers=True, verbose=True)
+            summary = sp.summary()
+            print('%i spindles detected on %i channels.' % (summary.shape[0], len(eeg_index)))
+            # summary.head().round(3)
+            
+            # Plot the spindles frequency distribution
+            plt.figure(figsize=(10, 6))
+            sns.distplot(summary.loc[summary['Channel'].isin(['Fz', 'F3', 'F4']), 'Frequency'], kde=False, fit=skewnorm, label='Frontal - Slow')
+            sns.distplot(summary.loc[summary['Channel'].isin(['Cz', 'C3', 'C4']), 'Frequency'], kde=False, fit=skewnorm, label='Central - Fast')
+            # sns.distplot(summary.loc[summary['Channel'].isin(['P3', 'P4']), 'Frequency'], kde=False, fit=skewnorm, label='Parietal - Fast')
+            plt.legend()
+            plt.title('Method 1: slow and fast spindles peak frequencies')
+            plt.xlabel('Frequency (Hz)')
+            _ = plt.ylabel('Density')
+            
+            # Extract the fit parameters
+            _, slow_mu, slow_std = skewnorm.fit(summary.loc[summary['Channel'].isin(['Fz', 'F3', 'F4']), 'Frequency'])
+            # _, fast_mu, fast_std = skewnorm.fit(summary.loc[summary['Channel'].isin(['P3', 'P4']), 'Frequency'])
+            _, fast_mu, fast_std = skewnorm.fit(summary.loc[summary['Channel'].isin(['Cz', 'C3', 'C4']), 'Frequency'])
+    
+            print("Slow spindles (frontal) have a mean frequency of %.2f Hz and a standard deviation of %.2f Hz" % (slow_mu, slow_std))
+            # print("Fast spindles (parietal) have a mean frequency of %.2f Hz and a standard deviation of %.2f Hz" % (fast_mu, fast_std))
+            print("Fast spindles (central) have a mean frequency of %.2f Hz and a standard deviation of %.2f Hz" % (fast_mu, fast_std))
+            
+       
+        if pre_method != 'topo_apriori':
+            
+            ## Flip data for next 2 methods:
+            Data.data = Data.data.T  
+            
+            if pre_method == 'power':
+                
+                ## Method 2 - N2 sleep power spectrum peak detection  
+                # =============================================================================
+                #        1. Compute the power spectrum of N2 sleep for each channel
+                #        2. Identify the slow and fast peaks in the power spectrum
+                #        3. Run the spindles detection with the appropriate parameters
+                # =============================================================================
         
-        # Run the detection on all 9 channels (should take 20 to 60 seconds)
-        # Notice how we use .summary() at the end to directly get the full detection dataframe
-        sp = yasa.spindles_detect(data = Data.data[:,eeg_index].T, sf = Data.sfreq, ch_names = np.asarray(Data.chans[0:len(eeg_index)]), 
-                                  hypno= Data.hypno_with_art, include=(2,3), freq_sp=(10, 16), freq_broad=(1, 30), duration=(0.5, 2), 
-                                  min_distance=500, thresh={'rel_pow': 0.2, 'corr': 0.65, 'rms': 1.5}, multi_only=False, remove_outliers=True, verbose=True)
-        summary = sp.summary()
-        print('%i spindles detected on %i channels.' % (summary.shape[0], len(eeg_index)))
-        # summary.head().round(3)
+                # Compute Welch spectrum of N2 sleep for each channel
+                f, pxx = welch(Data.data[np.expand_dims(np.asarray(eeg_index),1), nrem], fs=Data.sfreq, nperseg=(4 * Data.sfreq))
+                
+                if deb:  
+                    # Convert to dB to reduce 1/f (optional)
+                    pxx = 10 * np.log10(pxx)
+                
+                # Keep only frequencies of interest
+                pxx = pxx[:, np.logical_and(f >= 10, f <= 16)]
+                f = f[np.logical_and(f >= 10, f <= 16)]
+                
+                if IRASA:
+                    # IRASA
+                    freqs, psd_aperiodic, psd_osc = yasa.irasa(Data.data[np.expand_dims(np.asarray(eeg_index),1), nrem], sf = Data.sfreq, 
+                                                               band=(1, 30), win_sec=4, return_fit=False)
+                    pxx = psd_osc[:, np.logical_and(freqs >= 9, freqs <= 16)]
+                    f = freqs[np.logical_and(freqs >= 9, freqs <= 16)]
+                    
+                    # Plot average spectrum
+                    plt.figure(figsize=(10, 6))
+                    plt.plot(f, pxx.mean(0), 'ko-', lw=3)
+                    plt.plot(f, np.rollaxis(pxx, axis=1), lw=1.5, ls=':', color='grey')
+                    plt.xlim(9, 16)
+                    plt.title('Method 2: channel-based power spectrum')
+                    plt.xlabel('Frequency (Hz)')
+                    _ = plt.ylabel('Power (dB)')
+                    
+                    # Identify the two peaks in the power spectrum
+                    idx_peaks, _ = find_peaks(pxx.mean(0))
+                    print('Slow spindles peak frequency = %.2f Hz' % f[idx_peaks[0]])
+                    print('Fast spindles peak frequency = %.2f Hz' % f[idx_peaks[1]])
+            
+            
+            if pre_method == 'Cox':
+                
+                ## Method 3 - Topographhy based slow/fast spindle detection 
+                # =============================================================================
+                #    a1. Bandpass filter data
+                #    a2. Apply surface Laplcian filter to raw data
+                #    1. Get the slow sigma-filtered data and fast sigma-filtered data
+                #    2. Detrend and compute the covariance matrices
+                #    3. Apply the generalized eigendecomposition to find eigenvectors that maximally differentiate 
+                #       between slow and fast spindles
+                #    4. Use the eigenvectors as spatial filters
+                #    5. Compute the Welch spectrum of N2 sleep on all the spatially filtered data (= components)
+                #    6. Find slow and fast peak frequencies by averaging the power spectrum of n components that 
+                #       are the most associated with slow and fast spindles, respectively.
+                # =============================================================================
+                
+                # ------------ APPLY SURFACE LAPLACIAN HERE ------------------ # 
+                
+                if surface_laplacian:
+                    mne_info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)
+                    raw = mne.io.RawArray(Data.data, mne_info)
+                    raw.set_montage(mne.channels.make_standard_montage('standard_1005'))
+                    # ignore non-EEG channels! 
+                    raw.pick_types(eeg=True)
+            
+                    Data.data = mne.preprocessing.compute_current_source_density(raw).get_data()
+                            
+                # Get filtered slow (9 - 12 Hz) and fast (12 - 16 Hz) data
+                slow_nrem_filt = mne.filter.filter_data(Data.data[np.expand_dims(np.asarray(eeg_index),1), nrem].astype(np.float64), Data.sfreq, 9, 12, 
+                                                      h_trans_bandwidth=1, l_trans_bandwidth=1, verbose=0)
+                fast_nrem_filt = mne.filter.filter_data(Data.data[np.expand_dims(np.asarray(eeg_index),1), nrem].astype(np.float64), Data.sfreq, 12, 16, 
+                                                      h_trans_bandwidth=1, l_trans_bandwidth=1, verbose=0)
+                
+                # Remove the mean (= detrend)
+                slow_nrem_filt = detrend(slow_nrem_filt, type='constant')
+                fast_nrem_filt = detrend(fast_nrem_filt, type='constant')
+                
+                # Compute the covariance matrices between channels
+                slow_nrem_cov = np.cov(slow_nrem_filt)
+                fast_nrem_cov = np.cov(fast_nrem_filt)
+                
+                # Plot the slow covariance matrix
+                #eeg_chans = [Data.chans[i] for i in [j for j, x in enumerate(Data.chtypes) if x == "eeg"]]
+                eeg_chans = [Data.chans[i] for i in eeg_index]
+               
+                plt.figure(figsize=(10, 6))
+                sns.heatmap(fast_nrem_cov, cmap='Blues', square=True, 
+                            xticklabels=eeg_chans, yticklabels=eeg_chans)
+                plt.title('Fast sigma variance-covariance matrix')
+                plt.xlabel('Channels')
+                _ = plt.ylabel('Channels')
+                
+                # Get the eigenvalues / eigenvectors
+                eigval, eigvec = eigh(slow_nrem_cov, fast_nrem_cov)
+                
+                # Flip to descending order
+                eigval = np.flip(eigval)
+                eigvec = np.fliplr(eigvec)
+                
+                print('Eigenvalues =', list(np.round(eigval, 2)))
+                
+                # Apply spatial filters by multiplying data with eigenvectors
+                # sf_comp_n2 = np.dot(data[:, hypno == 2].T, eigvec).T
+                sf_comp_nrem = np.dot(Data.data[np.expand_dims(np.asarray(eeg_index),1),nrem].T, eigvec).T
+                print(sf_comp_nrem.shape)
+                
+                # Compute Welch spectrum of N2/N3 sleep
+                f, pxx = welch(sf_comp_nrem, Data.sfreq, nperseg=(4 * Data.sfreq))
+                
+                pxx = pxx[:, np.logical_and(f >= 10, f <= 16)]
+                f = f[np.logical_and(f >= 10, f <= 16)]
+                
+                if deb:
+                    # Convert to dB to reduce 1/f (optional)
+                    pxx = 10 * np.log10(pxx)
+                
+                #%% IRASA fun
+                freqs, psd_aperiodic, psd_osc = yasa.irasa(data = sf_comp_nrem, sf = Data.sfreq, 
+                                                           band=(1, 30), win_sec=4, return_fit=False)
+                
+                psd_osc_sp = psd_osc[:, np.logical_and(freqs >= 10, freqs <= 16)]
+                freqs_sp = freqs[np.logical_and(freqs >= 10, freqs <= 16)]
+                
+                # Plot the oscillatory component on a linear-linear scale
+                plt.plot(freqs_sp, psd_osc_sp[5,:], 'k', lw=2)
+                plt.xlim(10, 16)
+                sns.despine()
+                plt.title('Oscillatory component, chan = ' + eeg_chans[5])
+                plt.xlabel('Frequency [Hz]')
+                plt.ylabel('PSD log($uV^2$/Hz)');
+                
+                #%%
+                               
+                # Select the number of components to keep
+                n_comp = 2
+                
+                # Plot first slow component
+                plt.figure(figsize=(10, 6))
+                plt.plot(f, np.rollaxis(pxx[:n_comp], axis=1), lw=1, ls=':', color='blue')
+                plt.plot(f, np.rollaxis(pxx[-n_comp:], axis=1), lw=1, ls=':', color='red')
+                
+                # Plot average spectrum of four first / last components
+                plt.plot(f, pxx[:n_comp].mean(0), 'bo-', lw=3)
+                plt.plot(f, pxx[-n_comp:].mean(0), 'ro-', lw=3)
+                _ = plt.xlim(10, 15)
         
-        # Plot the spindles frequency distribution
-        plt.figure(figsize=(10, 6))
-        sns.distplot(summary.loc[summary['Channel'].isin(['Fz', 'F3', 'F4']), 'Frequency'], kde=False, fit=skewnorm, label='Frontal - Slow')
-        sns.distplot(summary.loc[summary['Channel'].isin(['Cz', 'C3', 'C4']), 'Frequency'], kde=False, fit=skewnorm, label='Central - Fast')
-        # sns.distplot(summary.loc[summary['Channel'].isin(['P3', 'P4']), 'Frequency'], kde=False, fit=skewnorm, label='Parietal - Fast')
-        plt.legend()
-        plt.title('Method 1: slow and fast spindles peak frequencies')
-        plt.xlabel('Frequency (Hz)')
-        _ = plt.ylabel('Density')
+                # Identify the peaks
+                print('Slow spindles peak frequency: %.2f Hz' % f[pxx[:n_comp].mean(0).argmax()])
+                print('Fast spindles peak frequency: %.2f Hz' % f[pxx[-n_comp:].mean(0).argmax()])
         
-        # Extract the fit parameters
-        _, slow_mu, slow_std = skewnorm.fit(summary.loc[summary['Channel'].isin(['Fz', 'F3', 'F4']), 'Frequency'])
-        # _, fast_mu, fast_std = skewnorm.fit(summary.loc[summary['Channel'].isin(['P3', 'P4']), 'Frequency'])
-        _, fast_mu, fast_std = skewnorm.fit(summary.loc[summary['Channel'].isin(['Cz', 'C3', 'C4']), 'Frequency'])
+                # Running the tuned spindles detection
+                sp_slow = yasa.spindles_detect(data = Data.data, sf=Data.sfreq, ch_names, freq_sp=(10.20, 12.20)).summary()
+                sp_fast = yasa.spindles_detect(data, sf, ch_names, freq_sp=(11.60, 13.60)).summary()
+                print('%i spindles detected on %i channels.' % (sp_slow.shape[0], len(ch_names)))
+                print('%i spindles detected on %i channels.' % (sp_fast.shape[0], len(ch_names)))
+                sp_slow.head().round(3)
+            
+# =============================================================================
+# Summary
+# - Method 2 and method 3 yielded exactly the same results in this case (i.e. 11.20 Hz for slow spindles and 12.60 Hz for fast spindles).
+# - Method 1 returned slightly different results. This is probably caused by the fact that the frontal channels do not have exclusively 
+#   slow spindles and the parietal channels exclusively fast spindles. Rather, there must be some level of contamination, which explains 
+#   this "regression to the mean" effect that we observe in the two peaks detected with method 1.
+# - Method 3 is probably the most accurate, granted that you have enough clean and artefact-free channels.
+#   Note that in the original paper by Cox and colleagues, a surface Laplacian filter is also applied on the raw data to enhance spatial precision for topographical analyses.
+# =============================================================================
 
-        print("Slow spindles (frontal) have a mean frequency of %.2f Hz and a standard deviation of %.2f Hz" % (slow_mu, slow_std))
-        # print("Fast spindles (parietal) have a mean frequency of %.2f Hz and a standard deviation of %.2f Hz" % (fast_mu, fast_std))
-        print("Fast spindles (central) have a mean frequency of %.2f Hz and a standard deviation of %.2f Hz" % (fast_mu, fast_std))
-        
-        
-        ## Flip data for next 2 methods:
-        data = Data.data.T    
-        ## Method 2 - N2 sleep power spectrum peak detection  
-        # =============================================================================
-        #        1. Compute the power spectrum of N2 sleep for each channel
-        #        2. Identify the slow and fast peaks in the power spectrum
-        #        3. Run the spindles detection with the appropriate parameters
-        # =============================================================================
 
-        # Compute Welch spectrum of N2 sleep for each channel
-        f, pxx = welch(data[np.expand_dims(np.asarray(eeg_index),1), Data.hypno_with_art == 2], fs=Data.sfreq, nperseg=(5 * Data.sfreq))
-        
-        # Convert to dB to reduce 1/f (optional)
-        pxx = 10 * np.log10(pxx)
-        
-        # Keep only frequencies of interest
-        pxx = pxx[:, np.logical_and(f >= 10, f <= 16)]
-        f = f[np.logical_and(f >= 10, f <= 16)]
-        
-        # Plot average spectrum
-        plt.figure(figsize=(10, 6))
-        plt.plot(f, pxx.mean(0), 'ko-', lw=3)
-        plt.plot(f, np.rollaxis(pxx, axis=1), lw=1.5, ls=':', color='grey')
-        plt.xlim(10, 16)
-        plt.title('Method 2: channel-based power spectrum')
-        plt.xlabel('Frequency (Hz)')
-        _ = plt.ylabel('Power (dB)')
-        
-        # Identify the two peaks in the power spectrum
-        idx_peaks, _ = find_peaks(pxx.mean(0))
-        print('Slow spindles peak frequency = %.2f Hz' % f[idx_peaks[0]])
-        print('Fast spindles peak frequency = %.2f Hz' % f[idx_peaks[1]])
-        
-        
-        ## Method 3 - Topographhy based slow/fast spindle detection 
-        # =============================================================================
-        #    a1. Bandpass filter data
-        #    a2. Apply surface Laplcian filter to raw data
-        #    1. Get the slow sigma-filtered data and fast sigma-filtered data
-        #    2. Detrend and compute the covariance matrices
-        #    3. Apply the generalized eigendecomposition to find eigenvectors that maximally differentiate 
-        #       between slow and fast spindles
-        #    4. Use the eigenvectors as spatial filters
-        #    5. Compute the Welch spectrum of N2 sleep on all the spatially filtered data (= components)
-        #    6. Find slow and fast peak frequencies by averaging the power spectrum of n components that 
-        #       are the most associated with slow and fast spindles, respectively.
-        # =============================================================================
-        
-        # ------------ APPLY SURFACE LAPLACIAN HERE ------------------ # 
-        
-        # Get filtered slow (9 - 12 Hz) and fast (12 - 16 Hz) data
-        slow_n2_filt = mne.filter.filter_data(data[Data.hypno_with_art == 2, np.expand_dims(np.asarray(eeg_index),1)].astype(np.float64), Data.sfreq, 9, 12, 
-                                              h_trans_bandwidth=1, l_trans_bandwidth=1, verbose=0)
-        fast_n2_filt = mne.filter.filter_data(data[Data.hypno_with_art == 2, np.expand_dims(np.asarray(eeg_index),1)].astype(np.float64), Data.sfreq, 12, 16, 
-                                              h_trans_bandwidth=1, l_trans_bandwidth=1, verbose=0)
-        
-        # Remove the mean (= detrend)
-        slow_n2_filt = detrend(slow_n2_filt, type='constant')
-        fast_n2_filt = detrend(fast_n2_filt, type='constant')
-        
-        # Compute the covariance matrices between channels
-        slow_n2_cov = np.cov(slow_n2_filt)
-        fast_n2_cov = np.cov(fast_n2_filt)
-        
-        # Plot the slow covariance matrix
-        plt.figure(figsize=(10, 6))
-        sns.heatmap(fast_n2_cov, cmap='Blues', square=True, 
-                    xticklabels=ch_names[0:len(eeg_index)], yticklabels=ch_names[0:len(eeg_index)])
-        plt.title('Fast sigma variance-covariance matrix')
-        plt.xlabel('Channels')
-        _ = plt.ylabel('Channels')
-        
-        # Get the eigenvalues / eigenvectors
-        eigval, eigvec = eigh(slow_n2_cov, fast_n2_cov)
-        
-        # Flip to descending order
-        eigval = np.flip(eigval)
-        eigvec = np.fliplr(eigvec)
-        
-        print('Eigenvalues =', list(np.round(eigval, 2)))
-        
-        # Apply spatial filters by multiplying data with eigenvectors
-        # sf_comp_n2 = np.dot(data[:, hypno == 2].T, eigvec).T
-        sf_comp_n2 = np.dot(Data.data[Data.hypno_with_art == 2, np.expand_dims(np.asarray(eeg_index),1)].T, eigvec)
-        print(sf_comp_n2.shape)
-        
-        # Compute Welch spectrum of N2 sleep
-        f, pxx = welch(sf_comp_n2, Data.sfreq, nperseg=(5 * Data.sfreq))
-        
-        pxx = pxx[:, np.logical_and(f >= 10, f <= 16)]
-        f = f[np.logical_and(f >= 10, f <= 16)]
-        
-        # Convert to dB to reduce 1/f (optional)
-        pxx = 10 * np.log10(pxx)
-        
-        # Select the number of components to keep
-        n_comp = 2
-        
-        # Plot first slow component
-        plt.figure(figsize=(10, 6))
-        plt.plot(f, np.rollaxis(pxx[:n_comp], axis=1), lw=1, ls=':', color='blue')
-        plt.plot(f, np.rollaxis(pxx[-n_comp:], axis=1), lw=1, ls=':', color='red')
-        
-        # Plot average spectrum of four first / last components
-        plt.plot(f, pxx[:n_comp].mean(0), 'bo-', lw=3)
-        plt.plot(f, pxx[-n_comp:].mean(0), 'ro-', lw=3)
-        _ = plt.xlim(10, 16)
 
-        # Identify the peaks
-        print('Slow spindles peak frequency: %.2f Hz' % f[pxx[:n_comp].mean(0).argmax()])
-        print('Fast spindles peak frequency: %.2f Hz' % f[pxx[-n_comp:].mean(0).argmax()])
 
-        # Running the tuned spindles detection
-        sp_slow = yasa.spindles_detect(data, sf, ch_names, freq_sp=(10.20, 12.20)).summary()
-        sp_fast = yasa.spindles_detect(data, sf, ch_names, freq_sp=(11.60, 13.60)).summary()
-        print('%i spindles detected on %i channels.' % (sp_slow.shape[0], len(ch_names)))
-        print('%i spindles detected on %i channels.' % (sp_fast.shape[0], len(ch_names)))
-        sp_slow.head().round(3)
-        
-        # =============================================================================
-        # Summary
-        # - Method 2 and method 3 yielded exactly the same results in this case (i.e. 11.20 Hz for slow spindles and 12.60 Hz for fast spindles).
-        # - Method 1 returned slightly different results. This is probably caused by the fact that the frontal channels do not have exclusively 
-        #   slow spindles and the parietal channels exclusively fast spindles. Rather, there must be some level of contamination, which explains 
-        #   this "regression to the mean" effect that we observe in the two peaks detected with method 1.
-        # - Method 3 is probably the most accurate, granted that you have enough clean and artefact-free channels.
-        #   Note that in the original paper by Cox and colleagues, a surface Laplacian filter is also applied on the raw data to enhance spatial precision for topographical analyses.
-        # =============================================================================
-        
-        
-        
-        
-        
+
         
         
         

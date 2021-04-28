@@ -28,7 +28,7 @@ from os import chdir as cd
 from os import listdir
 import os, shutil
 from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
-                                                     label_artifacts, load_preprocessed_data, Data_SW, sleep_data_validation)
+                                                     label_artifacts, load_preprocessed_data, Data_SW, SW_ERPs)
 
 #%%
 ## Step 1a - Pre-process data ##
@@ -51,15 +51,15 @@ from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sle
 # also can choose to save file or not, use smaller subset of data with channels of stageing interest; 
 # also can select different rereferencing techniques 
 path = '/media/administrator/data/Study_1_data/Raw_data/'
-preprocess_sleep_data(path, save=True, reference='mastoids', stageing=False)
+preprocess_sleep_data(path, save=True, reference='mastoids', stageing=False, validation=None)
 
 ## Step 1b - Pre-process data (classifier valiadation)
 path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/'
-sleep_data_validation(path, save=True, validation='classsifier')
+#sleep_data_validation(path, save=True, validation='classifier')
 
 ## Step 1c - Pre-process data (auditory stimulation validation)
-path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/'
-sleep_data_validation(path, save=True, validation='auditory')
+path = '/media/administrator/data/Study_1_data/Raw_data/Adaption/'
+#sleep_data_validation(path, save=True, validation='auditory')
 
 #%%
 ## Step 2a - Sleep stageing ## 
