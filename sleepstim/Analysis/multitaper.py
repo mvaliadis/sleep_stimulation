@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-Data = load_preprocessed_data('/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/UDLD86TO_adaption_preproc_data.p')[0]
+Data = load_preprocessed_data('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/D1BOI2AY_3_preproc_data.p')[0]
 
 #%% multitaper toolbox
 spect, stimes, sfreqs = multitaper_spectrogram(data = Data.data[:,Data.chans.index('F3')], fs = Data.sfreq, 

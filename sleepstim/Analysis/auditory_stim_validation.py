@@ -68,7 +68,7 @@ for i, files in enumerate(files_list):
         # del decrypted
         
         # # create double occurence for shams (originally up sham but moved to be down sham)
-        # # TO:DO --> SUBTRACT INSP_IX BY RESPECTIVE P2P DURATIONS TO CREATE DOWN SHAM
+        # # TO:DO --> SUBTRACT first_bursts BY RESPECTIVE P2P DURATIONS TO CREATE DOWN SHAM
         # if cond_dict[cond] == 'sham':
         #     p2p_delay = np.loadtxt()
         #     Data.pinknoise_times2 = Data.pinknoise_times - p2p_delay
@@ -107,20 +107,16 @@ for i, files in enumerate(files_list):
         epochs_mastoids.set_montage(mne.channels.make_standard_montage('standard_1005'))
         
         # log pinknoise instances
-        out.write(f'The dataset: {files.split("/")[-2]} has {len(insp_ix)*2} pinknoise bursts! ' + '\n')
-        logging.warning(f'The dataset: {files.split("/")[-2]} has {len(insp_ix)*2} pinknoise bursts! ')
+        out.write(f'The dataset: {files.split("/")[-2]} has {len(first_bursts)*2} pinknoise bursts! ' + '\n')
+        logging.warning(f'The dataset: {files.split("/")[-2]} has {len(first_bursts)*2} pinknoise bursts! ')
   
         # RANSAC algorithms determines bad channels before CSD computation
-        picks = mne.pick_types(epochs.info, eeg=True, stim=False, eog=False,
-                               include=[], exclude=[])
-        ransac = Ransac(verbose='progressbar', picks=picks, n_jobs=-1)
-        epochs_clean = ransac.fit_transform(epochs)
+        Data.detect_bad_chans()
         
-        epochs.drop_channels(ransac.bad_chs_ + ['M1','M2','Oz'])
-        out.write(f'The dataset: {files.split("/")[-2]} has the following detected bad channels: {ransac.bad_chs_} ' + '\n')
-        epochs_mastoids.drop_channels(ransac.bad_chs_ + ['M1','M2','Oz'])
- 
-        del epochs_clean      
+        # epochs.drop_channels(ransac.bad_chs_ + ['M1','M2','Oz'])
+        # epochs_mastoids.drop_channels(ransac.bad_chs_ + ['M1','M2','Oz'])
+                
+        out.write(f'The dataset: {files.split("/")[-2]} has the following detected bad channels: {Data.bad_chans} ' + '\n')
   
         ## compute CSD 
         epochs_csd = mne.preprocessing.compute_current_source_density(epochs)
@@ -305,7 +301,7 @@ for i, files in enumerate(files_list):
                 plt.close('all')
     else: 
         logging.warning(f'The dataset: {files.split("/")[-2]} has no pinknoise epochs! ') 
-        out.write(f'The dataset: {files.split("/")[-2]} has {len(insp_ix)*2} pinknoise bursts! ' + '\n')
+        out.write(f'The dataset: {files.split("/")[-2]} has {len(first_bursts)*2} pinknoise bursts! ' + '\n')
         out.write(f'The dataset: {files.split("/")[-2]} has the following detected bad channels: {ransac.bad_chs_} ' + '\n')   
 # close text file with pn info 
 out.close()

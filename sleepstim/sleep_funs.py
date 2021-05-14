@@ -162,45 +162,52 @@ def load_xdf(path: str):
 def channel_parser(info, data):
     ch_names = []
     ch_types = [] 
+    bipolar_names = {'chan_1': 'EDC_L', 'chan_2': 'ECR_L', 'chan_3': 'FCR_L', 
+                     'chan_4': 'FDS_L', 'chan_5': 'ECG', 'chan_6': 'EmptyChan', 
+                     'chan_7': 'EDC_R', 'chan_8': 'ECR_R', 'chan_9': 'FCR_R', 
+                     'chan_10': 'FDS_R'}
     for i in range(np.size(data,1)):
         chan = info['desc'][0]['channels'][0]['channel'][i]['label'][0]  
         chtype = info['desc'][0]['channels'][0]['channel'][i]['type'][0]
-        if chan == 'EMG_L':
-            ch_names.append(chan)
-            chtype = 'emg'
-            ch_types.append(chtype)
-        elif chan == 'EMG_R':
-            ch_names.append(chan)
-            chtype = 'emg'
-            ch_types.append(chtype)
-        elif chan == 'bipECG':
-            ch_names.append(chan)
-            chtype = 'ecg'
-            ch_types.append(chtype)
-        elif chan == 'EOG_L':
-            ch_names.append(chan)
-            chtype = 'eog'
-            ch_types.append(chtype)
-        elif chan == 'EOG_R':
-            ch_names.append(chan)
-            chtype = 'eog'
-            ch_types.append(chtype)
-        elif chan == 'EmptyChan':
-            ch_names.append(chan)
-            chtype = 'misc'
-            ch_types.append(chtype)
-        elif chan == 'EmptyChan1':
-            ch_names.append(chan)
-            chtype = 'misc'
-            ch_types.append(chtype)
-        elif chan == 'EmptyChan2':
-            ch_names.append(chan)
-            chtype = 'misc'
-            ch_types.append(chtype)
-        elif chtype == 'EEG':
-            chtype = 'eeg'
-            ch_names.append(chan)
-            ch_types.append(chtype)
+        if chan.startswith('chan') and int(chan.split('_')[-1]) <= 10:
+            ch_names.append(bipolar_names[chan])
+            if bipolar_names[chan] == 'ECG':
+                ch_types.append('ecg')
+            elif bipolar_names[chan] == 'EmptyChan':
+                ch_types.append('misc')
+            else:
+                ch_types.append('emg')
+        elif chan.startswith('chan') and int(chan.split('_')[-1]) >= 11:
+            ch_names.append('EmptyChan')
+            ch_types.append('misc')
+        else:
+            if chan == 'EMG_L':
+                ch_names.append(chan)
+                ch_types.append('emg')
+            elif chan == 'EMG_R':
+                ch_names.append(chan)
+                ch_types.append('emg')
+            elif chan == 'bipECG':
+                ch_names.append(chan)
+                ch_types.append('ecg')
+            elif chan == 'EOG_L':
+                ch_names.append(chan)
+                ch_types.append('eog')
+            elif chan == 'EOG_R':
+                ch_names.append(chan)
+                ch_types.append('eog')
+            elif chan == 'EmptyChan':
+                ch_names.append(chan)
+                ch_types.append('misc')
+            elif chan == 'EmptyChan1':
+                ch_names.append(chan)
+                ch_types.append('misc')
+            elif chan == 'EmptyChan2':
+                ch_names.append(chan)
+                ch_types.append('misc')
+            elif chtype == 'EEG':
+                ch_names.append(chan)
+                ch_types.append('eeg')
 
     return ch_names, ch_types
     

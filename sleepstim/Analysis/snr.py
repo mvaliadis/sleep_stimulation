@@ -17,8 +17,6 @@ import yasa
 import numpy as np
 import matplotlib.pyplot as plt
 
-Data = load_preprocessed_data('/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/IBYYXKMB_adaption_preproc_data.p')[0]
-
 ## The below code has been adapted from mne: 
 ## https://mne.tools/dev/auto_tutorials/time-freq/plot_ssvep.html#plot-psd-and-snr-spectra
 
@@ -129,6 +127,7 @@ def snr_plot(psds, snrs, freqs):
     
 #%% 
 if __name__ == '__main__':
+    Data = load_preprocessed_data('/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/IBYYXKMB_adaption_preproc_data.p')[0]
     eeg_index = [i for i, x in enumerate(Data.chtypes) if x == "eeg"]
     emg_index = [i for i, x in enumerate(Data.chtypes) if x == "emg"]
     eog_index = [i for i, x in enumerate(Data.chtypes) if x == "eog"]
