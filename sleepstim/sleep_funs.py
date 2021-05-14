@@ -868,8 +868,8 @@ def sleep_staging(bfr, indices_to_pull):
         print(f'Sleep Stage: {stage_predict}')
         reiz.marker.push('stage_predict')
         
-        ## 1 for N2/SWS, 0 for all else
-        if stage_predict == 2 or stage_predict == 3:
+        ## 1 for SWS, 0 for all else
+        if stage_predict == 3:
             stage_predict_binary = 1
         else:
             stage_predict_binary = 0
@@ -1103,8 +1103,12 @@ def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35,
 
     bfr2.await_running()
     
+    infostruct = bfr2.info['desc']['channels']['channel']
+    chanlabels = [infostruct[i]['label'] for i in range(len(infostruct))]
+    chanselection = ['C3', 'M1', 'M2']
+    indices_to_pull = np.array([ix for ix,val in enumerate(chanlabels) if val in chanselection])
+    
     filtparams_lp = signal.butter(4, 4, fs = bfr2.fs)
-    #filtparams_hp = signal.butter(4, 0.5, fs = bfr2.fs, btype='highpass')
     
     n = PinkNoise(volume)
 
@@ -1119,50 +1123,53 @@ def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35,
                 block_auditory_stim = False
             #%% Proper channel needs to be selected based on channel failure index from classification thread
             if channel_failure[0] == 1:
-                d = bfr2.get_data()[:,9]*1e6 #C3, main recording channel - TO DO: use index
-                #print('SO detection with channel: C3')
-            elif channel_failure[1] == 1: 
-                d = bfr2.get_data()[:,8]*1e6 #Cz, alternative recording channel - TO DO: use index
-                print('SO detection with channel: Cz')
-            elif channel_failure[2] == 1:
-                d = bfr2.get_data()[:,10]*1e6 #C4, second alternative recording channel - TO DO: use index
-                print('SO detection with channel: C4')
+                d = bfr2.get_data()[:,indices_to_pull]*1e6
+                                                               
+                #%% online SWS detection pre-processing
+                d = signal.filtfilt(*filtparams_lp, d, axis=0)
+                if np.nan in d:
+                    print('Warning: Current filtering is numerically unstable!')
+                
+                # rereference to linked mastoids 
+                # ref_data = d[..., [-1,-2]].mean(-1, keepdims=True)
+                # d -= ref_data
+                C3_data = d[:,0]
+                
+                ## Minamp reflects deviation from the last 2 seconds of data within the 10th 
+                # percentile of the signal (reflects changes in higher negative values)
+                minamp = min(np.percentile((C3_data[-2* int(bfr2.fs):]) - np.median(C3_data), 10), -35)
+                #print(f'minimum amplitude value: {minamp}')
+                
+                ## Linear drift detection
+                # Check the peak-to-peak maximum of the current epoch, if it exceeds 500 µV
+                # (and -300 µV negative amplitude), reset threshold to -35 & block stimulation for 10s
+                if minamp < -300 and np.ptp(C3_data[-2*int(bfr2.fs):]) < 500:
+                    minamp = -35
+                    reiz.clock.sleep(10)
+                    block_auditory_stim = True 
+                 
+                # criterion for SO occurence
+                crit = min(C3_data[int(-0.02*bfr2.fs):]) - np.median(C3_data)
+                #print(f'critical value: {crit}')
+                #reiz.marker.push('crit: {}'.format(crit))
+                
+                if crit < minamp and block_auditory_stim == False: 
+                    #print('target reached')
+                    # wait for 0ms, ~500ms, depending on Up/Downstate    
+                    clock.sleep(time_delay - 0.025)
+                    # deliver tone twice with 1.075s interval
+                    n.play()
+                    clock.sleep(1.075 - 0.025)
+                    n.play()
+                    # blocking auditory stimulation for 3s refractory period
+                    block_auditory_stim = True 
+                    tblock = clock.now()
+                    
             else:
                 continue
-                                                               
-            #%% online SWS detection pre-processing
-            d = signal.filtfilt(*filtparams_lp, d)
-            #d = signal.filtfilt(*filtparams_hp, d)
-            
-            ## Minamp reflects deviation from the last 5 seconds of data within the 10th percentile of the signal
-            minamp = min(np.percentile((d[-5* int(bfr2.fs):] - np.median(d)), 10), -35)
-            #print(f'minimum amplitude value: {minamp}')
-            
-            ## Linear drift detection
-            # Check the peak-to-peak maximum of the current epoch, if it exceeds 500 µV
-            # (and -300 µV negative amplitude), reset threshold to -35 & block stimulation for 10s
-            if minamp < -300 and np.ptp(d[-2*int(bfr2.fs):] - np.median(d[-2*int(bfr2.fs):])) < 500:
-                minamp = -35
-                reiz.clock.sleep(10)
-             
-            # criterion for SO occurence
-            crit = min(d[int(-0.02*bfr2.fs):]) - np.median(d)
-            #print(f'critical value: {crit}')
-            #reiz.marker.push('crit: {}'.format(crit))
-            
-            if crit < minamp and block_auditory_stim == False: 
-                #print('target reached')
-                # wait for 0ms, ~500ms, depending on Up/Downstate    
-                clock.sleep(time_delay)
-                # deliver tone twice with 1.075s interval
-                n.play()
-                clock.sleep(1.075)
-                n.play()
-                # blocking auditory stimulation for 3s refractory period
-                block_auditory_stim = True 
-                tblock = clock.now()
                 
         clock.sleep_debiased(winshift_in_ms/1000)
+
 
  
 class PinkNoise():
