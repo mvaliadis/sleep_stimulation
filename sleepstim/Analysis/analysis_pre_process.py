@@ -200,10 +200,19 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
     mastoids_index = np.r_[ch_names.index('M1'), ch_names.index('M2')]
 
     # filter data 
-    EEG = bfr_butter_filt(data[:,EEG_index], sf, lfreq=0.3, hfreq=35) 
     EOG_L = bfr_butter_filt(data[:,[ch_names.index('EOG_L')]], sf, lfreq=0.3, hfreq=35)
     EOG_R = bfr_butter_filt(data[:,[ch_names.index('EOG_R')]], sf, lfreq=0.3, hfreq=35)
     
+    if len(EEG_index) > 64:
+        # idx_split = np.array_split(EEG_index, indices_or_sections = 13)
+        data_split = np.array_split(data[:,EEG_index], indices_or_sections = 13, axis=1)
+        EEG = [] 
+        for i in range(len(data_split)):
+            EEG.append(bfr_butter_filt(data_split[i], sf, lfreq=0.3, hfreq=35))
+            time.sleep(0.1)
+            
+        EEG = np.concatenate(EEG, axis=-1)
+        
     if validation is None:
         if line_noise_removal == 'dss':
             EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=50, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)

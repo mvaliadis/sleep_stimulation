@@ -32,3 +32,4 @@ for file in files_list:
     plot = yasa.plot_spectrogram(data = Data.data[:,Data.chans.index('F3')], sf = Data.sfreq, win_sec = 30, 
                                  fmin = 0.5, fmax = 25, cmap = 'Spectral_r', trimperc=2.5)
 
+yasa.art_detect
