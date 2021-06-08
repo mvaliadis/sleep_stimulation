@@ -193,7 +193,7 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
         EEG_index = np.r_[ch_names.index('F3'), ch_names.index('Fz'), ch_names.index('F4'), 
                           ch_names.index('C3'), ch_names.index('Cz'), ch_names.index('C4'), 
                           ch_names.index('P3'), ch_names.index('P4'), ch_names.index('O1'), 
-                          ch_names.index('O2')]
+                          ch_names.index('O2'), ch_names.index('M1'), ch_names.index('M2')]
     else:
         EEG_index = [i for i, x in enumerate(ch_types) if x == "eeg"]
     # other relevant indices
