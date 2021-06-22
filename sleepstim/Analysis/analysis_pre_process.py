@@ -49,7 +49,10 @@ class Data_Struct:
         self.chtypes = chtypes
         self.times = times - times[0]
         self.pinknoise_times = pinknoise_times - times[0]
-        self.pinknoise_times_sync = [np.argmin(np.abs(self.times - ts)) for ts in self.pinknoise_times]  
+        if np.all(np.diff(self.pinknoise_times[0:3]) < 0.5):
+            self.pinknoise_times_sync = [np.argmin(np.abs(self.times - ts)) for ts in self.pinknoise_times[3::]] 
+        else:
+            self.pinknoise_times_sync = [np.argmin(np.abs(self.times - ts)) for ts in self.pinknoise_times] 
         self.classif_times = classif_times - times[0]
         self.classif_times_sync = [np.argmin(np.abs(self.times - ts)) for ts in self.classif_times]  
         self.classif_predict = classif_predict
@@ -188,6 +191,8 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
         ch_names.remove('Cpz')
     if 'OZ' in ch_names:
         ch_names[ch_names.index('OZ')] = 'Oz'
+    if 'EOG' in ch_names:
+        ch_types[ch_names.index('EOG')] = 'misc'
     # chans of interest for stageing
     if stageing:
         EEG_index = np.r_[ch_names.index('F3'), ch_names.index('Fz'), ch_names.index('F4'), 
@@ -199,8 +204,21 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
     # other relevant indices
     mastoids_index = np.r_[ch_names.index('M1'), ch_names.index('M2')]
 
-    # filter data 
-    EEG = bfr_butter_filt(data[:,EEG_index], sf, lfreq=0.3, hfreq=35) 
+    # filter data     
+    if len(EEG_index) > 64:
+        # idx_split = np.array_split(EEG_index, indices_or_sections = 13)
+        data_split = np.array_split(data[:,EEG_index], indices_or_sections = 13, axis=1)
+        EEG = [] 
+        for i in range(len(data_split)):
+            EEG.append(bfr_butter_filt(data_split[i], sf, lfreq=0.3, hfreq=35))
+            time.sleep(0.1)
+            
+        EEG = np.concatenate(EEG, axis=-1)
+    else:
+        EEG = bfr_butter_filt(data[:,EEG_index], sf, lfreq=0.3, hfreq=35) 
+        # filtparams = butter(4, 4, fs = sf)
+        # EEG = filtfilt(*filtparams, data[:,EEG_index], axis=0, padtype='odd')
+        
     EOG_L = bfr_butter_filt(data[:,[ch_names.index('EOG_L')]], sf, lfreq=0.3, hfreq=35)
     EOG_R = bfr_butter_filt(data[:,[ch_names.index('EOG_R')]], sf, lfreq=0.3, hfreq=35)
     
@@ -262,16 +280,16 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
             # add EMG data back
             data = np.concatenate([EEG, np.expand_dims(EOG_L, 1), np.expand_dims(EOG_R, 1), 
                                    np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1), 
-                                   np.expand_dims(ECG,1)], axis=1)*1e6
+                                   np.expand_dims(ECG,1)], axis=1).astype('float32')*1e6
         else:
             # add EMG data back
-            data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R, ECG], axis=1)*1e6
+            data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R, ECG], axis=1).astype('float32')*1e6
     elif validation != 'auditory': 
         # re-combine data
         data = np.concatenate([EEG, np.expand_dims(EOG_L,1), np.expand_dims(EOG_R,1), 
-                               np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1)], axis=1)*1e6
+                               np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1)], axis=1).astype('float32')*1e6
     else:
-        data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R], axis=1)*1e6
+        data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R], axis=1).astype('float32')*1e6
     
     # create data object
     Data = Data_Struct(data, new_chans, new_chtypes, eego_times, pinknoise_timestamps, classifier_predict, classifier_timestamps, sf)

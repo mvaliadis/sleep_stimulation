@@ -19,6 +19,7 @@ import pingouin as pg
 from os import chdir as cd
 from os import listdir
 import logging 
+from tqdm import tqdm
 from scipy.signal import welch, butter, filtfilt, hilbert, detrend
 from scipy.stats import zscore, circmean, circstd, circvar
 from scipy.fftpack import next_fast_len
@@ -48,7 +49,7 @@ files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.wal
 # create log file 
 log_path = '/media/administrator/data/Study_1_data/Data_tracking/'
 out = open(log_path + 'pinknoise_report.txt', "w")
-for i, files in enumerate(files_list):
+for i, files in tqdm(enumerate(files_list)):
     print(i, files.split('/')[-2])
     Data = _pre_process_sleep_data(files, reference=None, validation='auditory', stageing=False)
     # take first (adjusted) pinknoise bursts as center point
