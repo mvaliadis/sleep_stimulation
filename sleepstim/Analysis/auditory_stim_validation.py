@@ -86,11 +86,11 @@ for i, files in tqdm(enumerate(files_list)):
         
         # generate center of stimulation index points
         center, _ = yasa.get_centered_indices(Data.data[:,Data.chans.index('C3')], np.asarray(first_bursts), 
-                                              npts_before = Data.sfreq*3, npts_after = Data.sfreq*3)
+                                              npts_before = Data.sfreq*4, npts_after = Data.sfreq*4)
         info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)  
         
         # create epochs with online reference
-        epochs = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -3, 
+        epochs = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -4, 
                                  baseline=(None), proj=False) 
         epochs.set_montage(mne.channels.make_standard_montage('standard_1005'))   
         
@@ -102,7 +102,7 @@ for i, files in tqdm(enumerate(files_list)):
                 
                 
         # create epochs with mastoids reference
-        epochs_mastoids = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -3,
+        epochs_mastoids = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -4,
                                           baseline=(None), proj=False) 
         epochs_mastoids.set_eeg_reference(['M1','M2'])
         epochs_mastoids.set_montage(mne.channels.make_standard_montage('standard_1005'))
@@ -214,8 +214,8 @@ for i, files in tqdm(enumerate(files_list)):
         plt.savefig(fig_path + files.split('/')[-2] + '_average_epoch_ref_comparison.png')
         
         ## TF/ITC plots 
-        itc_data, Sxx = tfr_analysis(Data = epochs_mastoids, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavelet', 
-                                     baseline=[-2.5, 2.5], mode='zscore', chan = 'C3', itc_calculation = 'tensorpac',
+        itc_data, Sxx = tfr_analysis(Data = epochs_mastoids, l_freq = 1, h_freq = 30, steps = 0.25, method = 'wavelet', 
+                                     baseline=[-2, 2], mode='zscore', chan = 'C3', itc_calculation = 'tensorpac',
                                      plot=True, output='avg', zscore=False, cmap = cm.Spectral_r, 
                                      save_path=fig_path + files.split('/')[-2])
         pickle.dump(Sxx, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/' + files.split('/')[-2].split('.')[0] + '_TF.p',"wb"))
@@ -224,7 +224,7 @@ for i, files in tqdm(enumerate(files_list)):
         
         ## ERPAC plots
         erpac = ERPAC(data = epochs_mastoids, f_pha=[0.3, 4], f_amp=(4, 30, .3, .3), n_perm=None, 
-                      smooth=200, method = 'gc', edges=0.5, stationarity_t=False, plot=True, 
+                      smooth=200, method = 'gc', edges=2.0, stationarity_t=False, plot=True, 
                       save_path=fig_path + files.split('/')[-2])
         pickle.dump(erpac, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/' + files.split('/')[-2].split('.')[0] + '_erpac.p',"wb"))
         plt.close('all')
