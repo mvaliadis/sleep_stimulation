@@ -222,17 +222,7 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
     # filter data 
     EOG_L = bfr_butter_filt(data[:,[ch_names.index('EOG_L')]], sf, lfreq=0.3, hfreq=35)
     EOG_R = bfr_butter_filt(data[:,[ch_names.index('EOG_R')]], sf, lfreq=0.3, hfreq=35)
-    
-    if len(EEG_index) > 64:
-        # idx_split = np.array_split(EEG_index, indices_or_sections = 13)
-        data_split = np.array_split(data[:,EEG_index], indices_or_sections = 13, axis=1)
-        EEG = [] 
-        for i in range(len(data_split)):
-            EEG.append(bfr_butter_filt(data_split[i], sf, lfreq=0.3, hfreq=35))
-            time.sleep(0.1)
-            
-        EEG = np.concatenate(EEG, axis=-1)
-        
+           
     if validation is None:
         if line_noise_removal == 'dss':
             EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=50, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)
@@ -267,18 +257,24 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
         raw.pick_types(eeg=True)
         EEG = mne.preprocessing.compute_current_source_density(raw).get_data()
     elif reference!='surface laplacian' and validation!='auditory':
-        if reference=='mastoids' or validation == 'classifier':
+        if stageing==False and reference=='mastoids' or validation == 'classifier':
             ref_data = EEG[:,mastoids_index][..., :].mean(-1, keepdims=True)
+        elif stageing==True and reference=='mastoids':
+            ref_data = EEG[:,-2:-1][..., :].mean(-1, keepdims=True)
         elif reference=='common average':
             ref_data = EEG[..., :].mean(-1, keepdims=True)
         EEG -= ref_data 
     elif reference==None or validation=='auditory':
         EEG = EEG
  
-    # edit channel names and types based on new selection 
-    new_chans = [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
-    new_chtypes = [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
-        
+    # edit channel names and types based on new selection
+    if stageing==False:
+        new_chans = [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
+        new_chtypes = [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
+    else:
+        new_chans = list(np.asarray(ch_names)[EEG_index]) + [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eog" or x=="emg" or x=="ecg"]]
+        new_chtypes = list(np.asarray(ch_types)[EEG_index]) + [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eog" or x=="emg" or x=="ecg"]]
+
     if 'bipECG' in ch_names:
         ECG = bfr_butter_filt(data[:,[ch_names.index('bipECG')]], sf, lfreq=0.3, hfreq=70)
         if validation is None:
@@ -1155,7 +1151,7 @@ def peak2peak_SW_duration(data, hypno_path, ch_names, chan='C3', sf=512, data_le
     # load hypnogram
     hypno = unravel_hypnogram_visbrain(hypno_path)
     # unsampled hypnogram
-    hypno = yasa.hypno_upsample_to_data(hypno=hypno[0:data_len*2], sf_hypno=1/30, data=data[0:sf*60*210,:].T, sf_data=sf)
+    hypno = yasa.hypno_upsample_to_data(hypno=hypno[0:data_len*2], sf_hypno=1/30, data=data[0:sf*60*data_len,:].T, sf_data=sf)
     # calculate sw dataframe for detected SWs
     sw = yasa.sw_detect(data[0:sf*60*data_len,ch_names.index(chan)].T, sf, ch_names = [chan], hypno = hypno, include=(2,3), freq_sw=(0.5, 3.0),
                    dur_neg=(0.3, 1.5), dur_pos=(0.1, 1), amp_neg=(35, 300), amp_pos=(10, 200), 

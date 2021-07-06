@@ -238,7 +238,7 @@ for i, files in tqdm(enumerate(files_list)):
             nfast = next_fast_len(n_samples)
             # to obtain sine relative angles add 0.5 pi to angles
             sw_pha = [np.angle(hilbert(C3[i,:], N=nfast)[:n_samples]) + 0.5*np.pi for i in range(min(C3.shape))]
-            pn_phase = [sw_pha[i][int(Data.sfreq*3)] for i in range(len(sw_pha))]
+            pn_phase = [sw_pha[i][int(Data.sfreq*4)] for i in range(len(sw_pha))]
             
             ax = plt.subplot(111, projection='polar')
             ax.hist(pn_phase)
@@ -303,7 +303,7 @@ for i, files in tqdm(enumerate(files_list)):
     else: 
         logging.warning(f'The dataset: {files.split("/")[-2]} has no pinknoise epochs! ') 
         out.write(f'The dataset: {files.split("/")[-2]} has {len(first_bursts)*2} pinknoise bursts! ' + '\n')
-        out.write(f'The dataset: {files.split("/")[-2]} has the following detected bad channels: {ransac.bad_chs_} ' + '\n')   
+        out.write(f'The dataset: {files.split("/")[-2]} has the following detected bad channels: {Data.bad_chans} ' + '\n')   
 # close text file with pn info 
 out.close()
 
