@@ -96,7 +96,7 @@ for i, files in tqdm(enumerate(files_list)):
         
         # =============================================================================
         ## CREATES COMBNINED CHANNEL TO PERFORM ANALYSIS; ENHANCES SNR 
-        #  ch_names = Data.chans;EEG_index = np.r_[ch_names.index('F3'), ch_names.index('C3'), ch_names.index('P3')]
+        #  EEG_index = np.r_[Data.chans.index('F3'), Data.chans.index('C3'), Data.chans.index('P3')]
         #  raw = mne.channels.combine_channels(epochs, groups=dict(Left_hemispher = EEG_index))       
         # =============================================================================
                 

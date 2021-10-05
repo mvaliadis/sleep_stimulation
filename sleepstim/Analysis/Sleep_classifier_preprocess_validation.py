@@ -28,6 +28,7 @@ import pandas as pd
 import seaborn as sns
 from scipy.signal import welch
 from scipy import interp
+import scipy
 from os import chdir as cd
 from os import listdir
 from sleepstim.sleep_funs import plot_multiclass_ROC, bandpower, unravel_hypnogram_visbrain, plot_confusion_matrix
@@ -45,9 +46,9 @@ rf4 = pickle.load(open(rf_path + "rf_model_4_cfs.p","rb"))
 rf5 = pickle.load(open(rf_path + "rf_model_5_cfs.p","rb"))
 rf6 = pickle.load(open(rf_path + "rf_model_6_cfs.p","rb"))
 
-data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation'
-hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/'
-new_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/'
+data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption_classifier_validation'
+hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Adaption/'
+new_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/Adaption/'
 
 accArrays = [] 
 exist_exp_files, exist_hyp_files = check_match_data_hypno_elements(data_path, hypno_path)
@@ -105,17 +106,20 @@ for idx, (fname, hypno_files) in enumerate(zip(exist_exp_files, exist_hyp_files)
     y_pred4 = rf4.predict(x4)
     y_score4 = rf4.predict_proba(x4) 
     y_pred5 = rf5.predict(x5)
+    y_pred_mf = scipy.ndimage.median_filter(y_pred5, size=10)
     y_score5 = rf5.predict_proba(x5) 
     y_pred6 = rf6.predict(x6)
     y_score6 = rf6.predict_proba(x6) 
     
-    # # yasa classification
-    # info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)
-    # raw = mne.io.RawArray(Data.data.T/1e6, info)
+    
+    # yasa classification
+    info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)
+    raw = mne.io.RawArray(Data.data.T/1e6, info)
     # raw = mne.set_bipolar_reference(raw, 'EOG_L', 'EOG_R')
     # raw = mne.set_bipolar_reference(raw, 'EMG_L', 'EMG_R')
-    # sls = yasa.SleepStaging(raw, eeg_name="Cz", eog_name="EOG_L-EOG_R", emg_name="EMG_L-EMG_R")
-    # y_pred_yasa = yasa.hypno_str_to_int(sls.predict())
+    sls = yasa.SleepStaging(raw, eeg_name="Cz", eog_name="EOG_L", emg_name="EMG_L")
+    y_pred_yasa = yasa.hypno_str_to_int(sls.predict())
+    yasa_score = sls.predict_proba().to_numpy().round(2)
     
     # Sleep stage names
     event_id ={'Wake':0,
@@ -139,8 +143,8 @@ for idx, (fname, hypno_files) in enumerate(zip(exist_exp_files, exist_hyp_files)
     y_test = hypnogram
     
     # accuracy report, confusion matrix, classification reports
-    y_preds = (y_pred1, y_pred2, y_pred3, y_pred4, y_pred5, y_pred6)
-    y_scores = (y_score1, y_score2, y_score3, y_score4, y_score5, y_score6)
+    y_preds = (y_pred1, y_pred2, y_pred3, y_pred4, y_pred5, y_pred_mf, y_pred6, y_pred_yasa)
+    y_scores = (y_score1, y_score2, y_score3, y_score4, y_score5, y_score5, y_score6, yasa_score)
     for idx, (y_pred, y_score) in enumerate(zip(y_preds, y_scores)):
         acc = accuracy_score(y_test, y_pred)
         print("Accuracy score: {}".format(acc))
@@ -156,8 +160,7 @@ for idx, (fname, hypno_files) in enumerate(zip(exist_exp_files, exist_hyp_files)
         # Compute interrater reliability
         inter_agreement = cohen_kappa_score(y_test, y_pred).round(2)
         print(f'The inter-rate agreement is K = {inter_agreement}' + '\n')
-       
-    
+          
         accArrays.append([y_test, y_pred, y_score, idx])
         
         # plt.figure()
@@ -176,6 +179,7 @@ y_test_all3 = np.hstack([df[df['model idx']==2]['Test hypnograms'].to_numpy()[i]
 y_test_all4 = np.hstack([df[df['model idx']==3]['Test hypnograms'].to_numpy()[i] for i in range(df[df['model idx']==3]['Test hypnograms'].shape[0])])
 y_test_all5 = np.hstack([df[df['model idx']==4]['Test hypnograms'].to_numpy()[i] for i in range(df[df['model idx']==4]['Test hypnograms'].shape[0])])
 y_test_all6 = np.hstack([df[df['model idx']==5]['Test hypnograms'].to_numpy()[i] for i in range(df[df['model idx']==5]['Test hypnograms'].shape[0])])
+#y_test_allyasa = np.hstack([df[df['model idx']==5]['Test hypnograms'].to_numpy()[i] for i in range(df[df['model idx']==5]['Test hypnograms'].shape[0])])
 
 y_pred_all1 = np.hstack([df[df['model idx']==0]['Pred hypnograms'].to_numpy()[i] for i in range(df[df['model idx']==0]['Pred hypnograms'].shape[0])])
 y_pred_all2 = np.hstack([df[df['model idx']==1]['Pred hypnograms'].to_numpy()[i] for i in range(df[df['model idx']==1]['Pred hypnograms'].shape[0])])

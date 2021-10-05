@@ -11,10 +11,12 @@ import matplotlib.pyplot as plt
 from sleepstim.sleep_funs import (load_xdf, channel_parser, bfr_butter_filt, thresholdcrossings)
 from mne.filter import filter_data, notch_filter
 from scipy import signal
+import scipy
 import time
 import seaborn as sns 
 import yasa
 import mne
+import heartpy as hp
 sns.set(style='darkgrid', font_scale=1.2)
 
 # parse data
@@ -63,6 +65,13 @@ while ix < len(C3):
     #d = signal.filtfilt(taps, 1.0, window)
     d -= np.median(d)
     
+    # # median filter
+    # d = scipy.ndimage.median_filter(d, size=50)
+    # # savitzky golay filter
+    # d = hp.smooth_signal(d, sample_rate = fs, window_length=int(fs*1), polyorder=3)
+    # sin convolution
+    # d = np.convolve(np.sin(1), d)
+    
     minamp = min(np.percentile((d[-2* int(sf):]), 10), -35)
     crit = min(d[int(-0.02*sf):])
 
@@ -75,7 +84,7 @@ while ix < len(C3):
         crit_reconstruct_up.append(d[int(ts_up)])
     ix += 4
     
-    if len(crit_reconstruct) > 50:
+    if len(crit_reconstruct) > 10:
         break
 
 #%%

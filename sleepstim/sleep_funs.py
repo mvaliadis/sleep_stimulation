@@ -15,7 +15,8 @@ import threading
 import mne
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy import signal
+from scipy import signal, special
+import math
 from scipy.signal import butter, filtfilt, welch, resample, resample_poly
 from scipy.integrate import simps
 from sklearn.metrics import roc_auc_score, auc, roc_curve

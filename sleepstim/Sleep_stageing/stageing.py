@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-Data = load_preprocessed_data('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/D1BOI2AY_2_preproc_data.p')[0]
+Data = load_preprocessed_data('/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/6QJ3ITMT_adaption_preproc_data.p')[0]
 
 #%% Initialize gui here
 Sleep(data = Data.data.T, channels = Data.chans, sf = Data.sfreq).show()

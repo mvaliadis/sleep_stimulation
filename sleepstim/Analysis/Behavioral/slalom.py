@@ -14,7 +14,6 @@ import pandas as pd
 import pingouin as pg
 from scipy.signal import hilbert
 from sklearn.metrics import mean_squared_error
-import pingouin as pg
 import seaborn as sns
 sns.set_theme(style="whitegrid")
 

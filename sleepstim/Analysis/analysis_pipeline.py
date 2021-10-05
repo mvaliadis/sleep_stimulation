@@ -54,8 +54,8 @@ path = '/media/administrator/data/Study_1_data/Raw_data/'
 preprocess_sleep_data(path, save=True, reference='mastoids', stageing=False, validation=None)
 
 ## Step 1b - Pre-process data (classifier valiadation)
-path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/'
-#sleep_data_validation(path, save=True, validation='classifier')
+path = '/media/administrator/data/Study_1_data/Raw_data/Adaption/'
+preprocess_sleep_data(path, save=True, stageing = True, validation='classifier')
 
 ## Step 1c - Pre-process data (auditory stimulation validation)
 path = '/media/administrator/data/Study_1_data/Raw_data/Adaption/'

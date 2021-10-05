@@ -25,8 +25,9 @@ import logging
 import time
 import wonambi
 import seaborn as sns
+import Levenshtein as lev
 from scipy.signal import welch, butter, filtfilt
-from scipy.stats import zscore
+from scipy.stats import zscore, skewnorm
 from scipy.special import erf
 from sklearn.metrics import cohen_kappa_score, confusion_matrix
 from tensorpac.utils import PeakLockedTF, PSD, ITC, BinAmplitude
@@ -205,7 +206,12 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
     mastoids_index = np.r_[ch_names.index('M1'), ch_names.index('M2')]
 
     # filter data     
-    if len(EEG_index) > 64:
+    if len(EEG_index) >= 64:
+        
+        
+        
+        
+        
         # idx_split = np.array_split(EEG_index, indices_or_sections = 13)
         data_split = np.array_split(data[:,EEG_index], indices_or_sections = 13, axis=1)
         EEG = [] 
@@ -214,6 +220,7 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
             time.sleep(0.1)
             
         EEG = np.concatenate(EEG, axis=-1)
+        
     else:
         EEG = bfr_butter_filt(data[:,EEG_index], sf, lfreq=0.3, hfreq=35) 
         # filtparams = butter(4, 4, fs = sf)
@@ -236,7 +243,7 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
                                           mt_bandwidth=2, p_value=0.01, filter_length='10s').T
             EOG_L = mne.filter.notch_filter(EOG_L.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50), 
                                             mt_bandwidth=2, p_value=0.01, filter_length='10s')
-            EOG_R = mne.filter.notch_filter(EOG_L.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50),
+            EOG_R = mne.filter.notch_filter(EOG_R.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50),
                                             mt_bandwidth=2, p_value=0.01, filter_length='10s')
     
     #EMG processing (butterworth filter + multitaper spectrum fit interpolation)
@@ -257,7 +264,7 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
         raw.pick_types(eeg=True)
         EEG = mne.preprocessing.compute_current_source_density(raw).get_data()
     elif reference!='surface laplacian' and validation!='auditory':
-        if stageing==False and reference=='mastoids' or validation == 'classifier':
+        if stageing==False and reference=='mastoids':
             ref_data = EEG[:,mastoids_index][..., :].mean(-1, keepdims=True)
         elif stageing==True and reference=='mastoids':
             ref_data = EEG[:,-2:-1][..., :].mean(-1, keepdims=True)
@@ -291,7 +298,7 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
         else:
             # add EMG data back
             data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R, ECG], axis=1)*1e6
-    elif validation != 'auditory': 
+    elif validation == None: 
         # re-combine data
         data = np.concatenate([EEG, np.expand_dims(EOG_L,1), np.expand_dims(EOG_R,1), 
                                np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1)], axis=1)*1e6
@@ -314,10 +321,14 @@ def preprocess_sleep_data(path, save=True, reference='mastoids', validation=None
     for i, files in enumerate(files_list):
         # select subject ID + cond identifier
         subjID_cond = files.split('/')[-2]
+        number = int(files.split('/')[-1].split('.')[0][-1])
         if 'Experimental' in files:
             save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/'
             if validation == 'classifier':
-                new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + subjID_cond + '_preproc_data_cv.p'
+                if number > 1:
+                    new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + subjID_cond + '_preproc_data_cv_' + str(number) + '.p'
+                else:
+                    new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + subjID_cond + '_preproc_data_cv.p' 
         elif 'adaption_calibration' in files:
             save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Calibration/'
         elif 'Calibration' in files:
@@ -325,7 +336,10 @@ def preprocess_sleep_data(path, save=True, reference='mastoids', validation=None
         elif 'Adaption' in files:
             save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption/'
             if validation == 'classifier':
-                new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + subjID_cond + '_preproc_data_cv.p'
+                if number > 1:
+                    new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Adaption_classifier_validation/' + subjID_cond + '_preproc_data_cv_' + str(number) + '.p'
+                else:
+                    new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Adaption_classifier_validation/' + subjID_cond + '_preproc_data_cv.p'                
         else:
             raise NameError('Please verify that the file name contains an appropriate recording type! ')
         # check if file exists
@@ -334,12 +348,15 @@ def preprocess_sleep_data(path, save=True, reference='mastoids', validation=None
         elif validation is None:
             new_path = save_path + subjID_cond + '_preproc_data.p'
         if not os.path.exists(new_path):
-            print(f'Pre-processing the dataset for subject and condition: {subjID_cond} !')
-            Data = _pre_process_sleep_data(files, reference=reference, validation=validation, stageing=stageing)
             # check if a second recording file exists, then combine after preprocessing
-            if int(files.split('/')[-1].split('.')[0][-1])!= 1:
-                new_path = save_path + subjID_cond + '_preproc_data_' + files.split('/')[-1].split('.')[0][-1] + '.p'
+            if number == 1:
+                print(f'Pre-processing the dataset for subject, condition, and recording #: {subjID_cond + "_" + str(number)} !')
+                Data = _pre_process_sleep_data(files, reference=reference, validation=validation, stageing=stageing)
+            elif number > 1:
+                if validation == None:
+                    new_path = save_path + subjID_cond + '_preproc_data_' + files.split('/')[-1].split('.')[0][-1] + '.p'
                 print(f'Pre-processing an additional file for the following dataset: {subjID_cond} which will be contained in the following path: {new_path} !')
+                Data = _pre_process_sleep_data(files, reference=reference, validation=validation, stageing=stageing)
             if save:
                 save_preprocess_sleep_data(Data, path=new_path)
             else:
@@ -610,8 +627,12 @@ def check_match_data_hypno_elements(data_path, hypno_path):
     data_elem = sorted(os.listdir(data_path))
     hypno_elem = sorted(os.listdir(hypno_path))
     all_elem = np.asarray([(x,y) for x in data_elem for y in hypno_elem])
-    exist = [elem[0].split('_')[0] + '_' + elem[0].split('_')[1] == 
-             elem[1].split('_')[0] + '_' + elem[1].split('_')[1] for elem in all_elem]
+    ################### -- NEED TO CORRECT -- ###################  
+    exist = [np.logical_and(elem[0].split('_')[0] + '_' + elem[0].split('_')[1] == 
+                            elem[1].split('_')[0] + '_' + elem[1].split('_')[1], 
+                            lev.ratio(elem[0].split('.')[0], 
+                                      elem[1].split('.')[0]) > 0.7)
+             for elem in all_elem]
     exist_exp_files, exist_hyp_files = all_elem[exist][:,0], all_elem[exist][:,1]
     
     if len(exist_exp_files) > 0 and len(exist_hyp_files) > 0:
