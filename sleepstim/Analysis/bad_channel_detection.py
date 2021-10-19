@@ -270,7 +270,7 @@ def qc_kurt(xs):
     kurt = stats.kurtosis(xs, axis=-1)
     return kurt
 
-def qc_calcEQI(data, fs):
+def qc_calcEQI(data, fs, frange=(1,45)):
     """
     Combines 6 quality index functions above and returns qc_arr matrix in the shape of
     number of measures x channels x segments
@@ -287,8 +287,8 @@ def qc_calcEQI(data, fs):
     for ich, xch in enumerate(data):
         xsegs = qc_segment(xch,fs,window=2)
         for idxs, xs in enumerate(xsegs):
-            # 1. Average Single-Sided Amplitude Spectrum in range 1-50Hz
-            qc_arr[0,ich,idxs] = qc_assas(xs, [1,45], fs)
+            # 1. Average Single-Sided Amplitude Spectrum in range given range
+            qc_arr[0,ich,idxs] = qc_assas(xs, frange, fs)
             # 2. Average Single-Sided Amplitude Spectrum in range 49-51 Hz
             qc_arr[1,ich,idxs] = qc_assas(xs, [49,51], fs)
             # 3. root mean square

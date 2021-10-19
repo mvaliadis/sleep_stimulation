@@ -17,7 +17,7 @@ from sklearn.metrics import mean_squared_error
 import seaborn as sns
 sns.set_theme(style="whitegrid")
 
-def slalom_results(path = r'/media/administrator/data/Study_1_data/Behavioral/LM/', plot=False):
+def slalom_results(path = r'/media/administrator/data/Study_1_data/Behavioral/LM', plot=False):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     sheet = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
     subj_cond = np.loadtxt(sheet, delimiter=',', dtype='str', skiprows=1) 

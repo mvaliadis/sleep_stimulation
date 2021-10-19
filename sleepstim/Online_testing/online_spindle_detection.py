@@ -19,7 +19,8 @@ from mne.time_frequency import morlet
 sns.set(style='darkgrid', font_scale=1.2)
 
 # load data 
-data = np.loadtxt(r'C:\Users\mvali\Documents\GitHub\yasa\notebooks\data_N2_spindles_15sec_200Hz.txt').astype('float32')
+#data = np.loadtxt(r'C:\Users\mvali\Documents\GitHub\yasa\notebooks\data_N2_spindles_15sec_200Hz.txt').astype('float32')
+data = np.loadtxt(r'/home/administrator/Downloads/yasa-master/notebooks/data_N2_spindles_15sec_200Hz.txt').astype('float32')
 sf = 200
 times = (np.arange(len(data))/sf).astype('float32')
 

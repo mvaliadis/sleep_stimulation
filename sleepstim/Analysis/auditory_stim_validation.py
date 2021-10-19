@@ -34,6 +34,7 @@ from sleepstim.sleep_funs import (load_xdf, channel_parser, bfr_butter_filt, thr
 from sleepstim.Analysis.pac import unit_root_test, add_stimulus_onset, ERPAC
 from sleepstim.Analysis.time_frequency import tfr_analysis
 from sleepstim.Utils.encryption_decryption import encrypt_file, decrypt_file
+from sleepstim.Analysis.Resting_State.rs_preproc import (plot_psd, norm_wavelet_power, subject_cond_parser)
 
 #%%
 
@@ -42,10 +43,9 @@ files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.wal
 
 #%%
 # decoding condition sheet 
-# input_file = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
-# output_file = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes_encrypted.csv'
-# encrypt_key = encrypt_file(input_file, output_file)
-# cond_dict = {0:'sham', 1:'up', 2:'down'}
+input_file = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
+output_file = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes_encrypted.csv'
+encrypt_key = encrypt_file(input_file, output_file)
 # create log file 
 log_path = '/media/administrator/data/Study_1_data/Data_tracking/'
 out = open(log_path + 'pinknoise_report.txt', "w")
@@ -55,42 +55,29 @@ for i, files in tqdm(enumerate(files_list)):
     # take first (adjusted) pinknoise bursts as center point
     first_bursts = Data.pinknoise_times_sync[::2]
     if first_bursts != []:
-        # # check to see if condition is sham, if so, create second instance of center points to generate down sham condition
-        # decrypted = decrypt_file(encrypt_key, input_file=output_file, output_file=input_file)
-        # subj = files.split('/')[-2].split('_')[0]
-        # sub_pos = np.where(subj == decrypted[:,0])[0][0]
-        # if '1' in files.split('/')[-2].split('_')[1]:
-        #     cond = int(decrypted[sub_pos,:][1])
-        # elif '2' in files.split('/')[-2].split('_')[1]:
-        #     cond = int(decrypted[sub_pos,:][2])
-        # elif '3' in files.split('/')[-2].split('_')[1]:
-        #     cond = int(decrypted[sub_pos,:][3])
-        # # delete decrypted file
-        # del decrypted
-        
-        # # create double occurence for shams (originally up sham but moved to be down sham)
-        # # TO:DO --> SUBTRACT first_bursts BY RESPECTIVE P2P DURATIONS TO CREATE DOWN SHAM
-        # if cond_dict[cond] == 'sham':
-        #     p2p_delay = np.loadtxt()
-        #     Data.pinknoise_times2 = Data.pinknoise_times - p2p_delay
-        #     Data.pinknoise_timestamps_sync2 = [Data.times[np.abs(Data.times - Data.pinknoise_times2[ix]).argmin()] 
-        #                                        for ix in range(len(Data.pinknoise_times))]
-        #     Data.pinknoise_timestamps_sync_adj2 = np.asarray(Data.pinknoise_timestamps_sync2)*Data.sfreq
-        #     first_bursts2 = Data.pinknoise_timestamps_sync_adj[::2]
-        #     insp_ix2 = [np.where(Data.times*Data.sfreq == first_bursts[i])[0][0] for i in range(len(first_bursts))]
-        
-        #     # generate center of stimulation index points
-        #     center2, _ = yasa.get_centered_indices(Data.data[:,Data.chans.index('C3')], np.asarray(insp_ix2), 
-        #                                            npts_before = Data.sfreq*3, npts_after = Data.sfreq*3)
-        #     info2 = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes) 
+        # check to see if condition is sham, if so, create second instance of center points to generate down sham condition
+        decrypted = decrypt_file(encrypt_key, input_file=output_file, output_file=input_file)
+        cond = subject_cond_parser(files, study_phase = 'sleep')
+        del decrypted
+        subject = files.split("/")[-2].split('_')[0]
+        # create down sham instance subtracting first bursts by respective p2p duration difference
+        if cond == 'sham':
+            subject_table = pd.DataFrame(pd.read_csv('/media/administrator/data/Study_1_data/Data_tracking/Subject_table.csv', 
+                                                     delimiter=',', dtype='str', header=0))
+            p2p_delay = int(subject_table[subject_table['Subject ID'] == subject]['Peak to Peak duration'].to_list()[0][0:3])/1000
+            sham_down_idx = np.asarray(first_bursts) - round(p2p_delay*Data.sfreq)
+
+            # generate center of stimulation index points
+            center_down, _ = yasa.get_centered_indices(Data.data[:,Data.chans.index('C3')], sham_down_idx, 
+                                                       npts_before = Data.sfreq*3, npts_after = Data.sfreq*3)
         
         # generate center of stimulation index points
         center, _ = yasa.get_centered_indices(Data.data[:,Data.chans.index('C3')], np.asarray(first_bursts), 
-                                              npts_before = Data.sfreq*4, npts_after = Data.sfreq*4)
+                                              npts_before = Data.sfreq*3, npts_after = Data.sfreq*3)
         info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)  
         
         # create epochs with online reference
-        epochs = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -4, 
+        epochs = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -3, 
                                  baseline=(None), proj=False) 
         epochs.set_montage(mne.channels.make_standard_montage('standard_1005'))   
         
@@ -100,9 +87,8 @@ for i, files in tqdm(enumerate(files_list)):
         #  raw = mne.channels.combine_channels(epochs, groups=dict(Left_hemispher = EEG_index))       
         # =============================================================================
                 
-                
         # create epochs with mastoids reference
-        epochs_mastoids = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -4,
+        epochs_mastoids = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = -3,
                                           baseline=(None), proj=False) 
         epochs_mastoids.set_eeg_reference(['M1','M2'])
         epochs_mastoids.set_montage(mne.channels.make_standard_montage('standard_1005'))
@@ -111,8 +97,8 @@ for i, files in tqdm(enumerate(files_list)):
         out.write(f'The dataset: {files.split("/")[-2]} has {len(first_bursts)*2} pinknoise bursts! ' + '\n')
         logging.warning(f'The dataset: {files.split("/")[-2]} has {len(first_bursts)*2} pinknoise bursts! ')
   
-        # RANSAC algorithms determines bad channels before CSD computation
-        Data.detect_bad_chans()
+        # EQI method determines bad channels before CSD computation
+        Data.detect_bad_chans(method='EQI')
         
         # epochs.drop_channels(ransac.bad_chs_ + ['M1','M2','Oz'])
         # epochs_mastoids.drop_channels(ransac.bad_chs_ + ['M1','M2','Oz'])
@@ -238,7 +224,7 @@ for i, files in tqdm(enumerate(files_list)):
             nfast = next_fast_len(n_samples)
             # to obtain sine relative angles add 0.5 pi to angles
             sw_pha = [np.angle(hilbert(C3[i,:], N=nfast)[:n_samples]) + 0.5*np.pi for i in range(min(C3.shape))]
-            pn_phase = [sw_pha[i][int(Data.sfreq*4)] for i in range(len(sw_pha))]
+            pn_phase = [sw_pha[i][int(Data.sfreq*3)] for i in range(len(sw_pha))]
             
             ax = plt.subplot(111, projection='polar')
             ax.hist(pn_phase)

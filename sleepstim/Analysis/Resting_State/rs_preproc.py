@@ -349,13 +349,16 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
 
   
 #%%
-def subject_cond_parser(file):
+def subject_cond_parser(file, study_phase='resting state'):
     # data sheet with true subject condition nights
     sheet = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
     subj_cond = np.loadtxt(sheet, delimiter=',', dtype='str', skiprows=1) 
     cond_dict = {0:'sham', 1:'up', 2:'down'}
     # find condition by night
-    sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]))
+    if study_phase=='resting state':
+        sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]))
+    elif study_phase == 'sleep':
+        sc = file.split('/')[-2].split('_')[0] + '_' + str(int(file.split('/')[-2].split('_')[1]) - 1)
     index_name = list(subj_cond[:,0]).index(sc.split('_')[0])
     cond = int(subj_cond[index_name,1::][int(sc[-1])])
     # true condition night name

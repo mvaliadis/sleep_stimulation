@@ -37,12 +37,12 @@ from os import chdir as cd
 from os import listdir
 import os, shutil
 from autoreject import Ransac
+from sklearn.ensemble import IsolationForest
 from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
                                   downsample_scaled, load_xdf, channel_parser, thresholdcrossings, 
                                   plot_confusion_matrix)
 #sns.set(style='darkgrid', font_scale=1.2)
 
-#%%
 class Data_Struct:
     def __init__(self, data, chans, chtypes, times, pinknoise_times, classif_predict, classif_times, sfreq):
         self.data = data
@@ -66,17 +66,43 @@ class Data_Struct:
         print('Creating RawArray with %s data, of length %s minutes, containing %s channels'
               % (self.data.dtype, round(data.shape[0]/sfreq/60, 2), data.shape[1]))
         
-    def detect_bad_chans(self, method='RANSAC'):
-        _, epoched_data = yasa.sliding_window(self.data.T, sf=self.sfreq, window=30)
-        info = mne.create_info(ch_names=self.chans, sfreq=self.sfreq, ch_types=self.chtypes)
-        epochs = mne.EpochsArray(epoched_data/1e6, info, tmin = 0, baseline=(None), verbose=0) 
-        epochs.set_montage(mne.channels.make_standard_montage('standard_1005'), verbose=0)
-        picks = mne.pick_types(epochs.info, eeg=True, stim=False, eog=False,
-                               include=[], exclude=[])
-        ransac = Ransac(verbose=False, picks=picks, n_jobs=-1)
-        ransac.fit_transform(epochs)
-        logging.warning(f'The RANSAC algorithm detected the following as bad channels: {ransac.bad_chs_}!')
-        self.bad_chans = ransac.bad_chs_
+    def detect_bad_chans(self, method='EQI'):
+        if method == 'EQI':
+            from sleepstim.Analysis import bad_channel_detection
+            eeg_index = [i for i, x in enumerate(self.chtypes) if x == "eeg"]
+            eeg_chans = list(np.asarray(self.chans)[eeg_index])
+            EEG_qi = bad_channel_detection.qc_calcEQI(self.data[:,eeg_index].T, self.sfreq, frange=(0.5,30))
+            # create dataframe for EQI results 
+            eqi_lab = ['avgspec_0.5-30','line_noise','root_mean_sq','max_gradient','zero-crossing_rate','kurtosis']
+            df_comb = [pd.DataFrame(data = EEG_qi[:,:,i].T, columns = eqi_lab, index = eeg_chans)
+                       for i in range(EEG_qi.shape[-1])]
+            for i in range(EEG_qi.shape[-1]): df_comb[i]['Epoch'] = i
+            df_comb2 = pd.concat(df_comb)
+            ilf = IsolationForest(contamination='auto', max_samples='auto',
+                                  verbose=0, random_state=42)
+            good = ilf.fit_predict(df_comb2.drop(['Epoch'], axis=1))
+            good[good == -1] = 0
+            df_comb2['Isolation forest score'] = good
+            # isolation forest scores by channel
+            df_if_scores = pd.DataFrame([df_comb2.loc[(self.chans[i])]['Isolation forest score'].value_counts(normalize=True) 
+                                         for i in range(len(eeg_chans))])
+            df_if_scores['Channel'] = eeg_chans
+            bads = df_if_scores['Channel'][df_if_scores[0] > 0.25].to_list()
+            logging.warning(f'The EQI method detected the following as bad channels: {bads}!')
+            self.bad_chans = bads
+        
+        ## RANSAC
+        elif method == 'RANSAC':
+            _, epoched_data = yasa.sliding_window(self.data.T, sf=self.sfreq, window=2)
+            info = mne.create_info(ch_names=self.chans, sfreq=self.sfreq, ch_types=self.chtypes)
+            epochs = mne.EpochsArray(epoched_data/1e6, info, tmin = 0, baseline=(None), verbose=0) 
+            epochs.set_montage(mne.channels.make_standard_montage('standard_1005'), verbose=0)
+            picks = mne.pick_types(epochs.info, eeg=True, stim=False, eog=False,
+                                   include=[], exclude=[])
+            ransac = Ransac(verbose=False, picks=picks, n_jobs=-1)
+            ransac.fit_transform(epochs)
+            logging.warning(f'The RANSAC algorithm detected the following as bad channels: {ransac.bad_chs_}!')
+            self.bad_chans = ransac.bad_chs_
         
     def downsample(self, new_sfreq):
         self.data = downsample_scaled(self.data, self.sfreq, new_sfreq)
@@ -205,64 +231,15 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
     # other relevant indices
     mastoids_index = np.r_[ch_names.index('M1'), ch_names.index('M2')]
 
-    # filter data     
-    if len(EEG_index) >= 64:
-        
-        
-        
-        
-        
-        # idx_split = np.array_split(EEG_index, indices_or_sections = 13)
-        data_split = np.array_split(data[:,EEG_index], indices_or_sections = 13, axis=1)
-        EEG = [] 
-        for i in range(len(data_split)):
-            EEG.append(bfr_butter_filt(data_split[i], sf, lfreq=0.3, hfreq=35))
-            time.sleep(0.1)
-            
-        EEG = np.concatenate(EEG, axis=-1)
-        
-    else:
-        EEG = bfr_butter_filt(data[:,EEG_index], sf, lfreq=0.3, hfreq=35) 
-        # filtparams = butter(4, 4, fs = sf)
-        # EEG = filtfilt(*filtparams, data[:,EEG_index], axis=0, padtype='odd')
-        
-    # filter data 
-    EOG_L = bfr_butter_filt(data[:,[ch_names.index('EOG_L')]], sf, lfreq=0.3, hfreq=35)
-    EOG_R = bfr_butter_filt(data[:,[ch_names.index('EOG_R')]], sf, lfreq=0.3, hfreq=35)
-           
-    if validation is None:
-        if line_noise_removal == 'dss':
-            EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=50, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)
-            EEG = np.concatenate([dss.dss_line(EEG[:,i], fline=100, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(EEG)))], axis=-1)
-            EOG_L, _ = dss.dss_line(EOG_L, fline=50, sfreq=sf, nfft=4*sf)
-            EOG_L, _ = dss.dss_line(EOG_L, fline=100, sfreq=sf, nfft=4*sf) 
-            EOG_R, _ = dss.dss_line(EOG_R, fline=50, sfreq=sf, nfft=4*sf)
-            EOG_R, _ = dss.dss_line(EOG_R, fline=100, sfreq=sf, nfft=4*sf) 
-        else:
-            EEG = mne.filter.notch_filter(EEG.T, Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50), 
-                                          mt_bandwidth=2, p_value=0.01, filter_length='10s').T
-            EOG_L = mne.filter.notch_filter(EOG_L.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50), 
-                                            mt_bandwidth=2, p_value=0.01, filter_length='10s')
-            EOG_R = mne.filter.notch_filter(EOG_R.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50),
-                                            mt_bandwidth=2, p_value=0.01, filter_length='10s')
-    
-    #EMG processing (butterworth filter + multitaper spectrum fit interpolation)
-    EMG_L = bfr_butter_filt(data[:,[ch_names.index('EMG_L')]], sf, lfreq=10, hfreq=100)
-    EMG_R = bfr_butter_filt(data[:,[ch_names.index('EMG_R')]], sf, lfreq=10, hfreq=100)
-    if validation is None:
-        EMG_L = mne.filter.notch_filter(np.squeeze(EMG_L), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50), 
-                                        mt_bandwidth=2, p_value=0.01, filter_length='10s')
-        EMG_R = mne.filter.notch_filter(np.squeeze(EMG_R), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*3+1,50),
-                                        mt_bandwidth=2, p_value=0.01, filter_length='10s')
-
+    EEG = data[:,EEG_index].astype(np.float64)
     # re-reference EEG channels to average of mastoids/common average/surface laplacian
     if reference=='surface laplacian':
         mne_info = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types=ch_types)
         raw = mne.io.RawArray(data.T, mne_info)
         raw.set_montage(mne.channels.make_standard_montage('standard_1005'))
         # ignore non-EEG channels! 
-        raw.pick_types(eeg=True)
-        EEG = mne.preprocessing.compute_current_source_density(raw).get_data()
+        raw.pick_types(eeg=True) 
+        EEG = mne.preprocessing.compute_current_source_density(raw).get_data().T
     elif reference!='surface laplacian' and validation!='auditory':
         if stageing==False and reference=='mastoids':
             ref_data = EEG[:,mastoids_index][..., :].mean(-1, keepdims=True)
@@ -273,7 +250,35 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
         EEG -= ref_data 
     elif reference==None or validation=='auditory':
         EEG = EEG
- 
+            
+    # filter data
+    EEG = mne.filter.filter_data(EEG.T, sfreq=sf, l_freq=0.3, h_freq=35, verbose=0).T
+    EOG_L = mne.filter.filter_data(data[:,[ch_names.index('EOG_L')]].astype(np.float64).T, sf, l_freq=0.3, h_freq=35, verbose=0).T
+    EOG_R = mne.filter.filter_data(data[:,[ch_names.index('EOG_R')]].astype(np.float64).T, sf, l_freq=0.3, h_freq=35, verbose=0).T
+    EMG_L = mne.filter.filter_data(data[:,[ch_names.index('EMG_L')]].astype(np.float64).T, sf, l_freq=10, h_freq=100, verbose=0).T
+    EMG_R = mne.filter.filter_data(data[:,[ch_names.index('EMG_R')]].astype(np.float64).T, sf, l_freq=10, h_freq=100, verbose=0).T
+    
+    if 'bipECG' in ch_names:
+        ECG = mne.filter.filter_data(data[:,[ch_names.index('bipECG')]].astype(np.float64).T, sf, l_freq=0.3, h_freq=70, verbose=0).T
+        if reference=='surface laplacian':
+            data = np.concatenate([EEG*1e3, EOG_L*1e6, EOG_R*1e6, EMG_L*1e6, EMG_R*1e6, ECG*1e6], axis=-1)
+        else:
+            data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R, ECG], axis=-1)*1e6
+    else:
+        if reference=='surface laplacian':
+            data = np.concatenate([EEG*1e3, EOG_L*1e6, EOG_R*1e6, EMG_L*1e6, EMG_R*1e6], axis=-1)
+        else:
+            data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R], axis=-1)*1e6
+        
+    if validation is None:
+        if line_noise_removal == 'dss':
+            data = np.concatenate([dss.dss_line(data[:,i], fline=50, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(data)))], axis=-1)
+            data = np.concatenate([dss.dss_line(data[:,i], fline=100, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(data)))], axis=-1)
+            data = np.concatenate([dss.dss_line(data[:,i], fline=150, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(data)))], axis=-1)
+            data = np.concatenate([dss.dss_line(data[:,i], fline=200, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(data)))], axis=-1)
+        else:
+            data = mne.filter.notch_filter(data[:,:].T, Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*4+1,50)).T
+       
     # edit channel names and types based on new selection
     if stageing==False:
         new_chans = [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
@@ -281,33 +286,10 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
     else:
         new_chans = list(np.asarray(ch_names)[EEG_index]) + [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eog" or x=="emg" or x=="ecg"]]
         new_chtypes = list(np.asarray(ch_types)[EEG_index]) + [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eog" or x=="emg" or x=="ecg"]]
-
-    if 'bipECG' in ch_names:
-        ECG = bfr_butter_filt(data[:,[ch_names.index('bipECG')]], sf, lfreq=0.3, hfreq=70)
-        if validation is None:
-            if line_noise_removal == 'dss':
-                ECG, _ = dss.dss_line(ECG, fline=50, sfreq=sf, nfft=4*sf)
-                ECG, _ = dss.dss_line(ECG, fline=100, sfreq=sf, nfft=4*sf)
-            else:
-                ECG = mne.filter.notch_filter(ECG.squeeze(), Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50),
-                                              mt_bandwidth=2, p_value=0.01, filter_length='10s')
-            # add EMG data back
-            data = np.concatenate([EEG, np.expand_dims(EOG_L, 1), np.expand_dims(EOG_R, 1), 
-                                   np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1), 
-                                   np.expand_dims(ECG,1)], axis=1).astype('float32')*1e6
-        else:
-            # add EMG data back
-            data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R, ECG], axis=1)*1e6
-    elif validation == None: 
-        # re-combine data
-        data = np.concatenate([EEG, np.expand_dims(EOG_L,1), np.expand_dims(EOG_R,1), 
-                               np.expand_dims(EMG_L,1), np.expand_dims(EMG_R,1)], axis=1)*1e6
-    else:
-        data = np.concatenate([EEG, EOG_L, EOG_R, EMG_L, EMG_R], axis=1)*1e6
     
     # create data object
     Data = Data_Struct(data, new_chans, new_chtypes, eego_times, pinknoise_timestamps, classifier_predict, classifier_timestamps, sf)
-        
+    
     return Data
 
 def save_preprocess_sleep_data(*args, path): 
