@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.signal as signal 
 import scipy.stats as stats 
+import mne 
 
 #%%
 def tkeo(data, plot=True):
@@ -56,45 +57,45 @@ def CMC(signal1, signal2, sf, l_foi=2, h_foi=40, plot=True):
         
     return f[l_foi:h_foi], coh[l_foi:h_foi]   
 
-#%%
-def process_rawXDF(file):
+def process_rawXDF(file):   
+    # load data
     streams = liesl.XDFFile(file)
+    
+    ## read EEG/EMG data
+    eego = streams["eego"]
+    sf = eego.nominal_srate
     
     ## read marker information
     marker = streams['reiz-marker']
     TMStimes = [marker.time_stamps[i] for i,v in enumerate(marker.time_series) if \
                 'cse_' in v[0]][1::]
-        
-    ## read EEG/EMG data
-    eego = streams["eego"]
     
-    ## 
-    sf = eego.nominal_srate
-    
-    ##
+    ## checks here for data length and if intensity % given for pulse
+    if eego.time_series.shape[0]/sf < 50:
+        return [], np.empty(len(TMStimes)), sf, [], [], np.empty(len(TMStimes))
+    if marker.time_series[0][0] != '':
+        intensity = int(marker.time_series[0][0].split('_')[-1])
+    else:
+        intensity = []
+        return [], np.empty(len(TMStimes)), sf, [], [], np.empty(len(TMStimes))
+
+    ## label data
     edcix = eego.channel_labels.index("chan_7")
     c3ix = eego.channel_labels.index("C3")
     
     ## match clocks
     eegoTMStimes = [np.argmin(np.abs(eego.time_stamps - ts)) for ts in TMStimes]
         
-    ## get EMG data
+    ## get EMG/C3 data
     edcdat = eego.time_series[:,edcix]*1e6
+    # edcdat = mne.filter.notch_filter(edcdat.astype('float64'),sf,freqs=(50,100,150,200)) 
     c3dat = eego.time_series[:,c3ix]*1e6
-    # b, a = signal.iircomb(w0=50, Q=10, ftype='notch', fs=sf)
-    # edcdat_f = signal.filtfilt(b, a, edcdat)
-    # c3dat_f = signal.filtfilt(b, a, c3dat)
-    # d, c = signal.iircomb(w0=100, Q=10, ftype='notch', fs=sf)
-    # edcdat_f = signal.filtfilt(d, c, edcdat_f)
-    # c3dat_f = signal.filtfilt(d, c, c3dat_f)
+    # c3dat = mne.filter.notch_filter(c3dat.astype('float64'),sf,freqs=(50,100,150,200))
+
+    ## CMC between EDC_R & C3
+    cmc = CMC(edcdat, c3dat, sf=sf, l_foi=10, h_foi=30, plot=False)
     
-    ## Plot CMC between EDC_R & C3
-    cmc = CMC(edcdat, c3dat, sf=sf, l_foi=10, h_foi=30, plot=True)
-    
-    ### Plot TMS artifact 
-    # print(TMStimes)
-    # print(eego.time_stamps[eegoTMStimes])
-    # print(TMStimes - eego.time_stamps[eegoTMStimes])
+    # ## Plot TMS artifact 
     # plt.figure()
     # plt.plot(eego.time_stamps,c3dat)
     # plt.plot(TMStimes, [0]*len(TMStimes), 'or')
@@ -102,19 +103,33 @@ def process_rawXDF(file):
     edcepochs = np.nan*np.zeros((len(eegoTMStimes), 200))
     for i, ts in enumerate(eegoTMStimes):
         c3ep = np.abs(c3dat[ts-100:ts+100])
-        # tartifact = np.argmax(c3ep)
-        tartifact = np.argmax(tkeo(c3ep, plot=True))
+        # use TKEO to determine peak coil artifact location in EEG
+        tartifact = np.argmax(tkeo(c3ep, plot=False))
         ts_corrected = (ts-100)+tartifact
-        edcepochs[i,:] = edcdat[ts_corrected-100:ts_corrected+100]
-        
-    Vpp = np.ptp(edcepochs[:, 105:160], axis = 1)
+        # if any timestamp doesn't last 200 time points, correct for this and add nans to trial
+        last_ts = int((eego.time_stamps - eego.time_stamps[0])[-1] * sf)
+        if ts_corrected+100 > last_ts:
+            add_nans = np.nan*np.zeros(ts_corrected+100 - last_ts)
+            edcepochs[i,:] = np.concatenate([edcdat[ts_corrected-100:last_ts] - np.median(edcdat[ts_corrected-100:last_ts]), add_nans], axis=0)
+        else:
+            edcepochs[i,:] = edcdat[ts_corrected-100:ts_corrected+100] - np.median(edcdat[ts_corrected-100:ts_corrected+100])
+    
+    # if less than 20 trials, add nans to remaining VPPs
+    if min(edcepochs.shape) < 21:
+        add_nans = np.nan*np.zeros(20 - min(edcepochs.shape))
+        Vpp = np.concatenate([np.ptp(edcepochs[:, 105:160], axis = 1), add_nans], axis=0)
+    else:
+        Vpp = np.ptp(edcepochs[:, 105:160], axis = 1)
+      
+    # flag MEPs that don't exceed 3 std of pre-stimulus signal
+    pre_thres_bool = 3*np.std(abs(edcepochs[:, 0:100]), axis=1) < Vpp
     
     # ## Plot EDC response
     # plt.figure()
     # plt.title(" ".join(file.split('/')[-2::]))
     # plt.plot(np.arange(-max(edcepochs.shape)/2, max(edcepochs.shape)/2)/sf, np.mean(edcepochs,0))
     
-    return edcepochs, Vpp, sf, cmc
+    return edcepochs, Vpp, sf, cmc, intensity, pre_thres_bool
 
 #%%
 
@@ -123,13 +138,16 @@ files = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(mai
 results = defaultdict(lambda: [])
 for file in files:
     print(file)
-    subjname = str(file).split("/")[-2]
+    subjname = str(file).split("/")[-2]             
     condition = str(file).split('.')[0].split('/')[-1]
-    edcepochs, Vpp, sf, cmc = process_rawXDF(file)
+    edcepochs, Vpp, sf, cmc, intensity, pre_thres_bool = process_rawXDF(file)
     results["Vpp"].extend(Vpp)
+    results["Vpp_True"].extend(pre_thres_bool)
+    results["logVpp"].extend(np.log(Vpp))
+    results["Intensity"].extend([intensity])
     results["Subject"].extend([subjname]*len(Vpp))
     results["Condition"].extend([condition]*len(Vpp))
-    results["CMC"].extend([cmc]*len(Vpp))
+    # results["CMC"].extend([cmc]*len(Vpp))
 
     plt.figure()
     plt.title(" ".join(file.split('/')[-2::]))
