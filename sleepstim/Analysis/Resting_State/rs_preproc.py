@@ -27,7 +27,7 @@ from scipy.stats import skewnorm
 import scipy.signal as signal
 from statsmodels.api import tsa
 import statsmodels
-import easyEEG.structure as eeg_stats
+# import easyEEG.structure as eeg_stats
 # from PCIst.PCIst import pci_st
 from meegkit.detrend import detrend
 import pyprep
@@ -359,6 +359,8 @@ def subject_cond_parser(file, study_phase='resting state'):
         sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]))
     elif study_phase == 'sleep':
         sc = file.split('/')[-2].split('_')[0] + '_' + str(int(file.split('/')[-2].split('_')[1]) - 1)
+    elif study_phase=='tms':
+        sc = file.split('/')[-2] + '_' + str(int(file.split('/')[-1].split('_')[1]))
     index_name = list(subj_cond[:,0]).index(sc.split('_')[0])
     cond = int(subj_cond[index_name,1::][int(sc[-1])])
     # true condition night name
@@ -367,21 +369,33 @@ def subject_cond_parser(file, study_phase='resting state'):
     return condition_night
 
 #%%
-def check_match_prepost_data_elements(path):
-    files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
-    pre_post = [files_list[idx].split('/')[-1].split('_')[2] for idx, file in enumerate(files_list)]
-    pre_idx, post_idx = np.where(np.asarray(pre_post) == 'pre')[0], np.where(np.asarray(pre_post) == 'post')[0]
+def check_match_prepost_data_elements(path, files=None, dtype='slalom'):
+    if files is not None:
+        files_list = files
+    else:
+        files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
+    if dtype == 'rs':
+        pre_post = [files_list[idx].split('/')[-1].split('_')[2] for idx, file in enumerate(files_list)]
+        pre_idx, post_idx = np.where(np.asarray(pre_post) == 'pre')[0], np.where(np.asarray(pre_post) == 'post')[0]
+    elif dtype == 'slalom':
+        pre_post = [files_list[idx].split('/')[-1].split('_')[0] for idx, file in enumerate(files_list)]
+        pre_idx = np.where([pre_post[i].startswith('pre') for i in range(len(pre_post))])[0]
+        post_idx = np.where([pre_post[i].startswith('post') for i in range(len(pre_post))])[0]
     pre, post = np.asarray(files_list)[pre_idx], np.asarray(files_list)[post_idx] 
     all_elem = np.asarray([(x,y) for x in pre for y in post])
-    exist = [elem[0].split('/')[-1].split('_')[0:2] == elem[1].split('/')[-1].split('_')[0:2]
-             for elem in all_elem]   
+    if dtype == 'rs':
+        exist = [elem[0].split('/')[-1].split('_')[0:2] == elem[1].split('/')[-1].split('_')[0:2]
+                 for elem in all_elem]   
+    elif dtype == 'slalom':
+        exist = [elem[0].split('/')[-1][-16::] == elem[1].split('/')[-1][-16::] for elem in all_elem]
+             
     exist_pre_files, exist_post_files = all_elem[exist][:,0], all_elem[exist][:,1]
     
     if len(exist_pre_files) > 0 and len(exist_post_files) > 0:
         return exist_pre_files, exist_post_files
     else:
-        raise TypeError('No subject entries align! Please check whether the paths have any corresponding data and hypnogram files')
- 
+        raise TypeError('No subject entries align! Please check whether the paths have any corresponding files')
+        
 #%%
 ## Plot PSD function 
 def plot_psd(psd, freqs, freq_range = (1,30), foi= (4,8), dB=True, ci=True):

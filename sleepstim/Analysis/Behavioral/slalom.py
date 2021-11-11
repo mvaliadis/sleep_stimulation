@@ -15,17 +15,18 @@ import pingouin as pg
 from scipy.signal import hilbert
 from sklearn.metrics import mean_squared_error
 import seaborn as sns
+from sleepstim.Analysis.Resting_State.rs_preproc import check_match_prepost_data_elements
 sns.set_theme(style="whitegrid")
+path = r'/media/administrator/data/Study_1_data/Pre_post_data'
 
-def slalom_results(path = r'/media/administrator/data/Study_1_data/Behavioral/LM', plot=False):
-    files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
+#%%
+def slalom_results(path, plot=False):
+    files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files if '.csv' in i])  
     sheet = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
     subj_cond = np.loadtxt(sheet, delimiter=',', dtype='str', skiprows=1) 
     cond_dict = {0:'sham', 1:'up', 2:'down'}
     # sort files to make sure blocks are consistent between subject nights
-    pre_post = [files_list[idx].split('/')[-1].split('_')[0][0:3] for idx, file in enumerate(files_list)]
-    pre_idx, post_idx = np.where(np.asarray(pre_post) == 'pre')[0], np.where(np.asarray(pre_post) == 'pos')[0]
-    pre, post = np.asarray(files_list)[pre_idx], np.asarray(files_list)[post_idx]   
+    pre, post = check_match_prepost_data_elements(path, files=files_list, dtype='slalom')
     slalom_dict = []
     for j, (pre_f, post_f) in enumerate(zip(pre, post)):
         if pre_f.split('/')[-1][-16::] == post_f.split('/')[-1][-16::]:
@@ -127,9 +128,9 @@ def violin_plot(df):
     sns.despine(left=True, bottom=True)
     
 #%%
-    
+path = r'/media/administrator/data/Study_1_data/Pre_post_data'
 if __name__ == '__main__':
-    df = slalom_results() 
+    df = slalom_results(path) 
     slalom_stats(df)
     violin_plot(df)
 

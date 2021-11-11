@@ -35,7 +35,7 @@ for i, files in enumerate(files_list):
 #%%
 ## Step 2 -- Load in epoched data and compute connectivity/power analysis/etc.
 path = '/media/administrator/data/Study_1_data/Pre-processed_data_resting_state/'
-pre_files, post_files = check_match_prepost_data_elements(path)
+pre_files, post_files = check_match_prepost_data_elements(path, files=None, dtype='rs')
 for j, (pre_f, post_f) in enumerate(zip(pre_files, post_files)):
     if pre_f.split('/')[-1].split('_')[0:2] == post_f.split('/')[-1].split('_')[0:2]:
         print(j, pre_f.split('/')[-1], post_f.split('/')[-1])
