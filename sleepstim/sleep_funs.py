@@ -28,6 +28,8 @@ import pyxdf
 import xml.etree.ElementTree as ET
 import numpy as np
 import logging
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.metrics import precision_recall_curve
 
 #%%
 ## NSRR Cleveland Sleep Dataset Classifier training functions
@@ -381,9 +383,12 @@ def unravel_hypnogram_visbrain(hypnogram_file, data=None):
    
     # sanity check - does length of hypnogram match data epoch length
     if data is not None:
+        if abs(data.shape[0] - len(hypnogram)) < 5:
+            # hypnogram = np.pad(hypnogram, mode = 'edge', pad_width = abs(data.shape[0] - len(hypnogram)))
+            hypnogram = np.concatenate([hypnogram, np.zeros(abs(data.shape[0] - len(hypnogram)))])
         if data.shape[0] != len(hypnogram):
-            raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs in the data')
-    
+            print('WARNING - The length of the scaled hypnogram does not match the amount of total epochs in the data') #raise ValueError
+     
     return hypnogram 
 
 
@@ -586,16 +591,25 @@ def plot_multiclass_ROC(level, path, y_test_all, y_score_all, n_classes = 5, mul
     tpr = dict()
     roc_auc = dict()
     n_classes = 5  #class labels
+    enc = OneHotEncoder(handle_unknown='ignore')
+    enc.fit(np.unique(y_test_all).reshape(-1,1))
+    y_test_all = enc.transform(y_test_all.reshape(-1,1)).toarray()
+    
     for i in range(n_classes):
-        fpr[i], tpr[i], _ = roc_curve(y_test_all==i, y_score_all[:, i])
+        fpr[i], tpr[i], _ = roc_curve(y_test_all[:,i], y_score_all[:, i])
         roc_auc[i] = auc(fpr[i], tpr[i])
     
-    # Compute micro-average ROC curve and ROC area - take this calc. with a grain of salt....   
+    # Compute micro-average ROC curve and ROC area   
     # to-do research differences between micro and macro ROC averages                                                                                                                      
     for i in range(n_classes):
-        fpr["micro"], tpr["micro"], _ = roc_curve(y_test_all==i, y_score_all[:,i].ravel())
+        fpr["micro"], tpr["micro"], _ = roc_curve(y_test_all[:,i].ravel(), y_score_all[:,i].ravel())
         roc_auc["micro"] = auc(fpr["micro"], tpr["micro"])
-            
+    
+    ## Precision recall calculation
+    precision_recall_thresholds = [precision_recall_curve(y_test_all[:,i], y_score_all[:, i]) 
+                                   for i in range(n_classes)] 
+    # precision, recall, thresholds =[ [i,j,k] for  i,j,k in zip(precision_recall_thresholds)]
+    
     # Plot of a ROC curve for a specific class
     if multi_class==False:  
         stage = int(input('Please select the sleep stage ROC of interest (0,1,2,3,4): '))
@@ -610,6 +624,13 @@ def plot_multiclass_ROC(level, path, y_test_all, y_score_all, n_classes = 5, mul
         plt.title(f'ROC: Sleep Stage {stage} ')
         plt.legend(loc="lower right")
         plt.show()
+        
+        # ## Precision/recall curve
+        # plt.figure()
+        # plt.plot(precision_recall_thresholds[stage][-1], precision_recall_thresholds[stage][0][:-1], label='precision')
+        # plt.plot(precision_recall_thresholds[stage][-1], precision_recall_thresholds[stage][1][:-1], label='recall')
+        # plt.legend()
+        # plt.show()
     else:
         # First aggregate all false positive rates
         all_fpr = np.unique(np.concatenate([fpr[i] for i in range(n_classes)]))
@@ -638,7 +659,8 @@ def plot_multiclass_ROC(level, path, y_test_all, y_score_all, n_classes = 5, mul
                        ''.format(roc_auc["macro"]),
                  color='navy', linestyle=':', linewidth=4)
         
-        colors = cycle(['aqua', 'darkorange', 'cornflowerblue'])
+        #colors = cycle(['aqua', 'darkorange', 'cornflowerblue'])
+        colors = cycle(['c', 'm', 'y', 'darkorange','aqua','k'])
         for i, color in zip(range(n_classes), colors):
             plt.plot(fpr[i], tpr[i], color=color, lw=2,
                      label='ROC curve of class {0} (area = {1:0.2f})'

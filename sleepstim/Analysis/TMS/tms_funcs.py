@@ -22,8 +22,9 @@ from tqdm import tqdm
 import lmfit
 import seaborn as sns
 from sleepstim.Analysis.Resting_State.rs_preproc import subject_cond_parser
+import pickle
+from scipy.integrate import trapz, cumtrapz
 
-#%%
 def tkeo(data, normalize=True, plot=True):
     """
     Basic z-scored and normalized (if desired) Teager-Kaiser Energy Operator
@@ -50,21 +51,6 @@ def tkeo(data, normalize=True, plot=True):
         # plt.legend()
         plt.show()
     return emgE 
-
-def CMC(signal1, signal2, sf, l_foi=2, h_foi=40, plot=True): 
-    if plot:
-        plt.figure()
-        coh, f = plt.cohere(signal1, signal2, NFFT=int((2/l_foi)*sf), Fs=sf)
-        plt.xlabel('frequency [Hz]')
-        plt.ylabel('Coherence')
-        plt.title('CMC between C3 and EDC_R')
-        plt.xlim(l_foi, h_foi)
-        plt.show()
-    else:
-        f, coh = signal.coherence(signal1, signal2, fs=sf, nperseg=(2/l_foi)*sf, 
-                                  detrend='constant')
-        
-    return f[l_foi:h_foi], coh[l_foi:h_foi]   
 
 def process_rawXDF(file, paired=False):   
     # load data
@@ -109,7 +95,8 @@ def process_rawXDF(file, paired=False):
     # c3dat = mne.filter.notch_filter(c3dat.astype('float64'),sf,freqs=(50,100,150,200))
 
     ## CMC between EDC_R & C3
-    cmc = CMC(edcdat, c3dat, sf=sf, l_foi=10, h_foi=30, plot=False)
+    # cmc = CMC(edcdat, c3dat, sf=sf, foi=(3, 40), plot=False, method='multitaper_conn')
+    cmc = []
     
     # ## Plot TMS artifact 
     # plt.figure()
@@ -228,6 +215,7 @@ maindir = '/media/administrator/data/Study_1_data/Pre_post_data/'
 def TMS_results(maindir):  
     files = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(maindir) for i in files if 'cse' in i or 'icf' in i or 'sici' in i])  
     results = defaultdict(lambda: [])
+    mep_data = []
     for file in tqdm(files):
         print(file)
         subjname = str(file).split("/")[-2]             
@@ -243,6 +231,16 @@ def TMS_results(maindir):
             paired = False
             protocol = " ".join(str(file).split('.')[0].split('/')[-1].split('_')[2:4])
         edcepochs, Vpp, sf, cmc, intensity, bool_mep = process_rawXDF(file, paired=paired)
+        
+        if edcepochs == []:
+            edcepochs = np.ones([len(bool_mep), 200])*np.nan
+         
+        if edcepochs.shape[0] != len(bool_mep):
+            diff = len(bool_mep) - edcepochs.shape[0]
+            edcepochs = np.concatenate([edcepochs, np.ones([diff, 200])*np.nan], 0)
+            
+        mep_data.append(edcepochs)
+        
         results["Vpp"].extend(Vpp)
         results["Vpp_True"].extend(bool_mep)
         results["logVpp"].extend(np.log(Vpp))
@@ -255,17 +253,57 @@ def TMS_results(maindir):
         results["File"].extend([rec]*len(Vpp))
         # results["CMC"].extend([cmc]*len(Vpp))
     
-        # plt.figure()
-        # plt.title(" ".join(file.split('/')[-2::]))
-        # plt.plot(np.arange(-max(edcepochs.shape)/2, max(edcepochs.shape)/2)/sf, np.mean(edcepochs,0))
-        # if paired:
-        #     entry = 0.0125
-        # else:
-        #     entry = 0.0115
-        # plt.vlines(entry, ymin=np.mean(edcepochs,0).min(), ymax=np.mean(edcepochs,0).max())
-        # plt.vlines(0.060, ymin=np.mean(edcepochs,0).min(), ymax=np.mean(edcepochs,0).max())
-        
+        def plot_mep(edcepochs, file, paired=False):
+            plt.figure()
+            plt.title(" ".join(file.split('/')[-2::]))
+            plt.plot(np.arange(-max(edcepochs.shape)/2, max(edcepochs.shape)/2)/sf, np.mean(edcepochs,0))
+            if paired:
+                entry = 0.0125
+            else:
+                entry = 0.0115
+            plt.vlines(entry, ymin=np.mean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, ymax=np.mean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1, colors='r', linestyles='dotted')
+            plt.vlines(0.060, ymin=np.mean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, ymax=np.mean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1, colors='r', linestyles='dotted')
+            plt.xlim(entry - 0.005, .065)
+            plt.ylim(np.mean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, np.mean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1)
+            plt.xlabel('Time (s)')
+            plt.ylabel('Voltage (uV)')
+            
     res_df = pd.DataFrame(results)
+    mep_data = np.concatenate(mep_data)
+    
+    ### Plotting average MEPs
+    sns.set_theme(color_codes=True)
+    conds = list(dict.fromkeys(list(res_df.Condition)))
+    sessions = list(dict.fromkeys(list(res_df.Session)))  
+    protocol = list(dict.fromkeys(list(res_df.Protocol)))      
+    for p in protocol:
+        fig, axs = plt.subplots(2,3, sharex=True, sharey=False)
+        fig.suptitle('Axes values are scaled individually by default')
+        df_p = res_df.loc[res_df.Protocol == p]
+        for i,c in enumerate(conds):
+            df_c = df_p.loc[df_p.Condition == c]
+            for s, session in enumerate(sessions):
+                df_session = df_c.loc[df_c.Session == session]
+                dat = np.nanmean(mep_data[list(df_session.loc[df_session["Vpp_True"]==True].index), :], 0)
+                axs[s, i].plot(np.arange(0, 200, 1),
+                               dat)
+                axs[s, i].set_title(f'{p} {c} {session}')
+                
+                if 'icf' in p or 'sici' in p:
+                    entry = 115
+                else:
+                    entry = 115
+                
+                axs[s, i].set_xlabel('Time (ms)')
+                axs[s, i].set_ylabel('Voltage (uV)')
+        
+                axs[s, i].set_xlim([entry, 165])
+                axs[s, i].set_ylim([dat[entry:165].min()*1.1, dat[entry:165].max()*1.1])
+
+                # fig.tight_layout()
+                plt.show()
+
+    #%%
     
     # drop icf & sici
     ind_drop = res_df[res_df['Protocol'].apply(lambda x: x.startswith('sici') or x.startswith('icf'))].index
@@ -273,7 +311,7 @@ def TMS_results(maindir):
     
     # group 90 - 150 I/O MEP responses 
     io_df['Protocol'] = io_df['Protocol'].str.replace('cse', '', regex=True).astype(int)
-    group_pre_post = io_df[io_df['Vpp_True']==True].groupby(['Subject','Condition','Session','Protocol']).mean()
+    group_pre_post = io_df[io_df['Vpp_True']==True].groupby(['Subject','Condition','Session','Protocol','Intensity']).mean()
     
     # normalize meps by subject trial 
     def mep_normalization(mep_values : list):
@@ -292,32 +330,88 @@ def TMS_results(maindir):
     # labels = np.concatenate(labels)
     
     group_pre_post['Normalized MEPs'] = norm_mep
-
-    final_res = group_pre_post.groupby(['Condition','Session','Protocol']).mean()['Normalized MEPs'].reset_index()
+        
+    ## group by condition, session, protocol 
+    final_res = group_pre_post.groupby(['Condition','Session','Protocol','Intensity']).mean()['Normalized MEPs'].reset_index()
+    final_res2 = group_pre_post.groupby(['Subject','Condition','Session','Protocol','Intensity']).mean()['Normalized MEPs'].reset_index()
     
-    ##### Plot I/O curves 
-    sns.set_theme(color_codes=True)
-    plt.figure()
-    
-    for idx, condition in enumerate(zip((['up_pre','up_post'],['down_pre','down_post'],['sham_pre','sham_post']))):
-        print(idx, condition)
-        sns.regplot(x='Protocol', y="Normalized MEPs", 
-                    data=group_pre_post[group_pre_post['Condition']==condition[0][0].split('_')[0]][group_pre_post['Session']==condition[0][0].split('_')[1]],
-                    scatter_kws={"s": 80}, order=4, ci=95, x_estimator=np.mean, label=condition[0][0])
-        sns.regplot(x='Protocol', y="Normalized MEPs", 
-                    data=group_pre_post[group_pre_post['Condition']==condition[0][1].split('_')[0]][group_pre_post['Session']==condition[0][1].split('_')[0]],
-                    scatter_kws={"s": 80}, order=4, ci=95, x_estimator=np.mean, label=condition[0][1])
-        plt.legend()
-    
-    ## Sigmoidal plotting needs work, above is a linear solution with 4th degree polynomial fit
-    # ax1 = io_curve(norm_mep, optimize=True, plot=True)
-    
-    return final_res
+    return final_res, final_res2, group_pre_post
 
 
 #%%
 # maindir = '/media/administrator/data/Study_1_data/Pre_post_data/'
 if __name__ == '__main__':
-    TMS_results(maindir)
+    run = input('Do you wish to restart the TMS analysis? ')
+    if run == 'yes':
+        final_res, group_pre_post = TMS_results(maindir)
+        save_path = '/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_session.p'
+        pickle.dump(final_res, open(save_path, "wb")) 
+        final_res.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_session.csv')
+        
+        save_path = '/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results.p'
+        pickle.dump(group_pre_post, open(save_path, "wb")) 
+        group_pre_post.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results.csv')
+    else:
+        group_pre_post = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results.p', 'rb'))
+        final_res = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_session.p', 'rb'))
+            
+    ##### Plot I/O curves 
+    sns.set_theme(color_codes=True)
+  
+    AUC_diff = []
+    for idx, condition in enumerate(zip((['up_pre','up_post'],['down_pre','down_post'],['sham_pre','sham_post']))):
+        print(idx, condition)
+        plt.figure()
+        ax = sns.regplot(x='Protocol', y="Normalized MEPs", 
+                    data=final_res[final_res['Condition']==condition[0][0].split('_')[0]][final_res['Session']==condition[0][0].split('_')[1]],
+                    scatter_kws={"s": 80}, order=3, ci=95, x_estimator=np.mean, label=condition[0][0])
+        x_points = ax.get_lines()[-1].get_xdata()
+        y_points = ax.get_lines()[-1].get_ydata()
+        ## AUC calculation - compute difference post - pre x condition
+        AUC = trapz(x = x_points, y = y_points, dx=x_points[1] - x_points[0]) / (len(x_points) - 1)
+        
+        ax2 = sns.regplot(x='Protocol', y="Normalized MEPs", 
+                    data=final_res[final_res['Condition']==condition[0][1].split('_')[0]][final_res['Session']==condition[0][1].split('_')[1]],
+                    scatter_kws={"s": 80}, order=3, ci=95, x_estimator=np.mean, label=condition[0][1])
+        
+        x_points = ax2.get_lines()[-1].get_xdata()
+        y_points = ax2.get_lines()[-1].get_ydata()
+        ## AUC calculation - compute difference post - pre x condition
+        AUC2 = trapz(x = x_points, y = y_points, dx=x_points[1] - x_points[0]) / (len(x_points) - 1)
+        
+        plt.legend()
+        plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/IO_curve_{condition[0][0].split("_")[0]}.jpg')
+        
+        AUC_diff.append(AUC - AUC2)
+        
+         # ## not super important
+        # s50 = x_points.flat[np.abs(y_points - .5).argmin()]
+        # s50_y = y_points.flat[np.abs(y_points - .5).argmin()]
+        # plt.vlines(s50, ymax=1, ymin=0, linestyles='dashed')
+       
+    
+    ## Sigmoidal plotting needs work, above is a linear solution with 3rd degree polynomial fit
+    # ax1 = io_curve(final_res['Normalized MEPs'][0:7], optimize=False, plot=True)
     
     
+    #%%
+    # subjects = list(dict.fromkeys(list(final_res2.Subject)))
+    # conds  = list(dict.fromkeys(list(final_res2.Condition)))
+    # sessions = list(dict.fromkeys(list(final_res2.Session)))        
+    # for s in subjects:
+    # # plt.figure()
+    # df_s = final_res2.loc[final_res2.Subject == s]
+    # for c in conds :
+    #     df_c = df_s.loc[df_s.Condition == c]
+    #     for session in sessions:
+    #         df_session = df_c.loc[df_s.Session == c]
+    #         plt.title(s)
+    #         ax = sns.regplot(x='Protocol', y="Normalized MEPs", 
+    #                          data=df_session,
+    #                          scatter_kws={"s": 80}, order=3, ci=95, x_estimator=np.mean, label=c)
+    #         # x_points = ax.get_lines()[-1].get_xdata()
+    #         # y_points = ax.get_lines()[-1].get_ydata()
+    #         # ## AUC calculation - compute difference post - pre x condition
+    #         # AUC = trapz(x = x_points, y = y_points, dx=x_points[1] - x_points[0]) / (len(x_points) - 1)
+    
+    #     plt.show()

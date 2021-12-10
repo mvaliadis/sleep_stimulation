@@ -358,7 +358,8 @@ def subject_cond_parser(file, study_phase='resting state'):
     if study_phase=='resting state':
         sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]))
     elif study_phase == 'sleep':
-        sc = file.split('/')[-2].split('_')[0] + '_' + str(int(file.split('/')[-2].split('_')[1]) - 1)
+        #sc = file.split('/')[-2].split('_')[0] + '_' + str(int(file.split('/')[-2].split('_')[1]) - 1)
+        sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]) - 1)
     elif study_phase=='tms':
         sc = file.split('/')[-2] + '_' + str(int(file.split('/')[-1].split('_')[1]))
     index_name = list(subj_cond[:,0]).index(sc.split('_')[0])

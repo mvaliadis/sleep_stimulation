@@ -44,11 +44,6 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
     output : TYPE, optional
         DESCRIPTION. The default is 'avg'.
 
-    Raises
-    ------
-    ValueError
-        DESCRIPTION.
-
     Returns
     -------
     itc_data : TYPE
@@ -138,7 +133,9 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
         if save_path is not None:
             itc.savefig(save_path + '_itc_plot.png')
         itc_data = np.asarray(itc.itc.data.tolist())
-        
+    elif itc_calculation == None:
+        itc_data = []
+          
     return itc_data, Sxx
 
 # def tfr_plot(Data, Sxx, itc):

@@ -36,6 +36,7 @@ from meegkit.utils import demean, normcol
 from os import chdir as cd
 from os import listdir
 import os, shutil
+from mne_connectivity import spectral_connectivity
 from autoreject import Ransac
 from sklearn.ensemble import IsolationForest
 from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
@@ -165,7 +166,7 @@ class Data_Struct:
         
 #%%
          
-def _pre_process_sleep_data(files, reference='mastoids', validation=None, stageing=False, line_noise_removal='spectrum_fit'):
+def _pre_process_sleep_data(files, low_density = False, reference='mastoids', validation=None, stageing=False, line_noise_removal='spectrum_fit'):
     """
 
     Parameters
@@ -228,6 +229,17 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
                           ch_names.index('O2'), ch_names.index('M1'), ch_names.index('M2')]
     else:
         EEG_index = [i for i, x in enumerate(ch_types) if x == "eeg"]
+    # to reduce amount of channels in high density 
+    if low_density:
+        EEG_index = np.r_[ch_names.index('Fp1'), ch_names.index('Fpz'), ch_names.index('Fp2'), 
+                          ch_names.index('F7'), ch_names.index('F3'), ch_names.index('Fz'), 
+                          ch_names.index('F4'), ch_names.index('F8'), ch_names.index('Cz'), 
+                          ch_names.index('C3'), ch_names.index('C4'), ch_names.index('T7'), 
+                          ch_names.index('T8'), ch_names.index('P3'), ch_names.index('Pz'), 
+                          ch_names.index('P4'), ch_names.index('P7'), ch_names.index('P8'),
+                          ch_names.index('O1'), ch_names.index('Oz'), ch_names.index('O2'), 
+                          ch_names.index('M1'), ch_names.index('M2')]          
+    
     # other relevant indices
     mastoids_index = np.r_[ch_names.index('M1'), ch_names.index('M2')]
 
@@ -280,12 +292,12 @@ def _pre_process_sleep_data(files, reference='mastoids', validation=None, stagei
             data = mne.filter.notch_filter(data[:,:].T, Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*4+1,50)).T
        
     # edit channel names and types based on new selection
-    if stageing==False:
-        new_chans = [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
-        new_chtypes = [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
-    else:
+    if low_density==True or stageing==True:
         new_chans = list(np.asarray(ch_names)[EEG_index]) + [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eog" or x=="emg" or x=="ecg"]]
         new_chtypes = list(np.asarray(ch_types)[EEG_index]) + [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eog" or x=="emg" or x=="ecg"]]
+    else:
+        new_chans = [ch_names[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]
+        new_chtypes = [ch_types[i] for i in [j for j, x in enumerate(ch_types) if x == "eeg" or x == "eog" or x=="emg" or x=="ecg"]]     
     
     # create data object
     Data = Data_Struct(data, new_chans, new_chtypes, eego_times, pinknoise_timestamps, classifier_predict, classifier_timestamps, sf)
@@ -298,7 +310,7 @@ def save_preprocess_sleep_data(*args, path):
     # save as pickle file
     pickle.dump(var, open(path, "wb"))  
       
-def preprocess_sleep_data(path, save=True, reference='mastoids', validation=None, stageing=False):
+def preprocess_sleep_data(path, low_density = False, save=True, reference='mastoids', validation=None, stageing=False):
     files_list = [os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files]
     for i, files in enumerate(files_list):
         # select subject ID + cond identifier
@@ -329,16 +341,18 @@ def preprocess_sleep_data(path, save=True, reference='mastoids', validation=None
             new_path = new_path
         elif validation is None:
             new_path = save_path + subjID_cond + '_preproc_data.p'
+        elif validation == 'auditory':
+            new_path ='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/' + subjID_cond + '_preproc_data_av.p'
         if not os.path.exists(new_path):
             # check if a second recording file exists, then combine after preprocessing
             if number == 1:
                 print(f'Pre-processing the dataset for subject, condition, and recording #: {subjID_cond + "_" + str(number)} !')
-                Data = _pre_process_sleep_data(files, reference=reference, validation=validation, stageing=stageing)
+                Data = _pre_process_sleep_data(files, low_density=low_density, reference=reference, validation=validation, stageing=stageing)
             elif number > 1:
                 if validation == None:
                     new_path = save_path + subjID_cond + '_preproc_data_' + files.split('/')[-1].split('.')[0][-1] + '.p'
                 print(f'Pre-processing an additional file for the following dataset: {subjID_cond} which will be contained in the following path: {new_path} !')
-                Data = _pre_process_sleep_data(files, reference=reference, validation=validation, stageing=stageing)
+                Data = _pre_process_sleep_data(files, low_density=low_density, reference=reference, validation=validation, stageing=stageing)
             if save:
                 save_preprocess_sleep_data(Data, path=new_path)
             else:
@@ -609,11 +623,12 @@ def check_match_data_hypno_elements(data_path, hypno_path):
     data_elem = sorted(os.listdir(data_path))
     hypno_elem = sorted(os.listdir(hypno_path))
     all_elem = np.asarray([(x,y) for x in data_elem for y in hypno_elem])
-    ################### -- NEED TO CORRECT -- ###################  
-    exist = [np.logical_and(elem[0].split('_')[0] + '_' + elem[0].split('_')[1] == 
-                            elem[1].split('_')[0] + '_' + elem[1].split('_')[1], 
-                            lev.ratio(elem[0].split('.')[0], 
-                                      elem[1].split('.')[0]) > 0.7)
+    ################### -- WORKS! -- ###################  
+    exist = [elem[0].split('_')[0] + '_' + elem[0].split('_')[1] + '_' + elem[0].split('_')[-1].split('.')[0] == 
+             elem[1].split('_')[0] + '_' + elem[1].split('_')[1] + '_' + elem[1].split('_')[-1].split('.')[0]
+             if str(2) in elem[0].split("_")[-1] or str(2) in elem[1].split("_")[-1] else 
+             elem[0].split('_')[0] + '_' + elem[0].split('_')[1]  == 
+             elem[1].split('_')[0] + '_' + elem[1].split('_')[1]  
              for elem in all_elem]
     exist_exp_files, exist_hyp_files = all_elem[exist][:,0], all_elem[exist][:,1]
     
@@ -1107,6 +1122,19 @@ def permutation_cluster_test_plot(epochs : list, times, T_obs, clusters, cluster
 
 # permutation_cluster_test_plot([epochs_up.get_data()*1e6, epochs_down.get_data()*1e6, epochs_sham.get_data()*1e6], 
 #                               epochs_up.times, T_obs, clusters, cluster_p_values, H0)
+
+#%%
+
+def PLV(epochs, ch_names, sf, foi = (0.5, 2)):
+    indices = (np.ones(len(ch_names))*ch_names.index('C3'),           # row indices
+               np.arange(0,len(ch_names),1))                          # col indices
+    indices = indices[0].astype(int), indices[1]
+    plv = spectral_connectivity(epochs, method='plv', indices=indices,
+                                sfreq=sf, mode='multitaper', fmin=foi[0], fmax=foi[1],
+                                fskip=0, faverage=True, block_size=1000,
+                                verbose=0)
+        
+    return plv.freqs, plv._data.squeeze()
 
 #%%
 ## plot spectrogram
