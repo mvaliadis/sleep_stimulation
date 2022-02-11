@@ -101,4 +101,4 @@ cmap = sns.diverging_palette(230, 20, as_cmap=True)
 # Draw the heatmap with the mask and correct aspect ratio
 sns.heatmap(mean_coherence, mask=mask, cmap=cmap, vmax=np.percentile(mean_coherence, 95), center=0,
             square=True, linewidths=.5, cbar_kws={"shrink": .5}, yticklabels=Data.chans[0:23], 
-            xticklabels=Data.chans[0:23], xticks='2')
+            xticklabels=Data.chans[0:23])

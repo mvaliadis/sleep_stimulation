@@ -29,204 +29,61 @@ import scipy.signal as signal
 from tensorpac.utils import PeakLockedTF, PSD, ITC, BinAmplitude
 from matplotlib import cm
 from autoreject import Ransac
+import emd
 from sleepstim.Analysis.analysis_pre_process import (Data_Struct, _pre_process_sleep_data, preprocess_sleep_data, 
                                                      compare_hypnograms, check_match_data_hypno_elements,
                                                      label_artifacts, load_preprocessed_data, Data_SW, PLV)
 from sleepstim.sleep_funs import (load_xdf, channel_parser, bfr_butter_filt, thresholdcrossings)
-from sleepstim.Analysis.pac import unit_root_test, add_stimulus_onset, ERPAC
+from sleepstim.Analysis.pac import unit_root_test, add_stimulus_onset, ERPAC, extract_pha_amp, SO_spindle_coupling
 from sleepstim.Analysis.time_frequency import tfr_analysis
 from sleepstim.Utils.encryption_decryption import encrypt_file, decrypt_file
 from sleepstim.Analysis.Resting_State.rs_preproc import (plot_psd, norm_wavelet_power, subject_cond_parser)
 import tensorpac.methods as tpm
 from sleepstim.Analysis.foof import oscillatory_plot_psd_map
+from sleepstim.Analysis.hilbert_huang import hilbert_huang_spectrum
 
 def find_nearest(array, value):
     idx = (np.abs(array - value)).argmin()
     return idx
-
-def extract_pha_amp(data_narrow, data_broad, sf, n_samples, nfast):
-    # Extract the spindles-related sigma signal for coupling
-    data_sp = mne.filter.filter_data(data_broad, sf, 12, 16, method='fir',
-                                     l_trans_bandwidth=1.5, h_trans_bandwidth=1.5,
-                                     verbose=0)
-    # Now extract the instantaneous phase/amplitude using Hilbert transform
-    sw_pha = np.angle(signal.hilbert(data_narrow, N=nfast)[:n_samples])
-    sp_amp = np.abs(signal.hilbert(data_sp, N=nfast)[:n_samples])
+            
+def coincidence_matrix(events, plot = True, window='whole'):       
+    if window == 'whole':
+        coin_mat = [events[i].get_coincidence_matrix(scaled=True) for i in range(len(events)) if events[i] != None]
+        cumulative = [coin_mat[i].to_numpy() for i in range(len(coin_mat))]
+            
+    elif window == 'post_stim':
+        def _coincidence(x, y, scaled=True):
+            """Calculate the (scaled) coincidence."""
+            coincidence = (x * y).sum()
+            if scaled:
+                # Handle division by zero error
+                denom = (x.sum() * y.sum())
+                if denom == 0:
+                    coincidence = np.nan
+                else:
+                    coincidence /= denom
+            return coincidence
     
-    return sw_pha, sp_amp  
- 
-def SO_spindle_coupling(sw, data_broad, idx, sf, target='stim_onset'):
-    data_broad = data_broad[idx,:,:]
-    time_before = 1.5; time_after = 2.5
-    bef = int(sf * time_before)
-    aft = int(sf * time_after)
+        cumulative = []
+        for epoch in range(len(events)):
+            if events[epoch] != None:
+                mask_sp = events[epoch].get_mask()[:,512*3:]
+                mask_sp = pd.DataFrame(mask_sp.T, columns=events[epoch]._ch_names) 
+                mask_sp.columns.name = "Channel" 
+                cumulative.append(mask_sp.corr(method=_coincidence))
+            
+    if plot: 
+        mask = np.triu(np.ones_like(np.nanmean(cumulative, 0), dtype=bool))
+        f, ax = plt.subplots(figsize=(11, 9))
+        cmap = sns.diverging_palette(230, 20, as_cmap=True)
+        sns.heatmap(np.nanmean(cumulative, 0), mask=mask, cmap=cmap, center=0,
+                    # vmin = np.percentile(np.nanmean(cumulative, 0), 5), vmax = np.percentile(np.nanmean(cumulative, 0), 95),
+                    square=True, linewidths=.5, cbar_kws={"shrink": .5}, yticklabels=events[0]._ch_names, 
+                    xticklabels=events[0]._ch_names)
+        plt.tight_layout()
     
-    ## Iterate by channels
-    summaries = []
-    for chan in range(23):
-        print(chan)
-        if target == 'neg_peak':
-            sw_neg_times = sw.summary()['NegPeak'][sw.summary()['IdxChannel']==chan].to_numpy()
-            idx_neg_nearest = find_nearest(sw_neg_times, 3)
-            sw_neg_time = sw_neg_times[idx_neg_nearest]
-            sw_neg_idx = sw_neg_time * sf
-        elif target == 'stim_onset':
-            ## One can ignore all the values in the dataframe, except the ndPAC info 
-            sw_neg_times = sw.summary()['NegPeak'][sw.summary()['IdxChannel']==chan].to_numpy()
-            if list(sw_neg_times) != []:
-                idx_neg_nearest = find_nearest(sw_neg_times, 3)
-                sw_neg_time = sw_neg_times[idx_neg_nearest]
-                sw_neg_idx = 3*sf
-            else:
-                summary = sw.summary()[sw.summary()['IdxChannel']==chan].reset_index()
-                summary['SigmaPeak'] = np.ones(1) * np.nan
-                summary['PhaseAtSigmaPeak'] = np.ones(1) * np.nan
-                summary['ndPAC'] = np.ones(1) * np.nan
-    
-        ## continue only if channel contains sw
-        if list(sw_neg_times) != []:
-            if max(data_broad.shape) - sw_neg_idx < aft:
-                aft = max(data_broad.shape) - sw_neg_idx
-                # compensate for shorter after period by making longer before period
-                # if sw_neg_idx < bef:
-                #     bef = max(data_broad.shape) - sw_neg_idx
-                # else:
-                #     bef = aft + bef
-                # print('Post - compensation')
+    return np.nanmean(cumulative, 0) 
         
-            if sw_neg_idx < bef:
-                bef = sw_neg_idx
-                # bef = max(data_broad.shape) - sw_neg_idx
-                # print('Pre - compensation')
-        
-
-            sw_idx, valid_idx = yasa.get_centered_indices(sw._data[chan,:].squeeze(), 
-                                                          np.asarray([sw_neg_idx]), bef, aft) 
-            
-            # extract analytical phase for SOs and amplitude for spindles
-            sw_pha, sp_amp = extract_pha_amp(sw._data[chan,:].squeeze(), data_broad[chan,:].squeeze(), sf, n_samples, nfast)                               
-            sw_pha, sp_amp = sw_pha[sw_idx[0][0]:sw_idx[0][-1]], sp_amp[sw_idx[0][0]:sw_idx[0][-1]]
-                  
-            # only keep peaks near stim onset
-            idx_not = np.where(np.arange(0, len(sw_neg_times)) != idx_neg_nearest)[0]
-            summary = sw.summary()[sw.summary()['IdxChannel']==chan].reset_index().drop(idx_not, inplace=False)
-            
-            # 1) Find location of max sigma amplitude in epoch
-            idx_max_amp = sp_amp.argmax(axis=0)
-            
-            # Now we need to append it back to the original unmasked shape
-            # to avoid error when idx.shape[0] != idx_valid.shape, i.e.
-            # some epochs were out of data bounds.
-            summary['SigmaPeak'] = np.ones(1) * np.nan
-            
-            # Timestamp at sigma peak, expressed in seconds from negative peak
-            # e.g. -0.39, 0.5, 1, 2 -- limits are [time_before, time_after]
-            time_sigpk = (idx_max_amp - bef) / sf
-            
-            # convert to absolute time from beginning of the recording
-            # time_sigpk only includes valid epoch
-            time_sigpk_abs = sw_neg_idx + time_sigpk
-            summary['SigmaPeak'] = time_sigpk_abs
-            
-            # 2) PhaseAtSigmaPeak
-            # Find SW phase at max sigma amplitude in epoch
-            pha_at_max = np.squeeze(np.take_along_axis(sw_pha,
-                                                       idx_max_amp[..., None],
-                                                       axis=0))
-            summary['PhaseAtSigmaPeak'] = np.ones(1) * np.nan
-            summary['PhaseAtSigmaPeak'] = pha_at_max
-            
-            # 3) Normalized Direct PAC, with thresholding
-            ndp = np.squeeze(tpm.norm_direct_pac(sw_pha[None, ...],
-                                                 sp_amp[None, ...], p=0.05))
-            summary['ndPAC'] = np.ones(1) * np.nan
-            summary['ndPAC'] = ndp
-            
-        else:
-            pass
-        
-        summaries.append(summary)
-        
-    return summaries
-
-def SO_spindle_coupling2(sw, data_broad, idx, sf, target='neg_peak'):
-    data_broad = np.expand_dims(data_broad[idx,:],0)
-    time_before = 1.5; time_after = 2.5
-    bef = int(sf * time_before)
-    aft = int(sf * time_after)
-    
-    if target == 'neg_peak':
-        sw_neg_times = sw.summary()['NegPeak'].to_numpy()
-        idx_neg_nearest = find_nearest(sw_neg_times, 3)
-        sw_neg_time = sw_neg_times[idx_neg_nearest]
-        sw_neg_idx = sw_neg_time * sf
-    elif target == 'stim_onset':
-        ## One can ignore all the values in the dataframe, except the ndPAC info 
-        sw_neg_times = sw.summary()['NegPeak'].to_numpy()
-        idx_neg_nearest = find_nearest(sw_neg_times, 3)
-        sw_neg_time = sw_neg_times[idx_neg_nearest]
-        sw_neg_idx = 3*sf
-    
-    if max(data_broad.shape) - sw_neg_idx < aft:
-        aft = max(data_broad.shape) - sw_neg_idx
-        # compensate for shorter after period by making longer before period
-        # if sw_neg_idx < bef:
-        #     bef = max(data_broad.shape) - sw_neg_idx
-        # else:
-        #     bef = aft + bef
-        # print('Post - compensation')
-        
-    if sw_neg_idx < bef:
-        bef = sw_neg_idx
-        # bef = max(data_broad.shape) - sw_neg_idx
-        # print('Pre - compensation')
-        
-    sw_idx, valid_idx = yasa.get_centered_indices(sw._data.squeeze(), np.asarray([sw_neg_idx]), 
-                                                  bef, aft) 
-    
-    # extract analytical phase for SOs and amplitude for spindles
-    sw_pha, sp_amp = extract_pha_amp(sw._data.squeeze(), data_broad.squeeze(), sf, n_samples, nfast)                               
-    sw_pha, sp_amp = sw_pha[sw_idx[0][0]:sw_idx[0][-1]], sp_amp[sw_idx[0][0]:sw_idx[0][-1]]
-          
-    # only keep peaks near stim onset
-    idx_not = np.where(np.arange(0, len(sw_neg_times)) != idx_neg_nearest)[0]
-    summary = sw.summary().drop(idx_not, inplace=False)
-    
-    # 1) Find location of max sigma amplitude in epoch
-    idx_max_amp = sp_amp.argmax(axis=0)
-    
-    # Now we need to append it back to the original unmasked shape
-    # to avoid error when idx.shape[0] != idx_valid.shape, i.e.
-    # some epochs were out of data bounds.
-    summary['SigmaPeak'] = np.ones(1) * np.nan
-    
-    # Timestamp at sigma peak, expressed in seconds from negative peak
-    # e.g. -0.39, 0.5, 1, 2 -- limits are [time_before, time_after]
-    time_sigpk = (idx_max_amp - bef) / sf
-    
-    # convert to absolute time from beginning of the recording
-    # time_sigpk only includes valid epoch
-    time_sigpk_abs = sw_neg_idx + time_sigpk
-    summary['SigmaPeak'] = time_sigpk_abs
-    
-    # 2) PhaseAtSigmaPeak
-    # Find SW phase at max sigma amplitude in epoch
-    pha_at_max = np.squeeze(np.take_along_axis(sw_pha,
-                                               idx_max_amp[..., None],
-                                               axis=0))
-    summary['PhaseAtSigmaPeak'] = np.ones(1) * np.nan
-    summary['PhaseAtSigmaPeak'] = pha_at_max
-    
-    # 3) Normalized Direct PAC, with thresholding
-    ndp = np.squeeze(tpm.norm_direct_pac(sw_pha[None, ...],
-                                         sp_amp[None, ...], p=0.05))
-    summary['ndPAC'] = np.ones(1) * np.nan
-    summary['ndPAC'] = ndp
-              
-    return summary
-            
-#%%
-
 path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/'
 maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files if 'av.p' in i])
 
@@ -253,7 +110,7 @@ def auditory_stim_results(maindir):
             # check to see if condition is sham, if so, create second instance of center points to generate down sham condition
             # decrypted = decrypt_file(encrypt_key, input_file=output_file, output_file=input_file)
             cond = subject_cond_parser(files, study_phase = 'sleep')
-            del decrypted
+            # del decrypted
             subject = files.split("/")[-1].split('_')[0]
             # create down sham instance subtracting first bursts by respective p2p duration difference
             reject_criteria = dict(eeg=550e-6)
@@ -400,9 +257,8 @@ def auditory_stim_results(maindir):
             # Epochs PSDs
             #epochs_mastoids.plot_psd(dB=True, fmin=0.5, fmax=30, average=True)
             
-            #%%
             ## Power distributions (Pre/Post stim onset)
-            # for x,y in zip(np.arange(-3.0,3.0,.5).round(2), np.arange(-2.5,3.5,.5).round(2)): # Sequential 500 ms windows 
+            # for x,y in zip(np.arange(-3.0, 3.0, .5).round(2), np.arange(-2.5, 3.5, .5).round(2)): # Sequential 500 ms windows 
             for x,y in zip([-3.0, 0.],[0., 3.0]):
                 epochs_mastoids.plot_psd_topomap(tmin=x, tmax=y, bands = [(0.5, 4, 'Delta'), (4, 8, 'Theta'), (8, 12, 'Alpha'),
                                                                           (12, 16, 'Sigma'), (16, 30, 'Beta')], ch_type='eeg',
@@ -421,9 +277,7 @@ def auditory_stim_results(maindir):
                 plt.savefig(fig_path + files.split('/')[-1] + '_osc_power_' + str(x) + 's_' + str(y) + 's_C3_lm.png')
                 plt.close('all')  
             
-            #%%
-                
-            # plot difference for C3
+            ## plot difference for C3
             mne.viz.plot_compare_evokeds(dict(online_ref=epochs.average(method='mean', picks='C3'), 
                                               offline_ref=epochs_mastoids.average(method='mean', picks='C3')),
                                               legend='upper left', show_sensors='upper right',
@@ -436,7 +290,7 @@ def auditory_stim_results(maindir):
                                          plot=True, output='avg', zscore=False, cmap = 'Spectral_r', 
                                          save_path=fig_path + files.split('/')[-1])
             pickle.dump(Sxx, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/erp_analysis/' + " ".join(files.split('/')[-1].split('.')[0].split('_')[0:2]) + '_TF.p',"wb"))
-            #pickle.dump(itc_data, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/erp_analysis/' + " ".join(files.split('/')[-1].split('.')[0].split('_')[0:2]) + '_ITC.p',"wb"))
+            pickle.dump(itc_data, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/erp_analysis/' + " ".join(files.split('/')[-1].split('.')[0].split('_')[0:2]) + '_ITC.p',"wb"))
             del itc_data, Sxx
             
             if epochs_down != []:
@@ -445,6 +299,7 @@ def auditory_stim_results(maindir):
                                              plot=True, output='avg', zscore=False, cmap = 'Spectral_r', 
                                              save_path=fig_path + files.split('/')[-1])
                 pickle.dump(Sxx, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/erp_analysis/' + " ".join(files.split('/')[-1].split('.')[0].split('_')[0:2]) + '_sham_down_TF.p',"wb"))
+                pickle.dump(itc_data, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/erp_analysis/' + " ".join(files.split('/')[-1].split('.')[0].split('_')[0:2]) + '_sham_down_TTC.p',"wb"))
                 del itc_data, Sxx
             
             ## ERPAC plots
@@ -467,7 +322,6 @@ def auditory_stim_results(maindir):
             #%% PLV analysis 
             #for epoch_name, epoch in zip(['cpz_ref','lm_ref','cpz_ref_down','lm_ref_down'], [epochs, epochs_mastoids, epochs_down, epochs_down_mastoids]):
             for epoch_name, epoch in zip(['cpz_ref','lm_ref'], [epochs, epochs_mastoids]):
-                print(epoch_name)
                 _, plv = PLV(epoch.get_data(picks ='eeg'), epoch.ch_names[0:23], epoch.info['sfreq'], foi=(.834,2))
     
                 ## Plot PLV 
@@ -479,22 +333,33 @@ def auditory_stim_results(maindir):
                 plt.title(f'PLV seeded to C3 - {files.split("/")[-1][0:10]} - {epoch_name}')
                 
                 pickle.dump(plv, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/erp_analysis/' + " ".join(files.split('/')[-1].split('.')[0].split('_')[0:2]) + epoch_name + '_plv.p',"wb"))
-                #plt.savefig(fig_path + files.split('/')[-1] + epoch_name + '_plv.png')
-                # plt.close('all')
+                plt.savefig(fig_path + files.split('/')[-1] + epoch_name + '_plv.png')
+                plt.close('all')
                 del plv 
                         
             #%% Phase analysis (filter with 2.0 Hz lp filter)
             for epoch_name, epoch in zip(['cpz_ref','lm_ref'], [epochs, epochs_mastoids]):
                 # epoch = epoch.copy().crop(tmin=-1.0, tmax=1.0, include_tmax=True)
                 C3 = epoch.get_data(picks='C3').squeeze()*1e6
-                C3_lp = epoch.copy().filter(l_freq=None, h_freq=1.5).get_data()[:,Data.chans.index('C3'),:]*1e6
+                C3_lp = epoch.copy().filter(l_freq=None, h_freq=1.5).get_data(picks='C3').squeeze()*1e6
                 data_lp = epoch.copy().filter(l_freq=None, h_freq=1.5).get_data(picks='eeg')*1e6
                 # Compute (analytical) instantaneous phase from a signal
                 n_samples = max(C3_lp.shape)
                 nfast = next_fast_len(n_samples)
-                # to obtain sine relative angles add 0.5 pi to angles
-                sw_pha = [np.angle(hilbert(C3_lp[i,:], N=nfast)[:n_samples]) + 0.5*np.pi for i in range(min(C3_lp.shape))]
+                #%%
+                ## phase with imf - use freq transform 
+                imf_sw = [emd.sift.sift(C3_lp[i,:], imf_opts={'sd_thresh': 0.1}, max_imfs=2) for i in range(min(C3_lp.shape))]
+                sw_pha, sw_freq, sw_amplitude = [], [], []
+                for i in range(min(C3_lp.shape)):
+                    sw_pha.append(emd.spectra.frequency_transform(imf_sw[i], epoch.info['sfreq'], 'nht')[0][:,0])
+                    sw_freq.append(emd.spectra.frequency_transform(imf_sw[i], epoch.info['sfreq'], 'nht')[1][:,0])
+                    sw_amplitude.append(emd.spectra.frequency_transform(imf_sw[i], epoch.info['sfreq'], 'nht')[2][:,0])
+                    
                 pn_phase = [sw_pha[i][int(Data.sfreq*3)] for i in range(len(sw_pha))]
+        
+                ## sine relative phase with hilbert transform
+                # sw_pha = [np.angle(hilbert(C3_lp[i,:], N=nfast)[:n_samples]) + 0.5*np.pi for i in range(min(C3_lp.shape))]
+                # pn_phase = [sw_pha[i][int(Data.sfreq*3)] for i in range(len(sw_pha))]
                 
                 ax = plt.subplot(111, projection='polar')
                 ax.hist(pn_phase)
@@ -503,13 +368,18 @@ def auditory_stim_results(maindir):
                 pickle.dump(pn_phase, open('/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/erp_analysis/' + " ".join(files.split('/')[-1].split('.')[0].split('_')[0:2]) + '_pn_ERP_phase_hilbert_' + epoch_name + '.p',"wb"))
                 plt.close('all')
                 
-                # Identify spindles in data
-                sp = [yasa.spindles_detect(data = epoch.get_data(picks='eeg')[i,:,:]*1e6, sf=512, 
-                                           ch_names=epoch.info.ch_names[0:23], freq_sp=(11, 16), freq_broad=(1, 30),
-                                           duration=(0.5, 3), min_distance=500, 
-                                           thresh={'rel_pow': None, 'corr': None, 'rms': 1.5}, multi_only=False)
-                      for i in range(len(epoch))]
-     
+                # Identify spindles in data   
+                sp = []
+                for i in range(len(epoch)):
+                    try:
+                        sp.append(yasa.spindles_detect(data = epoch.get_data(picks='eeg')[i,:,:]*1e6, sf=512,
+                                                    ch_names=epoch.info.ch_names[0:23], freq_sp=(11, 16),
+                                                    freq_broad=(1, 30), duration=(0.5, 3), min_distance=500, 
+                                                    thresh={'rel_pow': None, 'corr': None, 'rms': 1.5},
+                                                    multi_only=False))
+                    except:
+                        ValueError
+        
                 # leave only epochs with spindles
                 sp_summaries = []
                 for idx, spindle in enumerate(sp):
@@ -528,13 +398,18 @@ def auditory_stim_results(maindir):
                 sw_summaries = []
                 for i in range(len(sws)):
                     if sws[i] != None:
-                        print('epoch : ', i)
                         sw_summaries.append(SO_spindle_coupling(sws[i], data_broad = epoch.get_data(picks='eeg')*1e6, 
                                                                 idx = i, sf = 512, target='stim_onset'))
                  
                 df_sw = pd.concat([pd.concat(sw_summaries[i]) for i in range(23)])
                 df_sw = df_sw.reset_index()
                 del df_sw['index'], df_sw['level_0']
+                
+                ## Coincidence matrices for spindles and SOs- Group level
+                cm_sp = coincidence_matrix(sp, plot = True, window='whole')
+                plt.savefig(fig_path + files.split('/')[-1] + '_coincidence_matrix_sp_' + epoch_name + '.png')
+                cm_sw = coincidence_matrix(sws, plot = True, window='whole')
+                plt.savefig(fig_path + files.split('/')[-1] + '_coincidence_matrix_sw_' + epoch_name + '.png')
                 
                 # Distribution of ndPAC value [ADD TO GROUP LEVEL ANALYSIS] 
                 plt.figure()
@@ -562,8 +437,9 @@ def auditory_stim_results(maindir):
                 #%%
                 sws_idx = []
                 for i in range(len(sws)):
-                    if len(sws[i].summary()[sws[i].summary()['Channel']=='C3'].to_numpy()) > 0:
-                        sws_idx.append(1)
+                    if sws[i] != None:
+                        if len(sws[i].summary()[sws[i].summary()['Channel']=='C3'].to_numpy()) > 0:
+                            sws_idx.append(1)
                     else:
                         sws_idx.append(0)
                         
@@ -572,16 +448,22 @@ def auditory_stim_results(maindir):
                 # space 90 degree bins for slow waves representing negative/postive half wave durations
                 half1, half2, half3, half4 = [],[],[],[]
                 for i in np.where(sws_idx == 1)[0]:
-                    C3_df = sws[i].summary()[sws[i].summary().Channel=='C3'].reset_index()
-                    half1.append(np.linspace(C3_df['Start'][0]*Data.sfreq, 
-                                             C3_df['NegPeak'][0]*Data.sfreq, num=90, endpoint=True).astype(int))
-                    half2.append(np.linspace(C3_df['NegPeak'][0]*Data.sfreq + 1, 
-                                             C3_df['MidCrossing'][0]*Data.sfreq, num=90).astype(int))
-                    half3.append(np.linspace(C3_df['MidCrossing'][0]*Data.sfreq + 1, 
-                                             C3_df['PosPeak'][0]*Data.sfreq, num=90).astype(int))
-                    half4.append(np.linspace(C3_df['PosPeak'][0]*Data.sfreq + 1, 
-                                             C3_df['End'][0]*Data.sfreq, num=90).astype(int))
-                
+                    if sws[i] != None:
+                        C3_df = sws[i].summary()[sws[i].summary().Channel=='C3'].reset_index()
+                        if len(C3_df) > 0:
+                            idx_neg_nearest = find_nearest(C3_df['MidCrossing'], 3)
+                            idx_not = np.where(np.arange(0, len(C3_df)) != idx_neg_nearest)[0]
+                            C3_df = C3_df.reset_index().drop(idx_not, inplace=False)
+                            
+                            half1.append(np.linspace(C3_df['Start']*Data.sfreq, 
+                                                     C3_df['NegPeak']*Data.sfreq, num=90, endpoint=True).astype(int))
+                            half2.append(np.linspace(C3_df['NegPeak']*Data.sfreq + 1, 
+                                                     C3_df['MidCrossing']*Data.sfreq, num=90).astype(int))
+                            half3.append(np.linspace(C3_df['MidCrossing']*Data.sfreq + 1, 
+                                                     C3_df['PosPeak']*Data.sfreq, num=90).astype(int))
+                            half4.append(np.linspace(C3_df['PosPeak']*Data.sfreq + 1, 
+                                                     C3_df['End']*Data.sfreq, num=90).astype(int))                    
+                    
                 # determine pinknoise targeted slow wave phase 
                 crossings = []
                 for i in range(len(half1)):
@@ -615,7 +497,6 @@ def auditory_stim_results(maindir):
             out.write(f'The dataset: {files.split("/")[-1]} has the following detected bad channels: {Data.bad_chans} ' + '\n')   
     # close text file with pn info 
     out.close()
-
 
 #%%
 # ## Group level phase analysis

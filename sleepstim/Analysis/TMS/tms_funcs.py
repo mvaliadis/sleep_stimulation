@@ -24,6 +24,7 @@ import seaborn as sns
 from sleepstim.Analysis.Resting_State.rs_preproc import subject_cond_parser
 import pickle
 from scipy.integrate import trapz, cumtrapz
+import pingouin as pg
 
 def tkeo(data, normalize=True, plot=True):
     """
@@ -76,14 +77,15 @@ def process_rawXDF(file, paired=False):
         intensity = int(marker.time_series[0][0].split('_')[-1])
     else:
         intensity = []
-        return [], np.ones(rep)*np.nan, sf, [], intensity, np.ones(rep)*np.nan
+        return [], np.ones(rep)*np.nan, sf, [], intensity, np.ones(rep)*np.nan, np.ones(rep)*np.nan
     
     if eego.time_series.shape[0]/sf < 20 or stim < stim_min:
-        return [], np.ones(rep)*np.nan, sf, [], intensity, np.ones(rep)*np.nan
+        return [], np.ones(rep)*np.nan, sf, [], intensity, np.ones(rep)*np.nan, np.ones(rep)*np.nan
 
     ## label data
     edcix = eego.channel_labels.index("chan_7")
     c3ix = eego.channel_labels.index("C3")
+    msix = eego.channel_labels.index("M2")
     
     ## match clocks
     eegoTMStimes = [np.argmin(np.abs(eego.time_stamps - ts)) for ts in TMStimes]
@@ -103,11 +105,20 @@ def process_rawXDF(file, paired=False):
     # plt.plot(eego.time_stamps,c3dat)
     # plt.plot(TMStimes, [0]*len(TMStimes), 'or')
     
+    tkeo_vals = []
+    dovs = []
+    dovs_bool = []    
     edcepochs = np.nan*np.zeros((len(eegoTMStimes), 200))
     for i, ts in enumerate(eegoTMStimes):
         c3ep = np.abs(c3dat[ts-100:ts+100])
+        dov = max(np.diff(c3ep))
+        dovs.append(dov)
+        dovs_bool.append(dov >= 500)
+        print(f'The maximum change in voltage is {dov} and '
+              f'occurs at: {np.argmax(np.diff(c3ep))}')
         # use TKEO to determine peak coil artifact location in EEG
         tartifact = np.argmax(tkeo(c3ep, plot=False))
+        tkeo_vals.append(max(tkeo(c3ep, plot=False)))
         ts_corrected = (ts-100)+tartifact
         # if any timestamp doesn't last 200 time points, correct for this and add nans to trial
         last_ts = int((eego.time_stamps - eego.time_stamps[0])[-1] * sf)
@@ -116,14 +127,20 @@ def process_rawXDF(file, paired=False):
             edcepochs[i,:] = np.concatenate([edcdat[ts_corrected-100:last_ts] - np.median(edcdat[ts_corrected-100:last_ts]), add_nans], axis=0)
         else:
             edcepochs[i,:] = edcdat[ts_corrected-100:ts_corrected+100] - np.median(edcdat[ts_corrected-100:ts_corrected+100])
-            
-    # if less than 20 trials, add nans to remaining VPPs
+    
+    tkeo_vals = np.asarray(tkeo_vals) 
+    dovs =  np.asarray(dovs) 
+    dovs_bool = np.asarray(dovs_bool)   
+    
+    # if less than 20 trials, add nans to remaining VPPs, tkeo_vals 
     if min(edcepochs.shape) < 21 and paired == False:
         add_nans = np.nan*np.zeros(21 - min(edcepochs.shape))
         Vpp = np.concatenate([np.ptp(edcepochs[:, 115:160], axis = 1), add_nans], axis=0)
+        tkeo_vals = np.concatenate([tkeo_vals, add_nans], axis=0)
     elif min(edcepochs.shape) < 12 and paired == True:
         add_nans = np.nan*np.zeros(12 - min(edcepochs.shape))
         Vpp = np.concatenate([np.ptp(edcepochs[:, 125:160], axis = 1), add_nans], axis=0)
+        tkeo_vals = np.concatenate([tkeo_vals, add_nans], axis=0)
     else:
         if paired:
             Vpp = np.ptp(edcepochs[:, 125:160], axis = 1)
@@ -132,9 +149,13 @@ def process_rawXDF(file, paired=False):
       
     # flag MEPs that don't exceed 3 std of pre-stimulus signal
     if paired:
-        bool_mep = 3*np.std(abs(edcepochs[:, 0:90]), axis=1) < Vpp[~np.isnan(Vpp)]
+        bool_mep = np.logical_and(3*np.std(abs(edcepochs[:, 0:90]), axis=1) < Vpp[~np.isnan(Vpp)],
+                                  dovs_bool)
+        # always flag first paired pulse as invalid due to technical recording issues!
+        bool_mep[0] = False 
     else:
-        bool_mep = 3*np.std(abs(edcepochs[:, 0:100]), axis=1) < Vpp[~np.isnan(Vpp)]
+        bool_mep = np.logical_and(3*np.std(abs(edcepochs[:, 0:100]), axis=1) < Vpp[~np.isnan(Vpp)],
+                                  dovs_bool)
     if True in np.unique(np.isnan(Vpp)):
         if paired:
             bool_mep.resize((12), refcheck=False)
@@ -146,21 +167,17 @@ def process_rawXDF(file, paired=False):
     # plt.title(" ".join(file.split('/')[-2::]))
     # plt.plot(np.arange(-max(edcepochs.shape)/2, max(edcepochs.shape)/2)/sf, np.mean(edcepochs,0))
     
-    return edcepochs, Vpp, sf, cmc, intensity, bool_mep 
-
-def boltzmann_sigmoid(x, Amplitude, Bias, Slope, Threshold):
-    y = ( Amplitude * (Bias + ( (1-Bias) / (1 + np.exp(-Slope*(x-Threshold))))) )
-    return y  
-
-def boltzmann_sigmoid_mep(mep_50, mep_x, m):
-    y = 1/ (1 + np.exp(-m*(mep_50 - mep_x)))
-    return y
- 
-def sigmoid(x, x0, k):
-    y = 1 / (1 + np.exp(-k*(x-x0)))
-    return y
+    return edcepochs, Vpp, sf, cmc, intensity, bool_mep, tkeo_vals 
        
-def io_curve(norm_mep, optimize = False, plot = True):
+def function_sigmoid(intensity, mep_max, s50, k, b):
+    y_mep = ((mep_max/(1 + np.exp(k*(s50-intensity)))))+b
+    return (y_mep)
+
+def trim_mean(x):
+    tm = stats.trim_mean(x, proportiontocut = 0.1)
+    return tm
+
+def io_curve_dnu(norm_mep, optimize = False, plot = True):
     xdata = np.linspace(0, 6, 7)
     ydata = norm_mep
     
@@ -230,7 +247,7 @@ def TMS_results(maindir):
         else:
             paired = False
             protocol = " ".join(str(file).split('.')[0].split('/')[-1].split('_')[2:4])
-        edcepochs, Vpp, sf, cmc, intensity, bool_mep = process_rawXDF(file, paired=paired)
+        edcepochs, Vpp, sf, cmc, intensity, bool_mep, tkeo_vals = process_rawXDF(file, paired=paired)
         
         if edcepochs == []:
             edcepochs = np.ones([len(bool_mep), 200])*np.nan
@@ -243,6 +260,7 @@ def TMS_results(maindir):
         
         results["Vpp"].extend(Vpp)
         results["Vpp_True"].extend(bool_mep)
+        results["TKEO_value"].extend(tkeo_vals)
         results["logVpp"].extend(np.log(Vpp))
         results["Intensity"].extend([intensity]*len(Vpp))
         results["Subject"].extend([subjname]*len(Vpp))
@@ -269,7 +287,9 @@ def TMS_results(maindir):
             plt.ylabel('Voltage (uV)')
             
     res_df = pd.DataFrame(results)
+    # true_idx = np.asarray(res_df[res_df.Vpp_True==True].index)
     mep_data = np.concatenate(mep_data)
+    # mep_data_true = mep_data[true_idx,:]
     
     ### Plotting average MEPs
     sns.set_theme(color_codes=True)
@@ -277,8 +297,8 @@ def TMS_results(maindir):
     sessions = list(dict.fromkeys(list(res_df.Session)))  
     protocol = list(dict.fromkeys(list(res_df.Protocol)))      
     for p in protocol:
-        fig, axs = plt.subplots(2,3, sharex=True, sharey=False)
-        fig.suptitle('Axes values are scaled individually by default')
+        fig, axs = plt.subplots(2,3, sharex=True, sharey=False, figsize=(18,8))
+        fig.suptitle('Average MEP response by condition/protocol')
         df_p = res_df.loc[res_df.Protocol == p]
         for i,c in enumerate(conds):
             df_c = df_p.loc[df_p.Condition == c]
@@ -290,28 +310,50 @@ def TMS_results(maindir):
                 axs[s, i].set_title(f'{p} {c} {session}')
                 
                 if 'icf' in p or 'sici' in p:
-                    entry = 115
+                    entry = 110
                 else:
-                    entry = 115
+                    entry = 110
                 
                 axs[s, i].set_xlabel('Time (ms)')
                 axs[s, i].set_ylabel('Voltage (uV)')
         
-                axs[s, i].set_xlim([entry, 165])
-                axs[s, i].set_ylim([dat[entry:165].min()*1.1, dat[entry:165].max()*1.1])
+                axs[s, i].set_xlim([entry, 160])
+                axs[s, i].set_ylim([dat[entry:160].min()*1.1, dat[entry:160].max()*1.1])
 
-                # fig.tight_layout()
                 plt.show()
+                
+            plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/MEP_avg_{p}.jpg')
 
-    #%%
+    plt.close('all')
+    
+    ####
+    
+    ## save df with all ##
+    
+    ####
     
     # drop icf & sici
-    ind_drop = res_df[res_df['Protocol'].apply(lambda x: x.startswith('sici') or x.startswith('icf'))].index
+    ind_drop = res_df[res_df['Protocol'].apply(lambda x: x.startswith('sici') or 
+                                               x.startswith('icf') or x.startswith('cse 90'))].index
     io_df = res_df.drop(ind_drop)
+    
+    # sici/icf
+    cse_drop = res_df[res_df['Protocol'].apply(lambda x: x.startswith('cse'))].index
+    pulse_df = res_df.drop(cse_drop)
+    from sklearn.preprocessing import minmax_scale 
+    group_pulse_dfs = []
+    pulse_df = pulse_df[pulse_df['Vpp_True']==True].reset_index(drop=True)
+    for idx, group in enumerate(pulse_df.groupby(['Subject','Condition','Session','Protocol'])):
+        # print(idx, group[0])
+        group_dfp = group[1]
+        group_dfp['Normalized MEPs'] = minmax_scale(list(group_dfp['Vpp']))
+        group_pulse_dfs.append(group_dfp)
+    # aggregate everything
+    subject_pre_post_pulse_df = pd.concat(group_pulse_dfs).reset_index(drop=True)
+    
     
     # group 90 - 150 I/O MEP responses 
     io_df['Protocol'] = io_df['Protocol'].str.replace('cse', '', regex=True).astype(int)
-    group_pre_post = io_df[io_df['Vpp_True']==True].groupby(['Subject','Condition','Session','Protocol','Intensity']).mean()
     
     # normalize meps by subject trial 
     def mep_normalization(mep_values : list):
@@ -319,99 +361,209 @@ def TMS_results(maindir):
                          ((np.nanmax(mep_values[i])) - np.nanmin(mep_values[i])) for i in range(len(mep_values))]
         
         return all_norm_meps
- 
-    ##### 
-    groupies, labels = [], []
-    for idx, group in enumerate(group_pre_post.groupby(['Subject','Condition','Session'])):
-        # print(group[1]['Vpp'])
-        groupies.append(group[1]['Vpp'].to_numpy())
-        labels.append(list(group[1].index[0:]))
-    norm_mep = np.concatenate(mep_normalization(groupies))
-    # labels = np.concatenate(labels)
     
-    group_pre_post['Normalized MEPs'] = norm_mep
+    # norm totals
+    group_dfs = []
+    io_df = io_df[io_df['Vpp_True']==True].reset_index(drop=True)
+    for idx, group in enumerate(io_df.groupby(['Subject','Condition','Session'])):
+        # print(idx, group[0])
+        group_df = group[1]
+        group_df['Normalized MEPs'] = minmax_scale(list(group_df['Vpp']))
+        group_dfs.append(group_df)
+    # aggregate everything
+    subject_pre_post = pd.concat(group_dfs).reset_index(drop=True)
+    
+    #####
+    # group_pre_post = subject_pre_post.groupby(['Subject','Condition','Session','Protocol','Intensity']).mean()
+         
+    # groupies = []
+    # for idx, group in enumerate(group_pre_post.groupby(['Subject','Condition','Session'])):
+    #     # print(group[1]['Vpp'])
+    #     groupies.append(group[1]['Vpp'].to_numpy())
+    # norm_mep = np.concatenate(mep_normalization(groupies))
+    # # reapply normalization?
+    # group_pre_post['Normalized MEPs'] = norm_mep
         
     ## group by condition, session, protocol 
-    final_res = group_pre_post.groupby(['Condition','Session','Protocol','Intensity']).mean()['Normalized MEPs'].reset_index()
-    final_res2 = group_pre_post.groupby(['Subject','Condition','Session','Protocol','Intensity']).mean()['Normalized MEPs'].reset_index()
-    
-    return final_res, final_res2, group_pre_post
+    final_res = subject_pre_post.groupby(['Condition','Session','Protocol','Intensity']).mean()['Normalized MEPs'].reset_index()
 
+    return final_res, subject_pre_post, subject_pre_post_pulse_df
 
 #%%
 # maindir = '/media/administrator/data/Study_1_data/Pre_post_data/'
 if __name__ == '__main__':
     run = input('Do you wish to restart the TMS analysis? ')
     if run == 'yes':
-        final_res, group_pre_post = TMS_results(maindir)
-        save_path = '/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_session.p'
+        final_res, subject_pre_post, subject_pre_post_pulse_df = TMS_results(maindir)
+        
+        save_path = '/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_average.p'
         pickle.dump(final_res, open(save_path, "wb")) 
-        final_res.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_session.csv')
+        final_res.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_average.csv')
         
-        save_path = '/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results.p'
-        pickle.dump(group_pre_post, open(save_path, "wb")) 
-        group_pre_post.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results.csv')
+        save_path = '/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_paired.p'
+        pickle.dump(subject_pre_post_pulse_df, open(save_path, "wb")) 
+        subject_pre_post_pulse_df.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_paired.csv')
+        
+        save_path = '/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_subject.p'
+        pickle.dump(subject_pre_post, open(save_path, "wb")) 
+        subject_pre_post.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_subject.csv')
     else:
-        group_pre_post = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results.p', 'rb'))
-        final_res = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_session.p', 'rb'))
-            
-    ##### Plot I/O curves 
-    sns.set_theme(color_codes=True)
-  
-    AUC_diff = []
-    for idx, condition in enumerate(zip((['up_pre','up_post'],['down_pre','down_post'],['sham_pre','sham_post']))):
-        print(idx, condition)
-        plt.figure()
-        ax = sns.regplot(x='Protocol', y="Normalized MEPs", 
-                    data=final_res[final_res['Condition']==condition[0][0].split('_')[0]][final_res['Session']==condition[0][0].split('_')[1]],
-                    scatter_kws={"s": 80}, order=3, ci=95, x_estimator=np.mean, label=condition[0][0])
-        x_points = ax.get_lines()[-1].get_xdata()
-        y_points = ax.get_lines()[-1].get_ydata()
-        ## AUC calculation - compute difference post - pre x condition
-        AUC = trapz(x = x_points, y = y_points, dx=x_points[1] - x_points[0]) / (len(x_points) - 1)
+        subject_pre_post = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_subject.p', 'rb'))
+        final_res = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_average.p', 'rb'))
+        subject_pre_post_pulse_df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_paired.p', 'rb'))
         
-        ax2 = sns.regplot(x='Protocol', y="Normalized MEPs", 
-                    data=final_res[final_res['Condition']==condition[0][1].split('_')[0]][final_res['Session']==condition[0][1].split('_')[1]],
-                    scatter_kws={"s": 80}, order=3, ci=95, x_estimator=np.mean, label=condition[0][1])
-        
-        x_points = ax2.get_lines()[-1].get_xdata()
-        y_points = ax2.get_lines()[-1].get_ydata()
-        ## AUC calculation - compute difference post - pre x condition
-        AUC2 = trapz(x = x_points, y = y_points, dx=x_points[1] - x_points[0]) / (len(x_points) - 1)
-        
-        plt.legend()
-        plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/IO_curve_{condition[0][0].split("_")[0]}.jpg')
-        
-        AUC_diff.append(AUC - AUC2)
-        
-         # ## not super important
-        # s50 = x_points.flat[np.abs(y_points - .5).argmin()]
-        # s50_y = y_points.flat[np.abs(y_points - .5).argmin()]
-        # plt.vlines(s50, ymax=1, ymin=0, linestyles='dashed')
-       
-    
-    ## Sigmoidal plotting needs work, above is a linear solution with 3rd degree polynomial fit
-    # ax1 = io_curve(final_res['Normalized MEPs'][0:7], optimize=False, plot=True)
-    
-    
     #%%
-    # subjects = list(dict.fromkeys(list(final_res2.Subject)))
-    # conds  = list(dict.fromkeys(list(final_res2.Condition)))
-    # sessions = list(dict.fromkeys(list(final_res2.Session)))        
-    # for s in subjects:
-    # # plt.figure()
-    # df_s = final_res2.loc[final_res2.Subject == s]
-    # for c in conds :
-    #     df_c = df_s.loc[df_s.Condition == c]
-    #     for session in sessions:
-    #         df_session = df_c.loc[df_s.Session == c]
-    #         plt.title(s)
-    #         ax = sns.regplot(x='Protocol', y="Normalized MEPs", 
-    #                          data=df_session,
-    #                          scatter_kws={"s": 80}, order=3, ci=95, x_estimator=np.mean, label=c)
-    #         # x_points = ax.get_lines()[-1].get_xdata()
-    #         # y_points = ax.get_lines()[-1].get_ydata()
-    #         # ## AUC calculation - compute difference post - pre x condition
-    #         # AUC = trapz(x = x_points, y = y_points, dx=x_points[1] - x_points[0]) / (len(x_points) - 1)
+    ## Plot I/O curves 
+    from statannotations.Annotator import Annotator
+    sns.set_theme(color_codes=True)
+    order = ['pre','post']
+    pairs=[("SICI", "ICF")]
     
-    #     plt.show()
+    ## Group plots all in 3 conditions (ICF/SICI)
+    subject_pre_post_pulse_df_rev = subject_pre_post_pulse_df.groupby(['Subject','Condition','Session','Protocol']).mean()['Normalized MEPs'].reset_index()
+    axs_pair = sns.catplot(data = subject_pre_post_pulse_df_rev, x='Session', y='Normalized MEPs', 
+                           hue='Protocol', col='Condition', kind='point', join=True, 
+                           estimator=trim_mean, ci=95, order = order)
+    
+    # # annotate significance 
+    # annotator = Annotator(axs_pair, pairs, data=subject_pre_post_pulse_df_rev, x='Session', 
+    #                       y='Normalized MEPs', order=order)
+    # annotator.configure(test='Mann-Whitney', text_format='star', loc='outside')
+    # annotator.apply_and_annotate()
+
+    plt.tight_layout()
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/SICI_ICF_joint.jpg')
+            
+    ## Group plots all in 3 conditions 
+    subject_pre_post_rev = subject_pre_post.groupby(['Subject','Condition','Session','Protocol']).mean()['Normalized MEPs'].reset_index()
+    axs = sns.catplot(data = subject_pre_post_rev, x='Protocol', y='Normalized MEPs', 
+                      hue='Session', col='Condition', kind='point', join=False, 
+                      estimator=trim_mean, ci=95, hue_order = ['pre','post'])
+    
+    down_y_points_post = np.mean([axs.axes_dict['down'].get_lines()[i].get_ydata() for i in range(6)], axis=1)
+    down_y_points_pre = np.mean([axs.axes_dict['down'].get_lines()[i].get_ydata() for i in range(6,12)], axis=1)
+    
+    up_y_points_post = np.mean([axs.axes_dict['up'].get_lines()[i].get_ydata() for i in range(6)], axis=1)
+    up_y_points_pre = np.mean([axs.axes_dict['up'].get_lines()[i].get_ydata() for i in range(6,12)], axis=1)
+    
+    sham_y_points_post = np.mean([axs.axes_dict['sham'].get_lines()[i].get_ydata() for i in range(6)], axis=1)
+    sham_y_points_pre = np.mean([axs.axes_dict['sham'].get_lines()[i].get_ydata() for i in range(6,12)], axis=1)
+    
+    x_points = [0,1,2,3,4,5]
+    x_data_ext = np.linspace(0,5,100)
+    
+    ## Plot fitted curves
+    down_sessions = [down_y_points_pre,down_y_points_post, 'down']
+    up_sessions = [up_y_points_pre,up_y_points_post, 'up']
+    sham_sessions = [sham_y_points_pre,sham_y_points_post, 'sham']
+    
+    for session in (down_sessions, sham_sessions, up_sessions):
+        p0 = [max(session[0]), trim_mean(x_points),1, min(session[0])] 
+        popt0, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p0,
+                             ydata=session[0], maxfev=50000, method='lm')
+        p1 = [max(session[1]), trim_mean(x_points),1, min(session[1])] 
+        popt1, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p1,
+                             ydata=session[1], maxfev=50000, method='lm')
+        
+        axs.axes_dict[session[2]].plot(x_data_ext,function_sigmoid(x_data_ext, *popt1), linestyle='--', label = 'post')
+        axs.axes_dict[session[2]].plot(x_data_ext,function_sigmoid(x_data_ext, *popt0), linestyle='--', label = 'pre')
+    
+        plt.tight_layout()
+  
+        plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/IO_curve_joint.jpg')
+            
+    #%%
+    # =============================================================================
+    # Subject level IO curve plots/analysis
+    # TO-DO: REMOVE SUBJECTS WITH 2 OR LESS SESSIONS, DEAL WITH MISSING I/O PROTOCOL (~150 FOR SOME)
+    # =============================================================================
+    
+    fac_idx = []
+    param = []
+    subject = list(dict.fromkeys(list(subject_pre_post.Subject)))
+    for sub in subject:
+        sub_res = subject_pre_post[subject_pre_post.Subject == sub]
+        print(f'Computing faciliation index for subject: {sub}')
+        # plt.figure()
+        axs = sns.catplot(x='Protocol', y='Normalized MEPs', 
+                          hue='Session', col='Condition', kind = 'point', join=False, 
+                          estimator=trim_mean, ci=95, hue_order = ['pre','post'],
+                          data=sub_res)
+        #sub_res[sub_res.Condition.isin(['sham'])]
+        
+        if len(axs.axes_dict) < 3:
+            continue             
+        else:
+            x_points = [0,1,2,3,4,5]
+            x_data_ext = np.linspace(0,5,100)
+            for item in axs.axes_dict:
+                pre_s = np.mean([axs.axes_dict[item].get_lines()[i].get_ydata() for i in range(6)], axis=1)
+                post_s = np.mean([axs.axes_dict[item].get_lines()[i].get_ydata() for i in range(6,12)], axis=1)
+                # sessions = [pre_s, post_s, item]
+                if all(~np.isnan([pre_s, post_s]).ravel()):
+                    p0 = [max(pre_s), trim_mean(x_points),1, min(pre_s)]
+                    popt0, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p0,
+                                         ydata=pre_s, maxfev=200000, method='lm')
+                    p1 = [max(post_s), trim_mean(x_points),1, min(post_s)] 
+                    popt1, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p1,
+                                         ydata=post_s, maxfev=200000, method='lm')
+                
+                    ## get line points 
+                    y_points_pre = function_sigmoid(x_data_ext, *popt0)
+                    y_points_post = function_sigmoid(x_data_ext, *popt1)
+                    
+                    ## plot curves
+                    axs.axes_dict[item].plot(x_data_ext,y_points_pre, linestyle='--')
+                    axs.axes_dict[item].plot(x_data_ext,y_points_post, linestyle='--')
+                    
+                    ## AUC calculation - compute difference post - pre x condition
+                    AUC_pre = trapz(x = x_data_ext, y = y_points_pre, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
+                    AUC_post = trapz(x = x_data_ext, y = y_points_post, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
+        
+                    # AUC based faciliation index
+                    fac_idx.append([sub, item, AUC_post / AUC_pre])
+                    # append further parameters (s50, k, MEP_max)
+                    # param.append()
+                else:
+                    fac_idx.append([sub, item, np.nan])
+        
+        plt.tight_layout()
+        plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/IO_curve_{sub}.jpg')
+        plt.close('all')
+
+    fac_idx_df = pd.DataFrame(fac_idx, columns=['Subject','Condition','Facilitation Index (AUC Post/AUC Pre)'])
+    axs_fac_idx = sns.violinplot(data = fac_idx_df, x='Condition', y='Facilitation Index (AUC Post/AUC Pre)', 
+                                 estimator=np.median, ci=95)
+    
+    
+    ### 
+    
+    # save ouput
+    
+    ###
+    
+    # annotate significance 
+    pairs=[("down", "up"), ("down", "sham"), ("up", "sham")]
+    annotator = Annotator(ax = axs_fac_idx, pairs=pairs, data=fac_idx_df, 
+                          x='Condition', y='Facilitation Index (AUC Post/AUC Pre)')
+    annotator.configure(test='t-test_welch', text_format='star', loc='outside')
+    annotator.apply_and_annotate()
+    plt.tight_layout()
+    
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+    fac_idx_df = pd.DataFrame(fac_idx, columns=['Subject','Condition','Facilitation_Idx'])
+    md = smf.mixedlm("Facilitation_Idx ~ Condition", fac_idx_df[fac_idx_df.Facilitation_Idx>0.001], 
+                     groups=fac_idx_df[fac_idx_df.Facilitation_Idx>0.001]["Subject"])
+    mdf = md.fit()
+    print(mdf.summary())
+     
+    ## rmANOVA
+    rmanova = pg.rm_anova(dv='Facilitation_Idx', within='Condition', subject='Subject', 
+                          detailed = True, data=fac_idx_df[fac_idx_df.Facilitation_Idx>0.001])
+    # Pretty printing of ANOVA summary
+    pg.print_table(rmanova)
+    # Post hoc analysis
+    posthocs = pg.pairwise_ttests(dv='Facilitation_Idx', within='Condition',
+                                  subject='Subject', data=fac_idx_df[fac_idx_df.Facilitation_Idx>0.001])
+    pg.print_table(posthocs)

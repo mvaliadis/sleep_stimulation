@@ -11,6 +11,10 @@ import mne
 from tensorpac import Pac, EventRelatedPac
 from tensorpac.stats import test_stationarity
 import matplotlib.pyplot as plt
+import yasa
+from scipy.fftpack import next_fast_len
+import emd 
+import tensorpac.methods as tpm
 
 #%%
 ## Test stationarity - Augmented Dickey-Fuller test (unit root test)
@@ -22,6 +26,39 @@ def unit_root_test(data, p=0.05):
 def add_stimulus_onset(color = 'white'):
     plt.axvline(0., lw=2, color=color)
     plt.axvline(1.075, lw=2, color=color)
+
+def find_nearest(array, value):
+    idx = (np.abs(array - value)).argmin()
+    return idx
+
+## extarct phase and amplitude 
+def extract_pha_amp(data_narrow, data_broad, sf, method = 'hilbert'):
+    from scipy.fftpack import next_fast_len
+    # Extract the spindles-related sigma signal for coupling
+    data_sp = mne.filter.filter_data(data_broad, sf, 12, 16, method='fir',
+                                     l_trans_bandwidth=1.5, h_trans_bandwidth=1.5,
+                                     verbose=0)
+    n_samples = max(data_narrow.shape)
+    nfast = next_fast_len(n_samples)
+    if method == 'hilbert':
+        # Now extract the instantaneous phase/amplitude using Hilbert transform
+        sw_pha = np.angle(signal.hilbert(data_narrow, N=nfast)[:n_samples])
+        sp_amp = np.abs(signal.hilbert(data_sp, N=nfast)[:n_samples])
+    elif method == 'emd':
+        import emd           
+        ## get sw phase    
+        imf_sw = emd.sift.sift(data_narrow, imf_opts={'sd_thresh': 0.1}, max_imfs = 2)
+        # emd.plotting.plot_imfs(imf_sw, cmap=True, scale_y=True)
+        sw_pha = emd.spectra.frequency_transform(imf_sw, sf, 'nht')[0][:,0]
+        # sw_pha = np.angle(signal.hilbert(imf_sw[:,0], N=nfast)[:n_samples])
+        
+        ## get sp phase
+        imf_sp = emd.sift.sift(data_sp, imf_opts={'sd_thresh': 0.1}, max_imfs = 2)
+        # emd.plotting.plot_imfs(imf_sp, cmap=True, scale_y=True)
+        sp_amp = emd.spectra.frequency_transform(imf_sw, sf, 'nht')[2][:,0]
+        # sp_amp = np.abs(signal.hilbert(imf_sp[:,0], N=nfast)[:n_samples])
+                 
+    return sw_pha, sp_amp  
 
 ## Create ERPAC plot
 def ERPAC(data, f_pha=[0.5, 4], f_amp=(4, 30, .25, .25), n_perm=None, smooth=200, 
@@ -51,6 +88,104 @@ def ERPAC(data, f_pha=[0.5, 4], f_amp=(4, 30, .25, .25), n_perm=None, smooth=200
     
     return erpac
 
+## Iterate over yasa results to add ndPAC values to specified target SOs
+def SO_spindle_coupling(sw, data_broad, idx, sf, target='stim_onset'):
+    data_broad = data_broad[idx,:,:]
+    time_before = 1.5; time_after = 2.5
+    bef = int(sf * time_before)
+    aft = int(sf * time_after)
+    
+    n_samples = max(data_broad.shape)
+    nfast = next_fast_len(n_samples)
+    
+    ## Iterate by channels
+    summaries = []
+    for chan in range(23):
+        if target == 'neg_peak':
+            sw_neg_times = sw.summary()['NegPeak'][sw.summary()['IdxChannel']==chan].to_numpy()
+            idx_neg_nearest = find_nearest(sw_neg_times, 3)
+            sw_neg_time = sw_neg_times[idx_neg_nearest]
+            sw_neg_idx = sw_neg_time * sf
+        elif target == 'stim_onset':
+            ## One can ignore all the values in the dataframe, except the ndPAC info 
+            sw_neg_times = sw.summary()['MidCrossing'][sw.summary()['IdxChannel']==chan].to_numpy()
+            if list(sw_neg_times) != []:
+                idx_neg_nearest = find_nearest(sw_neg_times, 3)
+                sw_neg_time = sw_neg_times[idx_neg_nearest]
+                sw_neg_idx = 3*sf
+            else:
+                summary = sw.summary()[sw.summary()['IdxChannel']==chan].reset_index()
+                summary['SigmaPeak'] = np.ones(1) * np.nan
+                summary['PhaseAtSigmaPeak'] = np.ones(1) * np.nan
+                summary['ndPAC'] = np.ones(1) * np.nan
+    
+        ## continue only if channel contains sw
+        if list(sw_neg_times) != []:
+            if max(data_broad.shape) - sw_neg_idx < aft:
+                aft = max(data_broad.shape) - sw_neg_idx
+                # compensate for shorter after period by making longer before period
+                # if sw_neg_idx < bef:
+                #     bef = max(data_broad.shape) - sw_neg_idx
+                # else:
+                #     bef = aft + bef
+                # print('Post - compensation')
+        
+            if sw_neg_idx < bef:
+                bef = sw_neg_idx
+                # bef = max(data_broad.shape) - sw_neg_idx
+                # print('Pre - compensation')
+        
+
+            sw_idx, valid_idx = yasa.get_centered_indices(sw._data[chan,:].squeeze(), 
+                                                          np.asarray([sw_neg_idx]), bef, aft) 
+            
+            # extract analytical phase for SOs and amplitude for spindles
+            sw_pha, sp_amp = extract_pha_amp(sw._data[chan,:].squeeze(), data_broad[chan,:].squeeze(), sf, method='emd')                               
+            sw_pha, sp_amp = sw_pha[sw_idx[0][0]:sw_idx[0][-1]], sp_amp[sw_idx[0][0]:sw_idx[0][-1]]
+              
+            # only keep peaks near stim onset
+            idx_not = np.where(np.arange(0, len(sw_neg_times)) != idx_neg_nearest)[0]
+            summary = sw.summary()[sw.summary()['IdxChannel']==chan].reset_index().drop(idx_not, inplace=False)
+            
+            # 1) Find location of max sigma amplitude in epoch
+            idx_max_amp = sp_amp.argmax(axis=0)
+            
+            # Now we need to append it back to the original unmasked shape
+            # to avoid error when idx.shape[0] != idx_valid.shape, i.e.
+            # some epochs were out of data bounds.
+            summary['SigmaPeak'] = np.ones(1) * np.nan
+            
+            # Timestamp at sigma peak, expressed in seconds from negative peak
+            # e.g. -0.39, 0.5, 1, 2 -- limits are [time_before, time_after]
+            time_sigpk = (idx_max_amp - bef) / sf
+            
+            # convert to absolute time from beginning of the recording
+            # time_sigpk only includes valid epoch
+            time_sigpk_abs = (sw_neg_idx / sf) + time_sigpk
+            summary['SigmaPeak'] = time_sigpk_abs
+            
+            # 2) PhaseAtSigmaPeak
+            # Find SW phase at max sigma amplitude in epoch
+            pha_at_max = np.squeeze(np.take_along_axis(sw_pha,
+                                                       idx_max_amp[..., None],
+                                                       axis=0))
+            summary['PhaseAtSigmaPeak'] = np.ones(1) * np.nan
+            summary['PhaseAtSigmaPeak'] = pha_at_max
+            
+            # 3) Normalized Direct PAC, with thresholding
+            ndp = np.squeeze(tpm.norm_direct_pac(sw_pha[None, ...],
+                                                 sp_amp[None, ...], p=0.05))
+            summary['ndPAC'] = np.ones(1) * np.nan
+            summary['ndPAC'] = ndp
+            
+        else:
+            pass
+        
+        summaries.append(summary)
+        
+    return summaries
+
+#%%
 # erpac = ERPAC(epochs_mastoids)
 
 # #%%
