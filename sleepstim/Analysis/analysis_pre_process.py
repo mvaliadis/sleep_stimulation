@@ -21,6 +21,8 @@ import yasa
 import mne
 import pingouin as pg
 from mne.stats import permutation_cluster_test
+from pyriemann.estimation import Covariances, Shrinkage
+from pyriemann.clustering import Potato
 import logging
 import time
 import wonambi
@@ -373,12 +375,6 @@ def to_do_combine_recordings():
 
      
 #%%
-## SNR computation
-
-# snr_asr = asr.ASR(sfreq = Data.sfreq, method='euclid')
-# snr_asr.fit(Data.data[:, eeg_index].T)
-
-#%%
 
 def artifact_detect_hypno(data, hypno_path, sf, downsample=False, method='covar', window=2, inspection=False): 
     
@@ -636,7 +632,23 @@ def check_match_data_hypno_elements(data_path, hypno_path):
         return exist_exp_files, exist_hyp_files
     else:
         raise TypeError('No subject entries align! Please check whether the paths have any corresponding data and hypnogram files')
-        
+ 
+#%%
+def art_detect(epochs):     
+    # Calculate the covariance matrices
+    covmats = Covariances().fit_transform(epochs.get_data('eeg')*1e6)
+    # Shrink the covariance matrix (ensure positive semi-definite)
+    covmats = Shrinkage().fit_transform(covmats)
+    # Define Potato instance: 0 = clean, 1 = art
+    potato = Potato(metric='riemann', threshold=3, pos_label=0,
+                    neg_label=1, n_iter_max=100)
+     
+    # Apply Potato algorithm, extract z-scores and labels
+    zs = potato.fit_transform(covmats)
+    art = potato.predict(covmats).astype(int)
+    
+    return art.astype(bool)
+    
 #%%
 def label_artifacts(path, hypno_path, save=True): 
     exist_exp_files, exist_hyp_files = check_match_data_hypno_elements(path, hypno_path)
@@ -814,6 +826,27 @@ def Data_SW(path, hypno_path, save=True):
             continue
 
 #%% 
+def plot_ndPAC(df_sw):
+    fig, axes = plt.subplots()
+    # Create a topomap for ndPAC values
+    ndPAC = df_sw.groupby(['IdxChannel']).agg(np.nanmean)['ndPAC'].to_numpy()
+    im, cn = mne.viz.plot_topomap(data = ndPAC, names = df_sw['Channel'].unique()[0:-1], 
+                                  pos = epochs.info, cmap='Spectral_r', show_names = True, 
+                                  contours=0, axes=axes, show=False,                               
+                                  vmin=np.percentile(ndPAC, 5), vmax=np.percentile(ndPAC, 95));
+    
+    # add color bar
+    mne.viz.topomap._add_colorbar(axes, im, cmap = 'Spectral_r', side='right', pad=0.05, 
+                                  title=None, format=None, size='5%')
+    
+    # Set the plot title
+    axes.set_title('ndPAC values')
+    
+    # tighten layout
+    plt.tight_layout()
+    
+    return fig, axes
+
 #path = '/media/administrator/data/Study_1_data/Statistics/SW_summary/'
 def SW_spindle_PAC(path):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
@@ -1125,16 +1158,22 @@ def permutation_cluster_test_plot(epochs : list, times, T_obs, clusters, cluster
 
 #%%
 
-def PLV(epochs, ch_names, sf, foi = (0.5, 2)):
+def spectral_conn(epochs, ch_names, sf, tmin=-4, tmax=4, foi = (0.5, 2), method='ciplv'):
     indices = (np.ones(len(ch_names))*ch_names.index('C3'),           # row indices
                np.arange(0,len(ch_names),1))                          # col indices
     indices = indices[0].astype(int), indices[1]
-    plv = spectral_connectivity(epochs, method='plv', indices=indices,
-                                sfreq=sf, mode='multitaper', fmin=foi[0], fmax=foi[1],
-                                fskip=0, faverage=True, block_size=1000,
-                                verbose=0)
+    if method == 'psi':
+        from mne_connectivity import phase_slope_index
+        conn = phase_slope_index(epochs, indices=indices,
+                                 sfreq=sf, mode='multitaper', fmin=foi[0], fmax=foi[1],
+                                 verbose=0, tmin=tmin, tmax=tmax)
+    else:
+        conn = spectral_connectivity(epochs, method=method, indices=indices,
+                                     sfreq=sf, mode='multitaper', fmin=foi[0], fmax=foi[1],
+                                     fskip=0, faverage=True,
+                                     verbose=0, tmin=tmin, tmax=tmax)
         
-    return plv.freqs, plv._data.squeeze()
+    return conn.freqs, conn._data.squeeze()
 
 #%%
 ## plot spectrogram
@@ -1164,17 +1203,6 @@ def PLV(epochs, ch_names, sf, foi = (0.5, 2)):
 # max_peak_time = np.where(mean_epochs == np.max(mean_epochs))[0][0]
 
 #%%
-
-def load_mult_xdf(path: str):
-    data=[]
-    marker=[]
-    for file in sorted(os.listdir(path)):
-        if file.endswith(".xdf"):
-            streams, fileheader = pyxdf.load_xdf(file)
-            data.append(streams[0]['time_series'])
-            marker.append(streams[0]['time_stamps'])
-
-#%%
        
 def peak2peak_SW_duration(data, hypno_path, ch_names, chan='C3', sf=512, data_len=210):
     # epoch data
@@ -1196,61 +1224,8 @@ def peak2peak_SW_duration(data, hypno_path, ch_names, chan='C3', sf=512, data_le
 
 
 # p2p = peak2peak_SW_duration(Data.data, hypno_path, Data.chans)
-
-#%%
-
-# # create mne info
-# mne_info = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types=ch_types)
-
-# # create MNE object
-# raw = mne.io.RawArray(data,T, mne_info)
-   
-    
-#%%
-
-## Artifact rejection fun
-# ECG rejection
-# ecg_epochs = mne.preprocessing.create_ecg_epochs(raw)
-# ecg_epochs.plot_image(combine='mean')
-
-# eog_epochs = mne.preprocessing.create_eog_epochs(raw, baseline=(-0.5, -0.2))
-# eog_epochs.plot_image(combine='mean')
-# eog_epochs.average().plot_joint()
-            
-#%%
-## IRASA
-
-# # Apply the IRASA technique
-# freqs, psd_aperiodic, psd_osc = yasa.irasa(data2.T, sf, band=(1, 30), win_sec=4, return_fit=False)
-
-# # Plot the aperiodic component on a linear-log scale
-# plt.plot(freqs2, psd_aperiodic[0,:], 'k', lw=2)
-# plt.xlim(10, 100)
-# plt.yscale('log')
-# sns.despine()
-# plt.xlabel('Frequency [Hz]')
-# plt.ylabel('PSD log($uV^2$/Hz)');
-
-# # Plot the oscillatory component on a linear-linear scale
-# plt.plot(freqs2, psd_osc[0,:], 'k', lw=2)
-# plt.xlim(10, 100)
-# sns.despine()
-# plt.xlabel('Frequency [Hz]')
-# plt.ylabel('PSD log($uV^2$/Hz)');
-
-# # Plot the oscillatory + aperiodic component on a linear-log scale
-# psd_combined = psd_aperiodic[0, :] + psd_osc[0, :]
-# plt.plot(freqs2, psd_combined, 'k', lw=2)
-# plt.fill_between(freqs2, psd_combined, cmap='Spectral')
-# plt.xlim(10, 100)
-# plt.yscale('log')
-# sns.despine()
-# plt.xlabel('Frequency [Hz]')
-# plt.ylabel('PSD log($uV^2$/Hz)');
-
-# freqs, psd_aperiodic, psd_osc, fit_params = yasa.irasa(data2.T, sf)
-# fit_params
-
+  
+           
 #%%   
      
 # # PSD-based signal quality check

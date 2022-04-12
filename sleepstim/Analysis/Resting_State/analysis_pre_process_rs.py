@@ -92,50 +92,50 @@ def resting_state_power_analysis(path):
             post_freqs = np.unique([fm_post[i].freqs for i in range(len(fm_post))])
             pre_freqs = np.unique([fm_pre[i].freqs for i in range(len(fm_pre))])
             
-            post_peak_fit = np.asarray([fm_post[i]._peak_fit for i in range(len(fm_post))])
-            pre_peak_fit = np.asarray([fm_pre[i]._peak_fit for i in range(len(fm_pre))])
+            post_peak_fit = np.asarray([fm_post[i]._peak_fit for i in range(len(fm_post))])#.mean(0)
+            pre_peak_fit = np.asarray([fm_pre[i]._peak_fit for i in range(len(fm_pre))])#.mean(0)
             
+            # from fooof.plts.spectra import plot_spectrum
+            # plot_spectrum(pre_freqs, post_peak_fit - pre_peak_fit, color='green', label='Final Periodic Fit - Difference')
+        
             plt.close('all')
             
-            from fooof.plts.spectra import plot_spectrum
-            #plot_spectrum(post_freqs, post_peak_fit, color='green', label='Final Periodic Fit - Post Session')
-            #plot_spectrum(pre_freqs, pre_peak_fit, color='green', label='Final Periodic Fit - Pre Session')
-        
             ## Compute relative PSD per band
             bp_pre = yasa.bandpower_from_psd(pre_peak_fit, pre_freqs, 
                                              bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),
-                                                    (8, 12, 'Alpha'), (12, 30, 'Beta'), 
+                                                    (8, 13, 'Alpha'), (13, 30, 'Beta'), 
                                                     (30, 40, 'Gamma')], relative=False)
             bp_pre = bp_pre.rename(columns={'Chan': 'Epoch'})
             bp_pre['Epoch'] = np.arange(0, len(pre_peak_fit), 1)
             
             bp_post = yasa.bandpower_from_psd(post_peak_fit, post_freqs, 
                                               bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),
-                                                     (8, 12, 'Alpha'), (12, 30, 'Beta'), 
+                                                     (8, 13, 'Alpha'), (13, 30, 'Beta'), 
                                                      (30, 40, 'Gamma')], relative=False)
             bp_post = bp_post.rename(columns={'Chan': 'Epoch'})
             bp_post['Epoch'] = np.arange(0, len(post_peak_fit), 1)
             
             
             ## Create dataframe with post - pre differences 
-            psd_results["Subject"].extend([subjname]*len(bp_pre))
-            psd_results["Night"].extend([night]*len(bp_pre))
-            psd_results["Condition"].extend([cond]*len(bp_pre))
-            psd_results["Session"].extend(['pre']*len(bp_pre))
-            psd_results["Delta_pre"].extend(stats.zscore(bp_pre['Delta']))
-            psd_results["Theta_pre"].extend(stats.zscore(bp_pre['Theta']))
-            psd_results["Alpha_pre"].extend(stats.zscore(bp_pre['Alpha']))
-            psd_results["Beta_pre"].extend(stats.zscore(bp_pre['Beta']))
-            psd_results["Gamma_pre"].extend(stats.zscore(bp_pre['Gamma']))
-            # psd_results["Subject"].extend([subjname]*len(bp_post))
-            # psd_results["Night"].extend([night]*len(bp_post))
-            # psd_results["Condition"].extend([cond]*len(bp_post))
-            # psd_results["Session"].extend(['post']*len(bp_post))
-            psd_results["Delta_DV"].extend(bp_post['Delta'] - bp_pre['Delta'])
-            psd_results["Theta_DV"].extend(bp_post['Theta'] - bp_pre['Theta'])
-            psd_results["Alpha_DV"].extend(bp_post['Alpha'] - bp_pre['Alpha'])
-            psd_results["Beta_DV"].extend(bp_post['Beta'] - bp_pre['Beta'])
-            psd_results["Gamma_DV"].extend(bp_post['Gamma'] - bp_pre['Gamma'])
+            # psd_results["Subject"].extend([subjname]*len(bp_pre))
+            # psd_results["Night"].extend([night]*len(bp_pre))
+            # psd_results["Condition"].extend([cond]*len(bp_pre))
+            # psd_results["Session"].extend(['pre']*len(bp_pre))
+            # psd_results["Delta_pre"].extend(bp_pre['Delta'])
+            # psd_results["Theta_pre"].extend(bp_pre['Theta'])
+            # psd_results["Alpha_pre"].extend(bp_pre['Alpha'])
+            # psd_results["Beta_pre"].extend(bp_pre['Beta'])
+            # psd_results["Gamma_pre"].extend(bp_pre['Gamma'])
+            psd_results["Subject"].extend([subjname]*len(bp_post))
+            psd_results["Night"].extend([night]*len(bp_post))
+            psd_results["Condition"].extend([cond]*len(bp_post))
+            psd_results["Session"].extend(['post']*len(bp_post))
+            psd_results["Delta_DV"].extend(bp_post['Delta'] - bp_pre['Delta'].mean())
+            psd_results["Theta_DV"].extend(bp_post['Theta'] - bp_pre['Theta'].mean())
+            psd_results["Alpha_DV"].extend(bp_post['Alpha'] - bp_pre['Alpha'].mean())
+            psd_results["Beta_DV"].extend(bp_post['Beta'] - bp_pre['Beta'].mean())
+            psd_results["Gamma_DV"].extend(bp_post['Gamma'] - bp_pre['Gamma'].mean())
+            
             
             ###
             topo_results["Subject"].extend([subjname]*64)
@@ -161,65 +161,51 @@ def resting_state_power_analysis(path):
     
     return topo_results, psd_results
 
+def fix_df_topo(df_topo): 
+    sub = df_topo['Subject'].to_numpy()
+    subs = [sub[i][0:8] for i in range(len(sub))]
+    df_topo['Subject'] = subs
+    
+    path = '/media/administrator/data/Study_1_data/Pre-processed_data_resting_state/YIOYSRPX_2_pre_rs_preprocessed.p'
+    data = load_preprocessed_data(path)
+    chan = data.ch_names[0:64]
+    dup_chans = chan + chan
+    stacks = []
+    for i in range(int(len(df_topo)/128)):
+        stacks.append(dup_chans)
+    chans = np.hstack(stacks)
+    df_topo['Channels'] = chans
+    
+    subjects = df_topo['Subject'].unique()
+    for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
+        df_topo.drop(df_topo.loc[df_topo['Subject']==i[0]].index, inplace=True)
+        
+    return df_topo
+
+def fix_df_psd(df_psd):
+    sub = df_psd['Subject'].to_numpy()
+    subs = [sub[i][0:8] for i in range(len(sub))]
+    df_psd['Subject'] = subs
+    
+    subjects = df_psd['Subject'].unique()
+    for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
+        df_psd.drop(df_psd.loc[df_psd['Subject']==i[0]].index, inplace=True)
+    
+    return df_psd
 
 #%%
 run = input('Do you wish to restart the resting state power analysis? ')
+save_path = '/media/administrator/data/Study_1_data/Statistics/Resting_state/' 
 if run == 'yes':
     topo_results, psd_results = resting_state_power_analysis(path)
     df_topo, df_psd = pd.DataFrame(topo_results), pd.DataFrame(psd_results)
-    save_path = '/media/administrator/data/Study_1_data/Statistics/Resting_state/rs_results.p'
-    pickle.dump(df, open(save_path, "wb"))  
+    df_topo = fix_df_topo(df_topo)
+    df_psd = fix_df_psd(df_psd)
+    df_topo.to_csv(save_path + 'rs_results_topo.csv')
+    df_psd.to_csv(save_path + 'rs_results_psd.csv')
 else:
-    df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Resting_state/rs_results.p', 'rb'))
-    df.to_csv(r'/media/administrator/data/Study_1_data/Statistics/Resting_state/rs_results.csv')
-
-
-#%%
-sub = df_topo['Subject'].to_numpy()
-subs = [sub[i][0:8] for i in range(len(sub))]
-df_topo['Subject'] = subs
-
-chan = epochs_eyes_open_pre.info['ch_names'][0:64]
-# dup_chans = list(itertools.chain(*zip(chan,chan)))
-dup_chans = chan + chan
-stacks = []
-for i in range(int(len(df_topo)/128)):
-    stacks.append(dup_chans)
-    # stacks.append(np.arange(0,64,1))
-chans = np.hstack(stacks)
-df_topo['Channels'] = chans
-
-subjects = df_topo['Subject'].unique()
-for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
-    df_topo.drop(df_topo.loc[df_topo['Subject']==i[0]].index, inplace=True)
-    
-#%%
-sub = df_psd['Subject'].to_numpy()
-subs = [sub[i][0:8] for i in range(len(sub))]
-df_psd['Subject'] = subs
-
-subjects = df_psd['Subject'].unique()
-for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
-    df_psd.drop(df_psd.loc[df_psd['Subject']==i[0]].index, inplace=True)
-
-#%%
-freqs_pre = df.groupby('Frequencies (pre)').mean()['Frequencies (post)'].to_numpy()
-fit_pre = df.groupby('Frequencies (pre)').mean()['Periodic fit (pre)'].to_numpy()
-
-freqs_post = df.groupby('Frequencies (post)').mean()['Frequencies (pre)'].to_numpy()
-fit_post = df.groupby('Frequencies (post)').mean()['Periodic fit (post)'].to_numpy()
-
-plt.plot(freqs_pre, fit_pre, label='pre')
-plt.plot(freqs_post, fit_post, label='post')
-plt.legend()
-
-sns.lineplot(data = df, x = 'Frequencies (post)', y = 'Periodic fit (post)', hue = 'Condition',
-             ci = None)
-sns.despine()
-plt.figure()
-sns.lineplot(data = df, x = 'Frequencies (pre)', y = 'Periodic fit (pre)', hue = 'Condition',
-             ci = None)
-sns.despine()
+    df_topo = pd.read_csv(save_path + 'rs_results_topo.csv')
+    df_psd = pd.read_csv(save_path + 'rs_results_psd.csv')
 
 #%%
 
@@ -253,7 +239,44 @@ for cond in np.unique(df_topo.Condition):
         # tighten layout
         plt.tight_layout()
 
-df_bp = pd.DataFrame(results)
+df_bp = pd.DataFrame(results) 
+
+#%%
+sns.set_theme(color_codes=True)
+# df_psd.dropna(inplace=True) 
+for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']): 
+    print(f'Running LMM for frequency band: {band}')
+    
+    model = Lmer(f"{band}_DV ~ Condition + (1|Subject)", 
+                 data=df_psd)
+    
+    # Using dummy-coding; suppress summary output
+    model.fit(factors={"Condition": ["sham", "up", "down"],
+                       # "Session" : ["pre", "post"]}, 
+                       },
+              ordered=True, summarize=False)
+    
+    # Get ANOVA table, but force orthogonality for valid SS III inferences
+    # In this case the data is unbalaced, otherwise nothing changes
+    print(model.anova(force_orthogonal=True))
+    
+    ## Post-hoc tests 
+    marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
+                                                     marginal_vars='Condition'
+                                                     )
+    
+    print(marginal_estimates)
+    print(comparisons)
+ 
+# Plot
+for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
+    plt.figure()
+    sns.violinplot(data = df_psd, y=f'{band}_DV',
+                   x='Condition', dodge=True)
+    plt.tight_layout()
+    sns.despine()      
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/{band}_diff.jpg')
+    plt.close('all')
 
 #%%
 
@@ -270,15 +293,9 @@ for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
         # mdf = md.fit()   
         # print(mdf.summary())
         
-        
-        # We're going to fit a multi-level regression using the
-        # categorical predictor which has 3 levels
-        # di = {"sham" : 1.0, "up" : 0.5, "down" : 1.5}
-        # df = df.replace({"Condition": di})
-        
         ## Pymer based LMM
         # data frame by channel
-        df_dummy = df_topo #[df_topo.Channels==chan]
+        df_dummy = df_topo#[df_topo.Channels==chan]
         
         model = Lmer(f"{band}_topography ~ Condition*Channels*Session + (1|Subject)", 
                      data=df_dummy)
@@ -302,107 +319,89 @@ for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
         
         print(marginal_estimates)
         print(comparisons)
-   
-
-#%%
-sns.set_theme(color_codes=True)
-lmm_power = []
-df_psd.dropna(inplace=True) 
-for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']): 
-    print(f'Running LMM for frequency band: {band}')
-    
-    model = Lmer(f"{band}_DV ~ Condition*{band}_pre + (1|Subject)", 
-                 data=df_psd)
-    
-    # Using dummy-coding; suppress summary output
-    model.fit(factors={"Condition": ["sham", "up", "down"],
-                       # "Session" : ["pre", "post"]}, 
-                       },
-              ordered=True, summarize=False)
-    
-    # Get ANOVA table, but this time force orthogonality for valid SS III inferences
-    # In this case the data are balanced so nothing changes
-    print(model.anova(force_orthogonal=True))
-    
-    # Plot
-    ax = sns.pointplot(data = df_psd, x='Session', y=f'Relative_{band}', 
-                       hue='Condition', estimator=np.mean, ci=95, dodge=True)
-    plt.tight_layout()
-    sns.despine()
-    
-    ## Post-hoc tests 
-    marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
-                                                     marginal_vars='Session',
-                                                     grouping_vars='Condition',
-                                                     )
-    
-    print(marginal_estimates)
-    print(comparisons)
-             
 
 #%%
 
-info = mne.create_info(ch_names=epochs_eyes_open_pre.info.ch_names[0:64], sfreq=epochs_eyes_open_pre.info['sfreq'], ch_types=['eeg']*64)
-info.set_montage(mne.channels.make_standard_montage('standard_1005'))
-sensor_adjacency, ch_names = mne.channels.find_ch_adjacency(info, ch_type = 'eeg')
+# freqs_pre = df.groupby('Frequencies (pre)').mean()['Frequencies (post)'].to_numpy()
+# fit_pre = df.groupby('Frequencies (pre)').mean()['Periodic fit (pre)'].to_numpy()
 
-# X = np.vstack([df_bp[df_bp.band=='Delta'][df_bp.cond=='down']['band_power'].to_numpy()[0], 
-#                df_bp[df_bp.band=='Delta'][df_bp.cond=='up']['band_power'].to_numpy()[0], 
-#                df_bp[df_bp.band=='Delta'][df_bp.cond=='sham']['band_power'].to_numpy()[0]]).T
+# freqs_post = df.groupby('Frequencies (post)').mean()['Frequencies (pre)'].to_numpy()
+# fit_post = df.groupby('Frequencies (post)').mean()['Periodic fit (post)'].to_numpy()
 
-t_obs, clusters, cluster_pv, H0 = mne.stats.spatio_temporal_cluster_test(X, n_permutations=1024, 
-                                                                         adjacency=sensor_adjacency)
+# plt.plot(freqs_pre, fit_pre, label='pre')
+# plt.plot(freqs_post, fit_post, label='post')
+# plt.legend()
 
-#%%
+# sns.lineplot(data = df, x = 'Frequencies (post)', y = 'Periodic fit (post)', hue = 'Condition',
+#              ci = None)
+# sns.despine()
+# plt.figure()
+# sns.lineplot(data = df, x = 'Frequencies (pre)', y = 'Periodic fit (pre)', hue = 'Condition',
+#              ci = None)
+# sns.despine()
 
-sham = df[df['Condition']=='sham']['Normalized theta (wavelet) power - diff'].to_numpy()
-sham = sham.reshape(64, int(len(sham)/64))
-    
-up = df[df['Condition']=='up']['Normalized theta (wavelet) power - diff'].to_numpy()
-up = up.reshape(64, int(len(up)/64))
-    
-down = df[df['Condition']=='down']['Normalized theta (wavelet) power - diff'].to_numpy()
-down = down.reshape(64, int(len(down)/64))
+# #%%
 
-# rmanova = pg.rm_anova(dv='Normalized theta (wavelet) power - diff', within=['Condition','Channels'], 
-#                       subject='Subject', detailed = True, data=df)
-# # Pretty printing of ANOVA summary
-# pg.print_table(rmanova)
-# # Post hoc analysis
-# posthocs = pg.pairwise_ttests(dv='Normalized theta (wavelet) power - diff', within='Condition',
-#                               subject='Subject', data=df)
-# pg.print_table(posthocs)
+# info = mne.create_info(ch_names=epochs_eyes_open_pre.info.ch_names[0:64], sfreq=epochs_eyes_open_pre.info['sfreq'], ch_types=['eeg']*64)
+# info.set_montage(mne.channels.make_standard_montage('standard_1005'))
+# sensor_adjacency, ch_names = mne.channels.find_ch_adjacency(info, ch_type = 'eeg')
 
-t_obs, clusters, cluster_pv, H0 = mne.stats.spatio_temporal_cluster_test([down.T, up.T, sham.T], 
-                                                                         n_permutations=1000,
-                                                                         tail=1, n_jobs=1,
-                                                                         out_type='mask')
+# # X = np.vstack([df_bp[df_bp.band=='Delta'][df_bp.cond=='down']['band_power'].to_numpy()[0], 
+# #                df_bp[df_bp.band=='Delta'][df_bp.cond=='up']['band_power'].to_numpy()[0], 
+# #                df_bp[df_bp.band=='Delta'][df_bp.cond=='sham']['band_power'].to_numpy()[0]]).T
+
+# t_obs, clusters, cluster_pv, H0 = mne.stats.spatio_temporal_cluster_test(X, n_permutations=1024, 
+#                                                                          adjacency=sensor_adjacency)
 
 #%%
-## plot wavelet power diff (group level analysis)
-fig, ax = plt.subplots()
-im, cm = mne.viz.plot_topomap(up.mean(1), 
-                              pos = epochs_eyes_open_pre.info, vmin = np.percentile(up.mean(1), 5),
-                              vmax = np.percentile(up.mean(1), 95), cmap='Spectral_r', axes=ax, show=True)
-fig.colorbar(im, ax=ax)      
-plt.title('Up - Normalized theta (wavelet) power - diff')
-plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/theta_up.jpg')
+# sham = df[df['Condition']=='sham']['Normalized theta (wavelet) power - diff'].to_numpy()
+# sham = sham.reshape(64, int(len(sham)/64))
+    
+# up = df[df['Condition']=='up']['Normalized theta (wavelet) power - diff'].to_numpy()
+# up = up.reshape(64, int(len(up)/64))
+    
+# down = df[df['Condition']=='down']['Normalized theta (wavelet) power - diff'].to_numpy()
+# down = down.reshape(64, int(len(down)/64))
 
-fig2, ax2 = plt.subplots()
-im2, cm2 = mne.viz.plot_topomap(down.mean(1), 
-                              pos = epochs_eyes_open_pre.info, vmin = np.percentile(down.mean(1), 5),
-                              vmax = np.percentile(down.mean(1), 95), cmap='Spectral_r', axes=ax2, show=True)
-fig2.colorbar(im2, ax=ax2)      
-plt.title('Down - Normalized theta (wavelet) power - diff')
-plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/theta_down.jpg')
+# # rmanova = pg.rm_anova(dv='Normalized theta (wavelet) power - diff', within=['Condition','Channels'], 
+# #                       subject='Subject', detailed = True, data=df)
+# # # Pretty printing of ANOVA summary
+# # pg.print_table(rmanova)
+# # # Post hoc analysis
+# # posthocs = pg.pairwise_ttests(dv='Normalized theta (wavelet) power - diff', within='Condition',
+# #                               subject='Subject', data=df)
+# # pg.print_table(posthocs)
 
-fig3, ax3 = plt.subplots()
-im3, cm3 = mne.viz.plot_topomap(sham.mean(1), 
-                              pos = epochs_eyes_open_pre.info, vmin = np.percentile(sham.mean(1), 5),
-                              vmax = np.percentile(sham.mean(1), 95), cmap='Spectral_r', axes=ax3, show=True)
-fig3.colorbar(im3, ax=ax3)      
-plt.title('Sham - Normalized theta (wavelet) power - diff')
-plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/theta_sham.jpg')
+# t_obs, clusters, cluster_pv, H0 = mne.stats.spatio_temporal_cluster_test([down.T, up.T, sham.T], 
+#                                                                           n_permutations=1000,
+#                                                                           tail=1, n_jobs=1,
+#                                                                           out_type='mask')
+
+# #%%
+# ## plot wavelet power diff (group level analysis)
+# fig, ax = plt.subplots()
+# im, cm = mne.viz.plot_topomap(up.mean(1), 
+#                               pos = epochs_eyes_open_pre.info, vmin = np.percentile(up.mean(1), 5),
+#                               vmax = np.percentile(up.mean(1), 95), cmap='Spectral_r', axes=ax, show=True)
+# fig.colorbar(im, ax=ax)      
+# plt.title('Up - Normalized theta (wavelet) power - diff')
+# plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/theta_up.jpg')
+
+# fig2, ax2 = plt.subplots()
+# im2, cm2 = mne.viz.plot_topomap(down.mean(1), 
+#                               pos = epochs_eyes_open_pre.info, vmin = np.percentile(down.mean(1), 5),
+#                               vmax = np.percentile(down.mean(1), 95), cmap='Spectral_r', axes=ax2, show=True)
+# fig2.colorbar(im2, ax=ax2)      
+# plt.title('Down - Normalized theta (wavelet) power - diff')
+# plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/theta_down.jpg')
+
+# fig3, ax3 = plt.subplots()
+# im3, cm3 = mne.viz.plot_topomap(sham.mean(1), 
+#                               pos = epochs_eyes_open_pre.info, vmin = np.percentile(sham.mean(1), 5),
+#                               vmax = np.percentile(sham.mean(1), 95), cmap='Spectral_r', axes=ax3, show=True)
+# fig3.colorbar(im3, ax=ax3)      
+# plt.title('Sham - Normalized theta (wavelet) power - diff')
+# plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/theta_sham.jpg')
 
 #%%
 ## Plot PSD (group level analysis)

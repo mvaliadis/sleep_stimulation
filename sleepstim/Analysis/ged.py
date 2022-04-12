@@ -74,3 +74,23 @@ print('Eigenvalues =', list(np.round(eigval, 2)))
 # Apply spatial filters by multiplying data with eigenvectors
 sf_comp_nrem = np.dot(Data.data.T, eigvec).T
 print(sf_comp_nrem.shape)
+
+
+#%%
+
+covmats_lf = Covariances().fit_transform(epochs.copy().filter(l_freq=8, h_freq=12).get_data('eeg'))
+covmats_lf = detrend(covmats_lf, type='constant')
+covmats_lf = Shrinkage().fit_transform(covmats_lf)
+
+covmats_hf = Covariances().fit_transform(epochs.copy().filter(l_freq=12, h_freq=16).get_data('eeg'))
+covmats_hf = detrend(covmats_hf, type='constant')
+covmats_hf = Shrinkage().fit_transform(covmats_hf)
+
+
+sns.heatmap(covmats_lf.mean(0), xticklabels= Data.ch_names[0:23], 
+            yticklabels= Data.ch_names[0:23])
+plt.figure()
+sns.heatmap(covmats_hf.mean(0), xticklabels= Data.ch_names[0:23], 
+            yticklabels= Data.ch_names[0:23])
+
+eigval, eigvec = eigh(covmats_lf.mean(0), covmats_hf.mean(0))

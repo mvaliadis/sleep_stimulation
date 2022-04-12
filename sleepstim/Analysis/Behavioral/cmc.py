@@ -26,6 +26,7 @@ import yasa
 import seaborn as sns
 from detecta import detect_onset
 from scipy.integrate import trapz, cumtrapz
+from matplotlib.colors import Normalize
 from lspopt import spectrogram_lspopt
 from tqdm import tqdm
 import pandas as pd
@@ -206,7 +207,7 @@ def integration_time_reset(data, sf=1000, plot=True):
 
 def plot_spectrogram(data, sf, foi=(10,200), method='stft', dB=False):
     """
-
+    
     Parameters
     ----------
     data : TYPE
@@ -217,26 +218,31 @@ def plot_spectrogram(data, sf, foi=(10,200), method='stft', dB=False):
         DESCRIPTION. The default is (10,200).
     method : TYPE, optional
         DESCRIPTION. The default is 'stft'.
-
+    
     Returns
     -------
     fig : TYPE
         DESCRIPTION.
-
+    
     """
     
     fig, ax1 = plt.subplots(1, 1, figsize=(8, 4))
     if method=='stft':
-        f, t, Zxx = signal.stft(data, fs=sf, nperseg=int((2/foi[0])*sf), noverlap = 64)
+        # f, t, Zxx = signal.stft(data, fs=sf, nperseg=int((2/foi[0])*sf), noverlap = 64)
+        f, t, Zxx = yasa.stft_power(data, sf, window=int(foi[0]/1), step=.2, 
+                                    band=foi, norm=True, interp=True)
     elif method=='multitaper':
         f, t, Zxx = spectrogram_lspopt(data, fs=sf, nperseg=int((2/foi[0])*sf), 
-                                       c_parameter=20.0, noverlap = 64)
-    if dB:
-        Zxx = np.log10(Zxx)
+                                       c_parameter=20.0, noverlap = 0)
+        if dB:
+            Zxx = 10*np.log10(Zxx)
     ## Plotting
     foi_idx = np.logical_and(f >= foi[0], f <= foi[1])
-    ax1.pcolormesh(t, f[foi_idx], np.abs(Zxx)[foi_idx,:], vmin=np.percentile(np.abs(Zxx)[foi_idx,:], 5), 
-                   vmax=np.percentile(np.abs(Zxx)[foi_idx,:], 95), shading='gouraud', cmap=plt.cm.Spectral_r)
+    vmin, vmax = np.percentile(np.abs(Zxx), [0 + 5, 100 - 5])
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    ax1.pcolormesh(t, f[foi_idx], np.abs(Zxx)[foi_idx,:], vmin=vmin, 
+                   vmax=vmax, shading='gouraud', norm = norm,
+                   antialiased=True, cmap=plt.cm.Spectral_r)
     if method=='stft':
         ax1.set_title('Short-Time Fourier Transform Spectrogram')
     elif method=='multitaper':
@@ -245,8 +251,8 @@ def plot_spectrogram(data, sf, foi=(10,200), method='stft', dB=False):
     ax1.set_ylabel('Frequency [Hz]')
     ax1.set_xlim(t[0], t[-1])
     plt.tight_layout()
-
-    return fig   
+    
+    return fig
            
 def process_rawXDF_CMC(file): 
     # load data
@@ -275,20 +281,19 @@ def process_rawXDF_CMC(file):
     ## filter data
     raw.filter(l_freq = 1, h_freq = 45, picks='eeg', verbose = 0)
     raw.filter(l_freq = 10, h_freq = 200, picks='emg', verbose = 0)
-    # raw.filter(l_freq = 0.3, h_freq = 70, picks='ecg', verbose = 0)
+    raw.filter(l_freq = 0.3, h_freq = 70, picks='ecg', verbose = 0)
     raw.notch_filter(freqs=(50,100,150), verbose = 0) # method = 'spectrum_fit'
     
     ## PREP pipeline bad channel detection, interpolation and subsequent robust rereferencing 
     prep_params = {"ref_chs": chans[0:64],
                    "reref_chs": chans[0:64]
-                    }
+                   }
 
     raw_ref = pyprep.reference.Reference(raw, prep_params, ransac=False)
     raw_ref.perform_reference()
     
     ## clean via ICA  -- WARNING -- NO ECG component rejection
     fit_ica = ica_slalom_eeg_data(raw_ref.raw, file)
-    # fit_ica = ica_slalom_eeg_data(raw, file)
     
     ## CSD, but first drop bads from info
     fit_ica.info['bads'] = []
@@ -296,14 +301,11 @@ def process_rawXDF_CMC(file):
     
     ## get EMG/C3 data
     edcdat = raw.get_data(picks='EDC_R').squeeze()*1e6
-    # fdsdat = raw.get_data(picks='FDS_R').squeeze()*1e6
-    # c3dat = raw_ref.EEG[chans.index("C3"),:].squeeze()*1e6
     c3dat = fit_ica.get_data(picks='C3').squeeze()*1e3 # if CSD, else 1e6
     ecgdat = raw.get_data(picks='ECG').squeeze()*1e6
    
     ## linear envelope of edc for movement onset
     edcdat_le = linear_envelope(edcdat, sf=1000, fc_bp=[10, 200], fc_lp=8)
-    # fdsdat_le = linear_envelope(fdsdat, sf=1000, fc_bp=[10, 200], fc_lp=8)
     
     ## Plot spectrogram of EDC
     # plot_spectrogram(edcdat, sf, foi=(10,200), method='multitaper', dB=False)
@@ -470,14 +472,70 @@ def cmc_results(maindir):
             results["Trial2_SNR"].extend([trial_dict['Trial2_SNR']])
             results["Trial3_SNR"].extend([trial_dict['Trial3_SNR']])
             results["Trial4_SNR"].extend([trial_dict['Trial4_SNR']])
-            
-            # df = pd.DataFrame(results)
-            # df2 = pd.concat([df, df_res], axis=0)
-            # df2 = df2.reset_index()
-            # del df2['index']
-        
+               
             return results
+
+def fix_df_cmc(df_cmc):
+    night = df_cmc['Night'].to_numpy()
+    nights = [int(night[i][-1]) for i in range(len(night))]
+    df_cmc['Night'] = nights
+    df_cmc.reset_index(inplace=True)
+    
+    for idx, (band, foi) in enumerate(zip(['Theta', 'Alpha', 'Beta', 'Gamma'],
+                                          ((4, 8), (8, 13), (13, 30), (30, 40)))):
+        # print(idx, band, foi)
+        band_idx = np.logical_and(np.asarray(df_cmc['Trial1_CMC'][0][0]) >= foi[0], 
+                                  np.asarray(df_cmc['Trial1_CMC'][0][0]) <= foi[1])
+
+        for trial in range(1,5):
+            block_cmc = [df_cmc[f'Trial{trial}_CMC'][i][1][band_idx].mean() for i in 
+                         range(len(df_cmc[f'Trial{trial}_CMC']))]
+        
+            df_cmc[f'{band}_{trial}_CMC'] = block_cmc
             
+            snr = [np.asarray(df_cmc[f'Trial{trial}_SNR'][i]).mean() for i in 
+                   range(len(df_cmc[f'Trial{trial}_SNR']))]
+        
+            df_cmc[f'SNR_{trial}'] = snr
+        
+    for i in ["Trial1_CMC","Trial2_CMC","Trial3_CMC","Trial4_CMC", 
+              "Trial1_SNR","Trial2_SNR","Trial3_SNR","Trial4_SNR",
+              "index"]:
+        del df_cmc[i]
+        
+    df_cmc.groupby([ "Subject", "Night", "Condition", "Session"]).sum().transpose().stack(0).reset_index()
+    df_cmc = df_cmc.set_index(["Subject", "Night", "Condition", "Session"])
+    df_cmc = df_cmc.reindex(sorted(df_cmc.columns), axis=1).T
+    
+    df_cmc["Block"] = [0,1,2,3]*5
+    df_cmc = df_cmc.reindex(sorted(df_cmc.columns), axis=1)
+    
+    freqband = ["alpha"]*4
+    freqband.extend(["beta"]*4)
+    freqband.extend(["gamma"]*4)
+    freqband.extend(["SNR"]*4)
+    freqband.extend(["theta"]*4)
+    df_cmc["Freq"] = freqband
+    
+    df_cmc = df_cmc.reset_index()
+    del df_cmc["index"]
+    
+    df_cmc = df_cmc.pivot(columns = ["Freq", "Block"])
+    df_cmc = df_cmc.T.reorder_levels(["Subject","Condition","Night",
+                                      "Block", "Freq","Session"]).sort_index()
+    df_cmc.reset_index()
+    
+    df_ = df_cmc.copy()
+    df_['Total'] = df_.sum(axis=1)
+    for i in range(20):
+        del df_[i]
+        
+    _df_ = df_.reset_index()
+    _df_ = _df_.pivot(columns = ["Freq","Session"], values = "Total", index = ["Subject","Condition","Night","Block"])
+    df_cmc = _df_.reset_index()
+    
+    return df_cmc
+
 #%%
 if __name__ == '__main__':
     maindir = '/media/administrator/data/Study_1_data/Pre_post_data/'
@@ -488,15 +546,16 @@ if __name__ == '__main__':
         save_path = '/media/administrator/data/Study_1_data/Statistics/CMC/CMC_results.p'
         pickle.dump(df, open(save_path, "wb"))  
     else:
-        df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/CMC/CMC_results.p', 'rb'))
-        df = df.drop([6,11,12,13,14,15,16,37,48,85,86,93,98,99])
-        subjects = df['Subject'].unique()
-        for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
-            df.drop(df.loc[df['Subject']==i[0]].index, inplace=True)
+        df_cmc = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/CMC/CMC_results.p', 'rb'))
+        df_cmc = df_cmc.drop([6,11,12,13,14,15,16,37,48,85,86,93,98,99])
+        subjects = df_cmc['Subject'].unique()
+        for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ','RVQL2MRD','6QF3HOJC']):
+            df_cmc.drop(df_cmc.loc[df_cmc['Subject']==i[0]].index, inplace=True)
+        df_cmc = fix_df_cmc(df_cmc) 
         
     for _, trial in enumerate(['Trial1_SNR','Trial2_SNR','Trial3_SNR','Trial4_SNR']):
         fig, ax = plt.subplots(figsize=(15,10))
-        sns.violinplot(data = df[trial], ax=ax, palette="muted")
+        sns.violinplot(data = df[trial], ax=ax, palette="mted")
         files = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(maindir) for i in files if 'slalom_pre' in i or 'slalom_post' in i])  
         labels = [files[i].split('/')[-2] + '_' + files[i].split('/')[-1].split('_')[-2] for i in range(len(files))]
         plt.title(trial)
@@ -627,41 +686,3 @@ if __name__ == '__main__':
     # stats.ttest_rel(beta_diff_up, beta_diff_sham)
     # stats.ttest_rel(beta_diff_down, beta_diff_sham)
     
-    
-#%%
-# from neurodsp.rhythm import compute_lagged_coherence
-# from neurodsp.plts.rhythm import plot_lagged_coherence
-
-# lag_coh_by_f, freqs = compute_lagged_coherence(c3dat, sf, (2, 40),
-#                                                 return_spectrum=True)
-# plot_lagged_coherence(freqs, lag_coh_by_f)
-
-# lag_coh_by_f, freqs = compute_lagged_coherence(signal2, sf, (2, 40),
-#                                                return_spectrum=True)
-# plot_lagged_coherence(freqs, lag_coh_by_f)
-
-# ## epoched correlation
-# t, ep1 = yasa.sliding_window(signal1, sf, window=2)
-# t, ep2 = yasa.sliding_window(signal2, sf, window=2)
-# corr_stats = [stats.pearsonr(ep1[i,:], ep2[i,:])[1] for i in range(ep1.shape[0])]
-
-
-# ## compute time shift based on correlation 
-# y1 = signal2
-# y2 = signal1
-# sr = sf
-# n = len(y1)
-
-# corr = signal.correlate(y2, y1, mode='same') 
-# corr /= np.sqrt(signal.correlate(y1, y1, mode='same')[int(n/2)] * signal.correlate(y2, y2, mode='same')[int(n/2)])
-# delay_arr = np.linspace(-0.5*n/sr, 0.5*n/sr, n)
-# delay = delay_arr[np.argmax(corr)]
-# print('y2 is ' + str(delay) + ' behind y1')
-
-# plt.figure()
-# plt.plot(delay_arr, corr)
-# plt.title('Lag: ' + str(np.round(delay, 3)) + ' s')
-# plt.xlabel('Lag')
-# plt.ylabel('Correlation coeff')
-# plt.tight_layout()
-# plt.show()

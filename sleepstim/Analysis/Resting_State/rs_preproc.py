@@ -357,6 +357,8 @@ def subject_cond_parser(file, study_phase='resting state'):
     # find condition by night
     if study_phase=='resting state':
         sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]))
+    elif study_phase=='rs_hrv':
+        sc =  file.split('/')[-2] + '_' + str(int(file.split('/')[-1].split('_')[1]))
     elif study_phase == 'sleep':
         #sc = file.split('/')[-2].split('_')[0] + '_' + str(int(file.split('/')[-2].split('_')[1]) - 1)
         sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]) - 1)

@@ -149,8 +149,8 @@ def oscillatory_plot_psd_map(epochs, foi=(0.5, 30), tmin=-3, tmax=0, session='sl
     if session=='sleep':
         bands = Bands({'delta': [0.5, 4],
                        'theta': [4, 8],
-                       'alpha': [8, 12],
-                       'sigma': [12, 16],
+                       'slow sigma': [8, 12],
+                       'fast sigma': [12, 16],
                        'beta': [16, 30]})
     else:
         bands = Bands({'delta': [1, 4],

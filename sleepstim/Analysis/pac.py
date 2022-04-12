@@ -32,6 +32,19 @@ def find_nearest(array, value):
     return idx
 
 ## extarct phase and amplitude 
+def imf_analytical_transform(epoch):
+    ## Phase analysis (filter with 2.0 Hz lp filter)
+    C3_lp = epoch.copy().filter(l_freq=None, h_freq=2.0).get_data(picks='C3').squeeze()*1e6
+    ## phase with imf - use freq transform 
+    imf_sw = [emd.sift.sift(C3_lp[i,:], imf_opts={'sd_thresh': 0.1}, max_imfs=1) for i in range(min(C3_lp.shape))]
+    sw_pha, sw_freq, sw_amplitude = [], [], []
+    for i in range(min(C3_lp.shape)):
+        sw_pha.append(emd.spectra.frequency_transform(imf_sw[i], epoch.info['sfreq'], 'nht')[0][:,0])
+        sw_freq.append(emd.spectra.frequency_transform(imf_sw[i], epoch.info['sfreq'], 'nht')[1][:,0])
+        sw_amplitude.append(emd.spectra.frequency_transform(imf_sw[i], epoch.info['sfreq'], 'nht')[2][:,0])
+        
+    return sw_pha, sw_freq, sw_amplitude
+
 def extract_pha_amp(data_narrow, data_broad, sf, method = 'hilbert'):
     from scipy.fftpack import next_fast_len
     # Extract the spindles-related sigma signal for coupling
@@ -47,16 +60,14 @@ def extract_pha_amp(data_narrow, data_broad, sf, method = 'hilbert'):
     elif method == 'emd':
         import emd           
         ## get sw phase    
-        imf_sw = emd.sift.sift(data_narrow, imf_opts={'sd_thresh': 0.1}, max_imfs = 2)
+        imf_sw = emd.sift.sift(data_narrow, imf_opts={'sd_thresh': 0.1}, max_imfs = 1)[:,0]
         # emd.plotting.plot_imfs(imf_sw, cmap=True, scale_y=True)
-        sw_pha = emd.spectra.frequency_transform(imf_sw, sf, 'nht')[0][:,0]
-        # sw_pha = np.angle(signal.hilbert(imf_sw[:,0], N=nfast)[:n_samples])
+        sw_pha, _, _ = emd.spectra.frequency_transform(imf_sw, sf, 'nht')
         
         ## get sp phase
-        imf_sp = emd.sift.sift(data_sp, imf_opts={'sd_thresh': 0.1}, max_imfs = 2)
+        imf_sp = emd.sift.sift(data_sp, imf_opts={'sd_thresh': 0.1}, max_imfs = 1)[:,0]
         # emd.plotting.plot_imfs(imf_sp, cmap=True, scale_y=True)
-        sp_amp = emd.spectra.frequency_transform(imf_sw, sf, 'nht')[2][:,0]
-        # sp_amp = np.abs(signal.hilbert(imf_sp[:,0], N=nfast)[:n_samples])
+        _, _, sp_amp = emd.spectra.frequency_transform(imf_sw, sf, 'nht')
                  
     return sw_pha, sp_amp  
 
@@ -91,28 +102,25 @@ def ERPAC(data, f_pha=[0.5, 4], f_amp=(4, 30, .25, .25), n_perm=None, smooth=200
 ## Iterate over yasa results to add ndPAC values to specified target SOs
 def SO_spindle_coupling(sw, data_broad, idx, sf, target='stim_onset'):
     data_broad = data_broad[idx,:,:]
-    time_before = 1.5; time_after = 2.5
+    time_before = 2.0; time_after = 2.0
     bef = int(sf * time_before)
     aft = int(sf * time_after)
-    
-    n_samples = max(data_broad.shape)
-    nfast = next_fast_len(n_samples)
-    
+      
     ## Iterate by channels
     summaries = []
     for chan in range(23):
         if target == 'neg_peak':
             sw_neg_times = sw.summary()['NegPeak'][sw.summary()['IdxChannel']==chan].to_numpy()
-            idx_neg_nearest = find_nearest(sw_neg_times, 3)
+            idx_neg_nearest = find_nearest(sw_neg_times, 4)
             sw_neg_time = sw_neg_times[idx_neg_nearest]
             sw_neg_idx = sw_neg_time * sf
         elif target == 'stim_onset':
             ## One can ignore all the values in the dataframe, except the ndPAC info 
             sw_neg_times = sw.summary()['MidCrossing'][sw.summary()['IdxChannel']==chan].to_numpy()
             if list(sw_neg_times) != []:
-                idx_neg_nearest = find_nearest(sw_neg_times, 3)
+                idx_neg_nearest = find_nearest(sw_neg_times, 4)
                 sw_neg_time = sw_neg_times[idx_neg_nearest]
-                sw_neg_idx = 3*sf
+                sw_neg_idx = int(sw_neg_time*sf) #4*sf
             else:
                 summary = sw.summary()[sw.summary()['IdxChannel']==chan].reset_index()
                 summary['SigmaPeak'] = np.ones(1) * np.nan
@@ -135,7 +143,6 @@ def SO_spindle_coupling(sw, data_broad, idx, sf, target='stim_onset'):
                 # bef = max(data_broad.shape) - sw_neg_idx
                 # print('Pre - compensation')
         
-
             sw_idx, valid_idx = yasa.get_centered_indices(sw._data[chan,:].squeeze(), 
                                                           np.asarray([sw_neg_idx]), bef, aft) 
             
@@ -173,8 +180,8 @@ def SO_spindle_coupling(sw, data_broad, idx, sf, target='stim_onset'):
             summary['PhaseAtSigmaPeak'] = pha_at_max
             
             # 3) Normalized Direct PAC, with thresholding
-            ndp = np.squeeze(tpm.norm_direct_pac(sw_pha[None, ...],
-                                                 sp_amp[None, ...], p=0.05))
+            ndp = np.squeeze(tpm.norm_direct_pac(sw_pha.T[None, ...],
+                                                 sp_amp.T[None, ...], p=0.05))
             summary['ndPAC'] = np.ones(1) * np.nan
             summary['ndPAC'] = ndp
             
