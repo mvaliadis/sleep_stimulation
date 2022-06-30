@@ -548,14 +548,14 @@ if __name__ == '__main__':
     else:
         df_cmc = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/CMC/CMC_results.p', 'rb'))
         df_cmc = df_cmc.drop([6,11,12,13,14,15,16,37,48,85,86,93,98,99])
-        subjects = df_cmc['Subject'].unique()
         for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ','RVQL2MRD','6QF3HOJC']):
             df_cmc.drop(df_cmc.loc[df_cmc['Subject']==i[0]].index, inplace=True)
-        df_cmc = fix_df_cmc(df_cmc) 
+        df_cmc_f = fix_df_cmc(df_cmc.copy()) 
+        df_cmc_f.to_csv('/media/administrator/data/Study_1_data/Statistics/CMC/CMC_results_final.csv')
         
     for _, trial in enumerate(['Trial1_SNR','Trial2_SNR','Trial3_SNR','Trial4_SNR']):
         fig, ax = plt.subplots(figsize=(15,10))
-        sns.violinplot(data = df[trial], ax=ax, palette="mted")
+        sns.violinplot(data = df_cmc[trial], ax=ax, palette="muted")
         files = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(maindir) for i in files if 'slalom_pre' in i or 'slalom_post' in i])  
         labels = [files[i].split('/')[-2] + '_' + files[i].split('/')[-1].split('_')[-2] for i in range(len(files))]
         plt.title(trial)

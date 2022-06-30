@@ -34,7 +34,9 @@ from statsmodels.tools.sm_exceptions import ConvergenceWarning
 import warnings
 from pymer4.utils import get_resource_path
 from pymer4.models import Lmer
-
+from functools import reduce
+epo_example_obj = mne.read_epochs('/media/administrator/data/Study_1_data/ex_epo.fif')
+   
 #%%
 ## Step 1 -- Preprocess resting state datasets and save into data structure with epochs for eyes open/eyes closed  
 path = '/media/administrator/data/Study_1_data/Pre_post_data/'
@@ -52,7 +54,7 @@ path = '/media/administrator/data/Study_1_data/Pre-processed_data_resting_state/
 def resting_state_power_analysis(path):
     pre_files, post_files = check_match_prepost_data_elements(path, files=None, dtype='rs')
     psd_results = defaultdict(lambda: [])
-    topo_results = defaultdict(lambda: [])
+    # topo_results = defaultdict(lambda: [])
     for j, (pre_f, post_f) in tqdm(enumerate(zip(pre_files, post_files))):
         if pre_f.split('/')[-1].split('_')[0:2] == post_f.split('/')[-1].split('_')[0:2]:
             print(j, pre_f.split('/')[-1], post_f.split('/')[-1])
@@ -69,192 +71,238 @@ def resting_state_power_analysis(path):
             Data_pre = load_preprocessed_data(pre_f)
             Data_post = load_preprocessed_data(post_f)
             epochs_eyes_open_pre = mne.EpochsArray(Data_pre.data_eyes_open/1e3, Data_pre.mne_info, 
-                                                    tmin = 0, baseline=(None), verbose=0) 
-            # epochs_eyes_closed_pre = mne.EpochsArray(Data_pre.data_eyes_close/1e3, Data_pre.mne_info, 
-            #                                           tmin = 0, baseline=(None), verbose=0) 
+                                                   tmin = 0, baseline=(None), verbose=0) 
+            epochs_eyes_open_pre.save('/media/administrator/data/Study_1_data/ex_epo.fif', overwrite=True)
             epochs_eyes_open_post = mne.EpochsArray(Data_post.data_eyes_open/1e3, Data_post.mne_info, 
                                                     tmin = 0, baseline=(None), verbose=0) 
-            # epochs_eyes_closed_post = mne.EpochsArray(Data_post.data_eyes_close/1e3, Data_post.mne_info, 
-            #                                           tmin = 0, baseline=(None), verbose=0) 
-    
-    
-    
-            from sleepstim.Analysis.foof import oscillatory_plot_psd_map, periodic_fit
-            post_psd = oscillatory_plot_psd_map(epochs_eyes_open_post, foi=(1, 40), tmin=0, tmax=2,
-                                    session='prepost')
 
-            pre_psd = oscillatory_plot_psd_map(epochs_eyes_open_pre, foi=(1, 40), tmin=0, tmax=2,
-                                    session='prepost')
-            
-            fm_post = periodic_fit(epochs_eyes_open_post, foi=(1, 40), tmin=0, tmax=2)
-            fm_pre = periodic_fit(epochs_eyes_open_pre, foi=(1, 40), tmin=0, tmax=2)
-            
-            post_freqs = np.unique([fm_post[i].freqs for i in range(len(fm_post))])
-            pre_freqs = np.unique([fm_pre[i].freqs for i in range(len(fm_pre))])
-            
-            post_peak_fit = np.asarray([fm_post[i]._peak_fit for i in range(len(fm_post))])#.mean(0)
-            pre_peak_fit = np.asarray([fm_pre[i]._peak_fit for i in range(len(fm_pre))])#.mean(0)
-            
-            # from fooof.plts.spectra import plot_spectrum
-            # plot_spectrum(pre_freqs, post_peak_fit - pre_peak_fit, color='green', label='Final Periodic Fit - Difference')
-        
-            plt.close('all')
-            
-            ## Compute relative PSD per band
-            bp_pre = yasa.bandpower_from_psd(pre_peak_fit, pre_freqs, 
-                                             bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),
-                                                    (8, 13, 'Alpha'), (13, 30, 'Beta'), 
-                                                    (30, 40, 'Gamma')], relative=False)
-            bp_pre = bp_pre.rename(columns={'Chan': 'Epoch'})
-            bp_pre['Epoch'] = np.arange(0, len(pre_peak_fit), 1)
-            
-            bp_post = yasa.bandpower_from_psd(post_peak_fit, post_freqs, 
-                                              bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),
-                                                     (8, 13, 'Alpha'), (13, 30, 'Beta'), 
-                                                     (30, 40, 'Gamma')], relative=False)
-            bp_post = bp_post.rename(columns={'Chan': 'Epoch'})
-            bp_post['Epoch'] = np.arange(0, len(post_peak_fit), 1)
+            # from sleepstim.Analysis.foof import periodic_fit, channel_epoch_psd, oscillatory_plot_psd_map
+            # post_psd = channel_epoch_psd(epochs_eyes_open_post, foi=(1, 40), tmin=0, tmax=2,
+            #                              session='prepost')
+
+            # pre_psd = channel_epoch_psd(epochs_eyes_open_pre, foi=(1, 40), tmin=0, tmax=2,
+            #                             session='prepost')
             
             
-            ## Create dataframe with post - pre differences 
-            # psd_results["Subject"].extend([subjname]*len(bp_pre))
-            # psd_results["Night"].extend([night]*len(bp_pre))
-            # psd_results["Condition"].extend([cond]*len(bp_pre))
-            # psd_results["Session"].extend(['pre']*len(bp_pre))
-            # psd_results["Delta_pre"].extend(bp_pre['Delta'])
-            # psd_results["Theta_pre"].extend(bp_pre['Theta'])
-            # psd_results["Alpha_pre"].extend(bp_pre['Alpha'])
-            # psd_results["Beta_pre"].extend(bp_pre['Beta'])
-            # psd_results["Gamma_pre"].extend(bp_pre['Gamma'])
-            psd_results["Subject"].extend([subjname]*len(bp_post))
+            from mne.time_frequency import psd_multitaper
+            bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),(8, 13, 'Alpha'), 
+                   (13, 30, 'Beta'), (30, 40, 'Gamma')]
+            # bp_ = pd.DataFrame(columns=['Subject', 'Night', 'Condition', 'Session', 
+            #                             'Chan', 'Delta', 'Theta', 'Alpha', 'Beta', 
+            #                             'Gamma', 'TotalAbsPow', 'FreqRes', 'Relative'])
+            for idx, (session, sess_name) in enumerate(zip([epochs_eyes_open_pre, epochs_eyes_open_post],['pre','post'])):
+                spectra, freqs = psd_multitaper(session, fmin=1, fmax=40,
+                                                tmin=0, tmax=2)
+                if sess_name == 'pre':
+                    bp_pre = yasa.bandpower_from_psd(spectra.mean(0), freqs, ch_names = session.ch_names[0:64],
+                                                     bands=bands, relative=True)
+                elif sess_name == 'post':
+                    bp_post = yasa.bandpower_from_psd(spectra.mean(0), freqs, ch_names = session.ch_names[0:64],
+                                                      bands=bands, relative=True)
+                                        
+                    
+                # if j == 0 and idx == 0:
+                #     bp = yasa.bandpower_from_psd(spectra.mean(0), freqs, ch_names = session.ch_names[0:64],
+                #                                  bands=bands, relative=True)
+                #     bp.insert(0, "Subject", subjname.split(" ")[0])
+                #     bp.insert(1, "Night", night)
+                #     bp.insert(2, "Condition", cond)
+                #     bp.insert(3, "Session", sess_name)
+                #     bp = bp_.append(bp, 1)
+                # else:
+                #     bp2 = yasa.bandpower_from_psd(spectra.mean(0), freqs, ch_names = session.ch_names[0:64],
+                #                                   bands=bands, relative=True)
+                #     bp2.insert(0, "Subject", subjname.split(" ")[0])
+                #     bp2.insert(1, "Night", night)
+                #     bp2.insert(2, "Condition", cond)
+                #     bp2.insert(3, "Session", sess_name)
+                #     bp = bp.append(bp2, 1)
+
+            # fm_post = periodic_fit(epochs_eyes_open_post, foi=(1, 40), tmin=0, tmax=2)
+            # fm_pre = periodic_fit(epochs_eyes_open_pre, foi=(1, 40), tmin=0, tmax=2)
+            
+            # post_freqs = np.unique([fm_post[i].freqs for i in range(len(fm_post))])
+            # pre_freqs = np.unique([fm_pre[i].freqs for i in range(len(fm_pre))])
+            
+            # post_peak_fit = np.asarray([fm_post[i]._spectrum_flat for i in range(len(fm_post))])#.mean(0)
+            # pre_peak_fit = np.asarray([fm_pre[i]._spectrum_flat for i in range(len(fm_pre))])#.mean(0)
+            
+            # # from fooof.plts.spectra import plot_spectrum
+            # # plot_spectrum(pre_freqs, post_peak_fit - pre_peak_fit, color='green', label='Final Periodic Fit - Difference')
+            # # plt.close('all')
+            
+            # Create dataframe with post - pre differences 
+            psd_results["Subject"].extend([subjname.split(' ')[0]]*len(bp_post))
             psd_results["Night"].extend([night]*len(bp_post))
             psd_results["Condition"].extend([cond]*len(bp_post))
-            psd_results["Session"].extend(['post']*len(bp_post))
-            psd_results["Delta_DV"].extend(bp_post['Delta'] - bp_pre['Delta'].mean())
-            psd_results["Theta_DV"].extend(bp_post['Theta'] - bp_pre['Theta'].mean())
-            psd_results["Alpha_DV"].extend(bp_post['Alpha'] - bp_pre['Alpha'].mean())
-            psd_results["Beta_DV"].extend(bp_post['Beta'] - bp_pre['Beta'].mean())
-            psd_results["Gamma_DV"].extend(bp_post['Gamma'] - bp_pre['Gamma'].mean())
-            
+            psd_results["Channel"].extend(bp_post.Chan)
+            psd_results["Delta"].extend(bp_post['Delta'] - bp_pre['Delta'])
+            psd_results["Theta"].extend(bp_post['Theta'] - bp_pre['Theta'])
+            psd_results["Alpha"].extend(bp_post['Alpha'] - bp_pre['Alpha'])
+            psd_results["Beta"].extend(bp_post['Beta'] - bp_pre['Beta'])
+            psd_results["Gamma"].extend(bp_post['Gamma'] - bp_pre['Gamma'])
             
             ###
-            topo_results["Subject"].extend([subjname]*64)
-            topo_results["Night"].extend([night]*64)
-            topo_results["Condition"].extend([cond]*64)
-            topo_results["Session"].extend(['pre']*64)
-            topo_results["Delta_topography"].extend(pre_psd[0])
-            topo_results["Theta_topography"].extend(pre_psd[1])
-            topo_results["Alpha_topography"].extend(pre_psd[2])
-            topo_results["Beta_topography"].extend(pre_psd[3])
-            topo_results["Gamma_topography"].extend(pre_psd[4])
+            # post_psd_df = pd.DataFrame(post_psd, 
+            #                            columns=['Epochs','Bands','Chans','PSD']).groupby(['Bands','Chans']).mean()['PSD']
+            # pre_psd_df = pd.DataFrame(pre_psd, 
+            #                           columns=['Epochs','Bands','Chans','PSD']).groupby(['Bands','Chans']).mean()['PSD']
             
-            topo_results["Subject"].extend([subjname]*64)
-            topo_results["Night"].extend([night]*64)
-            topo_results["Condition"].extend([cond]*64)
-            topo_results["Session"].extend(['post']*64)
-            topo_results["Delta_topography"].extend(post_psd[0])
-            topo_results["Theta_topography"].extend(post_psd[1])
-            topo_results["Alpha_topography"].extend(post_psd[2])
-            topo_results["Beta_topography"].extend(post_psd[3])
-            topo_results["Gamma_topography"].extend(post_psd[4])
-            
+            # topo_results["Subject"].extend([subjname.split(' ')[0]]*64)
+            # topo_results["Night"].extend([night]*64)
+            # topo_results["Condition"].extend([cond]*64)
+            # # topo_results["Channels"].extend(post_psd['Chans'])
+            # topo_results["Delta_PSD"].extend(post_psd_df.delta - pre_psd_df.delta)
+            # topo_results["Theta_PSD"].extend(post_psd_df.theta - pre_psd_df.theta)
+            # topo_results["Alpha_PSD"].extend(post_psd_df.alpha - pre_psd_df.alpha)
+            # topo_results["Beta_PSD"].extend(post_psd_df.beta - pre_psd_df.beta)
+            # topo_results["Gamma_PSD"].extend(post_psd_df.gamma - pre_psd_df.gamma)            
     
-    return topo_results, psd_results
+    return psd_results
 
-def fix_df_topo(df_topo): 
-    sub = df_topo['Subject'].to_numpy()
-    subs = [sub[i][0:8] for i in range(len(sub))]
-    df_topo['Subject'] = subs
-    
-    path = '/media/administrator/data/Study_1_data/Pre-processed_data_resting_state/YIOYSRPX_2_pre_rs_preprocessed.p'
-    data = load_preprocessed_data(path)
-    chan = data.ch_names[0:64]
-    dup_chans = chan + chan
-    stacks = []
-    for i in range(int(len(df_topo)/128)):
-        stacks.append(dup_chans)
-    chans = np.hstack(stacks)
-    df_topo['Channels'] = chans
-    
-    subjects = df_topo['Subject'].unique()
+def remove_subs(df):    
     for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
-        df_topo.drop(df_topo.loc[df_topo['Subject']==i[0]].index, inplace=True)
+        df.drop(df.loc[df['Subject']==i[0]].index, inplace=True)
         
-    return df_topo
-
-def fix_df_psd(df_psd):
-    sub = df_psd['Subject'].to_numpy()
-    subs = [sub[i][0:8] for i in range(len(sub))]
-    df_psd['Subject'] = subs
-    
-    subjects = df_psd['Subject'].unique()
-    for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
-        df_psd.drop(df_psd.loc[df_psd['Subject']==i[0]].index, inplace=True)
-    
-    return df_psd
-
 #%%
 run = input('Do you wish to restart the resting state power analysis? ')
 save_path = '/media/administrator/data/Study_1_data/Statistics/Resting_state/' 
 if run == 'yes':
-    topo_results, psd_results = resting_state_power_analysis(path)
-    df_topo, df_psd = pd.DataFrame(topo_results), pd.DataFrame(psd_results)
-    df_topo = fix_df_topo(df_topo)
-    df_psd = fix_df_psd(df_psd)
-    df_topo.to_csv(save_path + 'rs_results_topo.csv')
+    psd_results = resting_state_power_analysis(path)
+    df_psd = pd.DataFrame(psd_results)
+    #df_psd = remove_subs(df_psd)
     df_psd.to_csv(save_path + 'rs_results_psd.csv')
 else:
-    df_topo = pd.read_csv(save_path + 'rs_results_topo.csv')
-    df_psd = pd.read_csv(save_path + 'rs_results_psd.csv')
+    df_psd = pd.read_csv(save_path + 'rs_results_psd.csv', index_col=0)
 
 #%%
 
-results = defaultdict(lambda: [])
-for cond in np.unique(df_topo.Condition):
-    # print(cond)
-    fig, axes = plt.subplots(1, 5, figsize=(2 * 5, 1.5))
-    for ind, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
-        # print(ind, band)
+def plot_psd_diff(df_psd):
+    common_subj = reduce(np.intersect1d, [df_psd[df_psd.Condition=='sham'].Subject, 
+                                          df_psd[df_psd.Condition=='up'].Subject, 
+                                          df_psd[df_psd.Condition=='down'].Subject])
 
-        # Get the power values across channels for the current band
-        band_power_pre = df_topo.groupby(['Session','Condition','Channels'])[f'{band}_topography'].mean()['pre'][cond].to_numpy()
-        band_power_post = df_topo.groupby(['Session','Condition','Channels'])[f'{band}_topography'].mean()['post'][cond].to_numpy()
-        band_power = band_power_post - band_power_pre
+    common_df = df_psd.loc[df_psd['Subject'].isin(common_subj)]
+    common_df.sort_values(['Condition','Subject','Channel'], inplace=True) 
+    fig, axes = plt.subplots(3, 5, figsize=(2 * 5, 3*1.5))
+    grk = ['\u03B4', '\u03B8', '\u03B1', '\u03B2', '\u03B3']
+    for idx, cond in enumerate(np.unique(df_psd.reset_index().Condition)):
+        #print(cond.capitalize())
+        #fig, axes = plt.subplots(1, 5, figsize=(2 * 5, 1.5))
+        for ind, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
+            #print(ind, band)
+    
+            # Get the PSD diff across channels for the current band
+            bp_contrast = df_psd.groupby(['Condition','Channel'])[f'{band}'].mean()[cond]
+            bp_contrast = bp_contrast.reindex(list(df_psd.Channel.unique()))
+                   
+            # Create a topomap for the current oscillation band
+            im, cn = mne.viz.plot_topomap(bp_contrast, epo_example_obj.info, cmap='Spectral_r', contours=0,
+                                          axes=axes[idx, ind], show=False, names=df_psd.Channel.unique());
+           
+            # add color bar
+            mne.viz.topomap._add_colorbar(axes[idx, ind], im, cmap = 'Spectral_r', side='right', pad=0.05, 
+                                          title=None, format=None, size='5%')
+           
+            # Set the plot title
+            axes[idx, ind].set_title('\u0394 ' + grk[ind] + f' ({cond.capitalize()})')
+           
+            # tighten layout
+            plt.tight_layout()
+            
+    # save fig
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/Topo_PSD.jpg')
+  
 
-        results["cond"].extend([cond])
-        results["band"].extend([band])
-        results["band_power"].extend([band_power])
+#%%
+def rs_topo_stats(df_topo, adjacency=None, plot=True, 
+                  info=epo_example_obj, tfce=True):
+    '''
+    H1: Effect of condition on RS network
+    df_topo = pd.read_csv(path + 'rs_results_topo.csv', index_col=0)
+    rs_topo_stats(df_topo,adjacency)
+    '''
+    mne.set_log_level("CRITICAL")
+    info.drop_channels(['EDC_L','ECR_L','FCR_L','FDS_L','ECG',
+                        'EDC_R','ECR_R','FCR_R','FDS_R'])
+            
+    for band in ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']:
+        # parse dataframe by condition 
         
-        # Create a topomap for the current oscillation band
-        im, cn = mne.viz.plot_topomap(band_power, epochs_eyes_open_pre.info, cmap='Spectral_r', contours=0,
-                                      axes=axes[ind], show=False);
-       
-        # add color bar
-        mne.viz.topomap._add_colorbar(axes[ind], im, cmap = 'Spectral_r', side='right', pad=0.05, 
-                                      title=None, format=None, size='5%')
-       
-        # Set the plot title
-        axes[ind].set_title(band + ' power')
-       
-        # tighten layout
-        plt.tight_layout()
+        ### Take only common subjects and convert to numpy accordingly
+        common_subj = reduce(np.intersect1d, [df_topo[df_topo.Condition=='sham'].Subject, 
+                                              df_topo[df_topo.Condition=='up'].Subject, 
+                                              df_topo[df_topo.Condition=='down'].Subject])
+    
+        common_df = df_topo.loc[df_topo['Subject'].isin(common_subj)]
+        common_df.sort_values(['Condition','Subject'], inplace=True) #Chan too?
+        
+        # parse conditions
+        sham = common_df[common_df.Condition=='sham']
+        up = common_df[common_df.Condition=='up']
+        down = common_df[common_df.Condition=='down']
 
-df_bp = pd.DataFrame(results) 
-
+        # create contrast
+        reshape_factor = len(common_df[common_df.Condition=='sham'].Subject.unique()), 1, 64
+        up = up[f'{band}'].to_numpy().reshape(reshape_factor)
+        down = down[f'{band}'].to_numpy().reshape(reshape_factor)
+        sham = sham[f'{band}'].to_numpy().reshape(reshape_factor)
+        contrast = np.concatenate([sham, up, down], 1)
+        
+        def stat_fun(*args):
+            return mne.stats.f_mway_rm(np.swapaxes(args, 0, 0), factor_levels=[3],
+                                       effects='all', return_pvals=False)[0]
+    
+        adjacency, ch_names = mne.channels.find_ch_adjacency(info.info, None)
+        
+        clus_kwargs = {'n_permutations' : 1024,  # 1000 is the minimum
+                       'threshold' : dict(start=0, step=0.2), # None
+                       'tail' : 1,               # two-tailed test (1 or -1 for one-tailed)
+                       'n_jobs' : -1,            # increase value to speed up computations
+                       'buffer_size' : None,
+                       'out_type' : 'mask',      # returns a mask map instead of indices of sig. points
+                       'seed' : 1503}
+        
+        F_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_test(
+            contrast, stat_fun=stat_fun, adjacency=adjacency, **clus_kwargs)
+        
+        good_clusters = np.where(cluster_p_values < .05)[0]
+        mask = cluster_p_values < .05
+        pmin = np.min(cluster_p_values)
+        if len(good_clusters) > 0:
+            sig_chan = ch_names[good_clusters]
+        else:
+            sig_chan = 'None'
+        
+        print('Min p-val: {}\nSignificant Chans: {}'.format(pmin, sig_chan))
+    
+        # plot t-contrast with significance mask
+        if plot:
+            fig, ax = plt.subplots(figsize=(6,4))
+            im, _ = mne.viz.plot_topomap(F_obs.squeeze(), pos=info.info, 
+                                         mask=mask, axes=ax, show=0, 
+                                         cmap='Spectral_r', names=ch_names, 
+                                         show_names=False, contours = 0,
+                                         mask_params=dict(markersize=10, markerfacecolor='y'))
+            cbar = fig.colorbar(im, ax=ax)   
+            cbar.ax.set_ylabel('f-stat',rotation=270)
+            ax.set_title(f'Resting State Power - {band} Power')
+            plt.tight_layout()
+            plt.show()
+            
 #%%
 sns.set_theme(color_codes=True)
 # df_psd.dropna(inplace=True) 
 for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']): 
     print(f'Running LMM for frequency band: {band}')
     
-    model = Lmer(f"{band}_DV ~ Condition + (1|Subject)", 
+    model = Lmer(f"{band} ~ Condition*Channel + (1|Subject)", 
                  data=df_psd)
     
     # Using dummy-coding; suppress summary output
     model.fit(factors={"Condition": ["sham", "up", "down"],
-                       # "Session" : ["pre", "post"]}, 
-                       },
-              ordered=True, summarize=False)
+                       "Channel" : list(df_psd.Channel.unique())},
+              ordered=True, summarize=True)
     
     # Get ANOVA table, but force orthogonality for valid SS III inferences
     # In this case the data is unbalaced, otherwise nothing changes
@@ -262,7 +310,8 @@ for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
     
     ## Post-hoc tests 
     marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
-                                                     marginal_vars='Condition'
+                                                     marginal_vars=['Condition','Channel'],
+                                                     grouping_vars=None
                                                      )
     
     print(marginal_estimates)
@@ -271,54 +320,13 @@ for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
 # Plot
 for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
     plt.figure()
-    sns.violinplot(data = df_psd, y=f'{band}_DV',
+    sns.violinplot(data = df_psd, y=f'{band}',
                    x='Condition', dodge=True)
     plt.tight_layout()
     sns.despine()      
     plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/{band}_diff.jpg')
     plt.close('all')
 
-#%%
-
-lmm_ch_power = []
-for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']): 
-    print(i, band)
-    for chan in df.Channels.unique():
-        print(f'Running LMM for frequency band: {band} and channel: {chan}')
-        
-        ## Statsmodels based LMM
-        # warnings.simplefilter("ignore", ConvergenceWarning)
-        # md = smf.mixedlm(f"{band}_topography_diff ~ Condition", df[df.Channels==chan],
-        #                  groups=df[df.Channels==chan]["Subject"])
-        # mdf = md.fit()   
-        # print(mdf.summary())
-        
-        ## Pymer based LMM
-        # data frame by channel
-        df_dummy = df_topo#[df_topo.Channels==chan]
-        
-        model = Lmer(f"{band}_topography ~ Condition*Channels*Session + (1|Subject)", 
-                     data=df_dummy)
-        
-        # Using dummy-coding; suppress summary output
-        model.fit(factors={"Condition": ["sham", "up", "down"],
-                           "Channels" : list(df_dummy['Channels'].unique()),
-                           "Session" : ["pre", "post"]}, 
-                  ordered=True, summarize=False)
-        
-        # Get ANOVA table, but this time force orthogonality for valid SS III inferences
-        # In this case the data are balanced so nothing changes
-        print(model.anova(force_orthogonal=True))
-        
-    
-        ## Post-hoc tests 
-        marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
-                                                         marginal_vars='Session',
-                                                         grouping_vars='Condition',
-                                                         )
-        
-        print(marginal_estimates)
-        print(comparisons)
 
 #%%
 
@@ -430,7 +438,3 @@ for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']):
 #                                 pos = epochs_eyes_open_pre.info, vmin = np.percentile(np.asarray(lagged_alpha).mean(0), 5),
 #                                 vmax = np.percentile(np.asarray(lagged_alpha).mean(0), 95), cmap='Spectral_r', axes=ax2, show=True)
 # fig2.colorbar(im2, ax=ax2)
-
-#%%        
-# mutual_info = mutual_info_score(open_post_pw, close_post_pw)
-# adj_mutual_info = adjusted_mutual_info_score(open_post_pw, close_post_pw, average_method='geometric')

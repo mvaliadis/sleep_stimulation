@@ -38,7 +38,7 @@ from meegkit.utils import demean, normcol
 from os import chdir as cd
 from os import listdir
 import os, shutil
-from mne_connectivity import spectral_connectivity
+from mne_connectivity import spectral_connectivity_time, spectral_connectivity_epochs
 from autoreject import Ransac
 from sklearn.ensemble import IsolationForest
 from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 

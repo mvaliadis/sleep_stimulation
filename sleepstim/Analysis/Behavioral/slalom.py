@@ -12,13 +12,10 @@ from scipy import stats
 import os 
 import pandas as pd
 import pingouin as pg
-from scipy.signal import hilbert
+#from scipy.signal import hilbert
 from sklearn.metrics import mean_squared_error
 import seaborn as sns
 from sleepstim.Analysis.Resting_State.rs_preproc import check_match_prepost_data_elements
-from sleepstim.Analysis.Behavioral.cmc import process_rawXDF_CMC
-import pickle
-from pymer4.utils import get_resource_path
 from pymer4.models import Lmer
 
 sns.set_theme(style="whitegrid")
@@ -54,10 +51,10 @@ def slalom_results(path, plot=False):
 
             error_post_rms = mean_squared_error(y_true = stats.zscore(data_post[0,:]), 
                                                 y_pred = stats.zscore(data_post[1,:]), squared=False)
-            amplitude_envelope_pre_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_pre[0,:]))), 
-                                                            y_pred = np.abs(hilbert(stats.zscore(data_pre[1,:]))), squared=False)            
-            amplitude_envelope_post_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_post[0,:]))), 
-                                                             y_pred = np.abs(hilbert(stats.zscore(data_post[1,:]))), squared=False)  
+            # amplitude_envelope_pre_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_pre[0,:]))), 
+            #                                                 y_pred = np.abs(hilbert(stats.zscore(data_pre[1,:]))), squared=False)            
+            # amplitude_envelope_post_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_post[0,:]))), 
+            #                                                  y_pred = np.abs(hilbert(stats.zscore(data_post[1,:]))), squared=False)  
             
             # # Calculation of error per time point 
             # error_pre = stats.zscore(data_pre[0,:]) - stats.zscore(data_pre[1,:])
@@ -65,23 +62,15 @@ def slalom_results(path, plot=False):
             # amplitude_envelope_pre_diff = np.abs(hilbert(stats.zscore(data_pre[0,:]))) - np.abs(hilbert(stats.zscore(data_pre[1,:])))
             # amplitude_envelope_post_diff = np.abs(hilbert(stats.zscore(data_post[0,:]))) - np.abs(hilbert(stats.zscore(data_post[1,:])))
             
-            #%%
-            # ## Analyze EMG/EEG data
-            # slalom_path = '/media/administrator/data/Study_1_data/Pre_post_data/' + subj
-            # slalom_files_pre = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(slalom_path) for i in files if 'slalom_pre' in i and ('_' + str(cond)) in i])[0]
-            # slalom_files_post = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(slalom_path) for i in files if 'slalom_post' in i and ('_' + str(cond)) in i])[0]
-            # pre_trial_dict = process_rawXDF_CMC(slalom_files_pre)
-            # post_trial_dict = process_rawXDF_CMC(slalom_files_post)
-            
-            #%%            
-            # create dictionary with info
+                      
+            ## create dictionary with info
             s_dict = {
-                "Absolute RMSE (Pre)": error_pre_rms,
-                "Absolute RMSE (Post)": error_post_rms,
-                "Amplitude envelope RMSE (Pre)": amplitude_envelope_pre_rms,
-                "Amplitude envelope RMSE (Post)": amplitude_envelope_post_rms,
-                "Absolute_RMSE_difference": error_post_rms - error_pre_rms,
-                "Amplitude envelope RMSE difference": amplitude_envelope_post_rms - amplitude_envelope_pre_rms,
+                "RMSE_Pre": error_pre_rms,
+                "RMSE_Post": error_post_rms,
+                #"Amplitude envelope RMSE (Pre)": amplitude_envelope_pre_rms,
+                #"Amplitude envelope RMSE (Post)": amplitude_envelope_post_rms,
+                "RMSE_difference": error_post_rms - error_pre_rms,
+                #"Amplitude envelope RMSE difference": amplitude_envelope_post_rms - amplitude_envelope_pre_rms,
                 "Subject": pre_f.split('/')[-1].split('_')[0][-8::],
                 "Night": int(pre_f.split('/')[-1].split('_')[1]),
                 "Condition": cond_dict[cond], 
@@ -112,24 +101,24 @@ def slalom_stats(df):
     #stats.ttest_ind(df[df['Stimulation night']=='sham']['Absolute RMSE difference'], df[df['Stimulation night']=='up']['Absolute RMSE difference'])
     #stats.ttest_ind(df[df['Stimulation night']=='down']['Absolute RMSE difference'], df[df['Stimulation night']=='up']['Absolute RMSE difference'])
     # descriptive difference
-    print(df.groupby(['Condition'])['Absolute_RMSE_difference'].agg(['mean', 'std']).round(2))  
+    print(df.groupby(['Condition'])['RMSE_difference'].agg(['mean','median','std']).round(2))  
     # Compute repeated measures ANOVA
-    rmanova = pg.rm_anova(dv='Absolute_RMSE_difference', within='Condition', 
+    rmanova = pg.rm_anova(dv='RMSE_difference', within='Condition', 
                           subject='Subject', detailed = True, data=df)
     # Pretty printing of ANOVA summary
     pg.print_table(rmanova)
     # Post hoc analysis
-    posthocs = pg.pairwise_ttests(dv='Absolute_RMSE_difference', within='Condition',
+    posthocs = pg.pairwise_ttests(dv='RMSE_difference', within='Condition',
                                   subject='Subject', data=df)
     pg.print_table(posthocs)
     
 def slalom_stats_lmm(df):
-    model = Lmer(f"Absolute_RMSE_difference ~ Condition*Block + (1|Subject)", 
+    model = Lmer(f"RMSE_difference ~ Condition*Block + (1|Subject)", 
                  data=df)
     # Using dummy-coding; suppress summary output
     model.fit(factors={"Condition": ["sham", "up", "down"],
                        "Block" : ["0","1","2","3"]}, 
-              ordered=True, summarize=False)
+              ordered=True, summarize=True)
     
     # Get ANOVA table, but this time force orthogonality for valid SS III inferences
     # In this case the data are balanced so nothing changes
@@ -144,19 +133,41 @@ def slalom_stats_lmm(df):
     
     print(marginal_estimates)
     print(comparisons)
-    
-    
-    
-def violin_plot(df):     
-    ax = sns.violinplot(data=df, x='Condition', y='Absolute_RMSE_difference', 
-                        palette="Set3", bw=.2, cut=1, linewidth=1)   
+        
+def violin_plot(df):    
+    #sns.set_theme(style="whitegrid")
+    sns.set_theme(style="darkgrid")
+    ax = sns.violinplot(data=df, x='Condition', y='RMSE_difference', 
+                        palette="Set3", bw=.2, linewidth=1)   
     # Finalize the figure
-    ax.set_xticklabels(['up','sham','down'])
     ax.set_ylabel("\u0394 Root Mean Square Error")
     ax.set_title("Slalom Performance")
     sns.despine(left=True, bottom=True)
+    
+def violin_plot_comb(df_comb):
+    sns.set_theme(style="darkgrid")
+    fig, axes = plt.subplots(1, 4, figsize=(2 * 6, 3*2), sharey=True)
+    fig.suptitle("Change in CMC during Slalom")
+    grk = ['\u03B8', '\u03B1', '\u03B2', '\u03B3']
+    for ind, band in enumerate(['theta', 'alpha', 'beta', 'gamma']):
+        # Get the PSD diff across channels for the current band
+        contrast = df_comb.groupby(['Condition','Subject'])[f'{band}_diff'].mean()
+               
+        # Create a topomap for the current oscillation band
+        ax = sns.violinplot(data=contrast.reset_index(), x='Condition', 
+                            y=f'{band}_diff', ax=axes[ind],
+                            palette="Set3", bw=.2, linewidth=1); 
+       
+        # Change the ylabel
+        ax.set_ylabel('\u0394 ' + grk[ind] + ' CMC')
+       
+        # despine layout
+        sns.despine(left=True, bottom=True)
+        
+        # tighten layout
+        #plt.tight_layout()
 
-
+    
 #%%
 ## Bias investigation
 # g = sns.lmplot(x='Absolute RMSE (Pre)', y='Absolute RMSE (Post)', data=df, col='Condition')
@@ -177,28 +188,31 @@ if __name__ == '__main__':
     run = input('Do you wish to restart the Slalom analysis? ')
     if run == 'yes':
         df = slalom_results(path) 
-        save_path = '/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.p'
-        pickle.dump(df, open(save_path, "wb")) 
         df.to_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.csv')
     else:
-        #df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.p', 'rb'))    
-        df = pd.read_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.csv')
+        df = pd.read_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.csv', index_col=0)
         
     # drop the following subjects 
     subjects = df['Subject'].unique()
     for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ','RVQL2MRD','6QF3HOJC','IBYYXKMB','NW2JV7YA']):
         df.drop(df.loc[df['Subject']==i[0]].index, inplace=True)
-    
-    del df['Unnamed: 0']
-    
+        
     df = df.drop([0,1,2,3,180,181,182,183]) 
+    # mean over blocks by subject and condition
+    df_slalom.groupby(['Condition','Subject']).mean().reset_index(inplace=True)
+    
     ## load df
-    df_cmc = pd.read_csv('///')
+    cmc_path = '/media/administrator/data/Study_1_data/Statistics/CMC/CMC_results_final.csv'
+    df_cmc = pd.read_csv(cmc_path)
     df_comb = pd.merge(df, df_cmc, on=["Subject","Condition","Night","Block"])
     
     for idx, band in enumerate(zip(['theta', 'alpha', 'beta', 'gamma','SNR'])):
         df_comb[f'{band[0]}_diff'] = df_comb[(f'{band[0]}', 'post')] - df_comb[(f'{band[0]}', 'pre')]
     
+    # save combined df
+    df_comb.to_csv('/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_cmc_results.csv')        
+    
+    # blah blah    
     slalom_stats_lmm(df)
     violin_plot(df)
     plt.savefig('/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_violin.jpg')

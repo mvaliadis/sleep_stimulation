@@ -37,6 +37,26 @@ from fooof.bands import Bands
 from fooof.analysis import get_band_peak_fg
 from fooof.plts.spectra import plot_spectrum
 
+# Import the FOOOF object
+from fooof import FOOOF, FOOOFGroup
+# Import utilities for working with FOOOF objects
+from fooof.objs import fit_fooof_3d, combine_fooofs
+
+# Import some internal functions
+#   These are used here to demonstrate the algorithm
+#   You do not need to import these functions for standard usage of the module
+from fooof.sim.gen import gen_aperiodic
+from fooof.plts.spectra import plot_spectrum
+from fooof.plts.annotate import plot_annotated_peak_search
+
+# Import a utility to download and load example data
+from fooof.utils.download import load_fooof_data
+from fooof.objs.utils import average_fg
+    
+def oscillatory_psd(fg, band_def):
+    band_power = check_nans(get_band_peak_fg(fg, band_def)[:, 1])
+    return band_power
+
 #%%
 ###################################################################################################
 # Dealing with NaN Values
@@ -88,24 +108,63 @@ def check_nans(data, nan_policy='zero'):
 
 #%% 
 
-def oscillatory_plot_psd_map(epochs, foi=(0.5, 30), tmin=-3, tmax=0, session='sleep', plot = False):
+def channel_epoch_psd(epochs, foi=(0.5, 30), tmin=-3, tmax=0, session='sleep'):
     
     # Calculate power spectra across the the continuous data
     spectra, freqs = psd_multitaper(epochs, fmin=foi[0], fmax=foi[1],
                                     tmin=tmin, tmax=tmax)
     
+    band_powers = [] 
+    for model in range(spectra.shape[0]):
+        #
+        fg = FOOOFGroup(peak_width_limits=[1, 8], min_peak_height=0.15,
+                        max_n_peaks=6, verbose=False)
+        fg.add_data(freqs, spectra[model,:,:], foi)
+        fg.fit(freqs, spectra[model,:,:], foi)
+        
+        # Define frequency bands of interest
+        if session=='sleep':
+            bands = Bands({'delta': [0.5, 4],
+                           'theta': [4, 8],
+                           'slow sigma': [8, 12],
+                           'fast sigma': [12, 16],
+                           'beta': [16, 30]})
+        else:
+            bands = Bands({'delta': [1, 4],
+                           'theta': [4, 8],
+                           'alpha': [8, 12],
+                           'beta': [12, 30],
+                           'gamma': [30, 40]})
+            
+        # Plot the topographies across different frequency bands
+        for ind, (label, band_def) in enumerate(bands):
+            # Get the power values across channels for the current band
+            band_power = oscillatory_psd(fg, band_def)
+            if session == 'sleep':
+                ch_names = epochs.ch_names[0:21]
+            else:
+                ch_names = epochs.ch_names[0:64]
+            # iterate over channels
+            for j, chan in enumerate(ch_names):
+                band_powers.append([model, label, chan, band_power[j]]) 
+                           
+    return band_powers
+    
+def oscillatory_plot_psd_map(epochs, foi=(0.5, 30), tmin=-3, tmax=0, session='sleep', plot = False):
+    
+    # Calculate power spectra across the the continuous data
+    spectra, freqs = psd_multitaper(epochs, fmin=foi[0], fmax=foi[1],
+                                    tmin=tmin, tmax=tmax)
+        
     # Fitting Power Spectrum Models
     # -----------------------------
     # Now that we have power spectra, we can fit some power spectrum models.
     # Since we have multiple power spectra, we will use the :class:`~fooof.FOOOFGroup` object.
     
     # Initialize a FOOOFGroup object, with desired settings
-    fg = FOOOFGroup(peak_width_limits=[1, 6], min_peak_height=0.15,
-                    peak_threshold=2., max_n_peaks=6, verbose=False)
-    
-    # Define the frequency range to fit
-    freq_range = foi
-    
+    fg = FOOOFGroup(peak_width_limits=[1, 8], min_peak_height=0.15,
+                    max_n_peaks=6, verbose=False)
+        
     ###################################################################################################
     
     # Fit the power spectrum model across all channels
@@ -158,11 +217,7 @@ def oscillatory_plot_psd_map(epochs, foi=(0.5, 30), tmin=-3, tmax=0, session='sl
                        'alpha': [8, 12],
                        'beta': [12, 30],
                        'gamma': [30, 40]})
-    
-    def oscillatory_psd(fg, band_def):
-        band_power = check_nans(get_band_peak_fg(fg, band_def)[:, 1])
-        return band_power
-    
+
     # Plot the topographies across different frequency bands
     band_powers = []
     if plot:
@@ -268,29 +323,6 @@ def periodic_fit(epochs, foi=(1, 40), tmin=0, tmax=2):
     
     ###################################################################################################
     
-    # sphinx_gallery_thumbnail_number = 4
-    
-    # General imports
-    import matplotlib.pyplot as plt
-    
-    # Import the FOOOF object
-    from fooof import FOOOF, FOOOFGroup
-    # Import utilities for working with FOOOF objects
-    from fooof.objs import fit_fooof_3d, combine_fooofs
-    
-    # Import some internal functions
-    #   These are used here to demonstrate the algorithm
-    #   You do not need to import these functions for standard usage of the module
-    from fooof.sim.gen import gen_aperiodic
-    from fooof.plts.spectra import plot_spectrum
-    from fooof.plts.annotate import plot_annotated_peak_search
-    
-    # Import a utility to download and load example data
-    from fooof.utils.download import load_fooof_data
-    from fooof.objs.utils import average_fg
-    
-    ###################################################################################################
-    
     # Set whether to plot in log-log space
     plt_log = False
     
@@ -304,7 +336,7 @@ def periodic_fit(epochs, foi=(1, 40), tmin=0, tmax=2):
     
     fms = []
     for model in range(spectrum.shape[0]):
-
+     
         ###################################################################################################
         
         # Initialize a FOOOF object, with some settings

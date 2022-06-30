@@ -25,6 +25,8 @@ from sleepstim.Analysis.Resting_State.rs_preproc import subject_cond_parser
 import pickle
 from scipy.integrate import trapz, cumtrapz
 import pingouin as pg
+from pymer4.models import Lmer
+from functools import reduce
 
 def tkeo(data, normalize=True, plot=True):
     """
@@ -114,8 +116,8 @@ def process_rawXDF(file, paired=False):
         dov = max(np.diff(c3ep))
         dovs.append(dov)
         dovs_bool.append(dov >= 500)
-        print(f'The maximum change in voltage is {dov} and '
-              f'occurs at: {np.argmax(np.diff(c3ep))}')
+        # print(f'The maximum change in voltage is {dov} and '
+        #       f'occurs at: {np.argmax(np.diff(c3ep))}')
         # use TKEO to determine peak coil artifact location in EEG
         tartifact = np.argmax(tkeo(c3ep, plot=False))
         tkeo_vals.append(max(tkeo(c3ep, plot=False)))
@@ -169,8 +171,8 @@ def process_rawXDF(file, paired=False):
     
     return edcepochs, Vpp, sf, cmc, intensity, bool_mep, tkeo_vals 
        
-def function_sigmoid(intensity, mep_max, s50, k, b):
-    y_mep = ((mep_max/(1 + np.exp(k*(s50-intensity)))))+b
+def function_sigmoid(intensity, mep_max, s50, k):
+    y_mep = ((mep_max/(1 + np.exp(k*(s50-intensity)))))
     return (y_mep)
 
 def trim_mean(x):
@@ -233,7 +235,7 @@ def TMS_results(maindir):
     files = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(maindir) for i in files if 'cse' in i or 'icf' in i or 'sici' in i])  
     results = defaultdict(lambda: [])
     mep_data = []
-    for file in tqdm(files):
+    for id_, file in enumerate(tqdm(files)):
         print(file)
         subjname = str(file).split("/")[-2]             
         night = " ".join(str(file).split('.')[0].split('/')[-1].split('_')[0:2])
@@ -271,20 +273,50 @@ def TMS_results(maindir):
         results["File"].extend([rec]*len(Vpp))
         # results["CMC"].extend([cmc]*len(Vpp))
     
-        def plot_mep(edcepochs, file, paired=False):
+        def plot_mep(edcepochs, file, paired=False, meaned=True):
             plt.figure()
             plt.title(" ".join(file.split('/')[-2::]))
-            plt.plot(np.arange(-max(edcepochs.shape)/2, max(edcepochs.shape)/2)/sf, np.mean(edcepochs,0))
-            if paired:
-                entry = 0.0125
+            if meaned:
+                plt.plot(np.arange(-max(edcepochs.shape)/2, max(edcepochs.shape)/2)/sf, np.mean(edcepochs,0))
+                if paired:
+                    entry = 0.0125
+                else:
+                    entry = 0.0115
             else:
-                entry = 0.0115
-            plt.vlines(entry, ymin=np.mean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, ymax=np.mean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1, colors='r', linestyles='dotted')
-            plt.vlines(0.060, ymin=np.mean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, ymax=np.mean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1, colors='r', linestyles='dotted')
-            plt.xlim(entry - 0.005, .065)
-            plt.ylim(np.mean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, np.mean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1)
+                edcepochs = np.concatenate([[trial for trial in edcepochs if any(~np.isnan(trial))]], -1)
+                plt.plot(np.arange(-max(edcepochs.shape)/2, max(edcepochs.shape)/2)/sf, edcepochs.T)
+                if paired:
+                    entry = -0.01
+                else:
+                    entry = -0.01
+            if meaned:
+                plt.vlines(entry, ymin=np.nanmean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, 
+                           ymax=np.nanmean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1, 
+                           colors='r', linestyles='dotted')
+                plt.vlines(0.060, ymin=np.nanmean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, 
+                           ymax=np.nanmean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1, 
+                           colors='r', linestyles='dotted')
+                plt.xlim(entry - 0.005, .065)
+                plt.ylim(np.nanmean(edcepochs[:,int(sf * entry)+100:],0).min()*1.1, 
+                         np.nanmean(edcepochs[:,int(sf * entry)+100:],0).max()*1.1)
+            else:
+                plt.vlines(entry, ymin=edcepochs[:,int(sf * entry)+100:].min()*1.1, 
+                           ymax=edcepochs[:,int(sf * entry)+100:].max()*1.1, 
+                           colors='r', linestyles='dotted')
+                plt.vlines(0.060, ymin=edcepochs[:,int(sf * entry)+100:].min()*1.1, 
+                           ymax=edcepochs[:,int(sf * entry)+100:].max()*1.1, 
+                           colors='r', linestyles='dotted')
+                plt.xlim(entry - 0.005, .065)
+                plt.ylim(edcepochs[:,int(sf * entry)+100:].min()*1.1, 
+                         edcepochs[:,int(sf * entry)+100:].max()*1.1)
             plt.xlabel('Time (s)')
             plt.ylabel('Voltage (uV)')
+        
+        # try:
+        #     plot_mep(edcepochs, file, paired=paired, meaned=False)
+        # except:
+        #     print('DNC ---------')
+    
             
     res_df = pd.DataFrame(results)
     # true_idx = np.asarray(res_df[res_df.Vpp_True==True].index)
@@ -409,10 +441,65 @@ if __name__ == '__main__':
         subject_pre_post.to_csv(r'/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_subject.csv')
     else:
         subject_pre_post = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_subject.p', 'rb'))
+        subject_pre_post['Intensity'] = subject_pre_post['Intensity'].astype(int)
         final_res = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_average.p', 'rb'))
         subject_pre_post_pulse_df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_paired.p', 'rb'))
         
     #%%
+    ## RMT 
+    df_rmt = subject_pre_post.groupby(['Subject','Condition','Session']).mean()['Intensity'].reset_index()
+    for subject in df_rmt['Subject']:
+        occurences = len(np.where((df_rmt['Subject'] == subject).to_numpy())[0])
+        if occurences <= 4 or occurences == 5:
+            df_rmt.drop(df_rmt.loc[df_rmt['Subject']==subject].index, inplace=True)
+        
+    ## create RMT contrasts 
+    df_rmt_contrast = df_rmt.groupby(['Subject','Condition']).mean().reset_index()
+    df_rmt_contrast['Contrast'] = np.nan
+    for (sub, cond), df_s in df_rmt.groupby(['Subject','Condition']):
+        diff = (df_s.query("Session == 'post'").Intensity.to_numpy() - 
+                df_s.query("Session == 'pre'").Intensity.to_numpy())[0]
+        loc = df_rmt_contrast[np.logical_and(df_rmt_contrast.Subject==sub, 
+                                             df_rmt_contrast.Condition==cond)]
+        df_rmt_contrast['Contrast'][loc.index[0]] = diff
+    
+    ## plot
+    
+    
+    ## do stats 
+    
+    
+    #%%
+    ## create I/O Curve contrasts only if all tms intensities present
+    df_io_curve_c = df_io_curve_f.groupby(['Subject','Condition','Protocol']).mean().reset_index()
+    for (s, p), d in df_io_curve_c.groupby(['Subject','Protocol']):
+        occurences = len(np.where(np.logical_and(d['Subject'] == s,
+                                                 d['Protocol'] == p).to_numpy())[0])
+        if occurences < 2:
+            df_io_curve_c.drop(df_io_curve_c.loc[np.logical_and(df_io_curve_c['Subject']==s,
+                                                                df_io_curve_c['Protocol']==p)].index, 
+                               inplace=True)
+    
+    df_io_curve_c['Contrast'] = np.nan
+    for (sub, cond, proto), df_s in df_io_curve_f.groupby(['Subject',
+                                                           'Condition','Protocol']):
+        #print(proto)
+        loc = df_io_curve_c[np.logical_and.reduce([df_io_curve_c.Subject==sub,
+                                                   df_io_curve_c.Protocol==proto,
+                                                   df_io_curve_c.Condition==cond],
+                                                  dtype=bool)]
+        if len(df_s) == 1 or len(loc) < 1:
+            continue
+        else:
+            diff = (df_s.query("Session == 'post'").logVpp.to_numpy() - 
+                    df_s.query("Session == 'pre'").logVpp.to_numpy())[0]
+    
+            df_io_curve_c['Contrast'][loc.index[0]] = diff
+    
+    
+    
+    #%%
+    
     ## Plot I/O curves 
     from statannotations.Annotator import Annotator
     sns.set_theme(color_codes=True)
@@ -435,8 +522,8 @@ if __name__ == '__main__':
     plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/SICI_ICF_joint.jpg')
             
     ## Group plots all in 3 conditions 
-    subject_pre_post_rev = subject_pre_post.groupby(['Subject','Condition','Session','Protocol']).mean()['Normalized MEPs'].reset_index()
-    axs = sns.catplot(data = subject_pre_post_rev, x='Protocol', y='Normalized MEPs', 
+    subject_pre_post_rev = subject_pre_post.groupby(['Subject','Condition','Session','Protocol']).mean().reset_index()
+    axs = sns.catplot(data = subject_pre_post_rev, x='Protocol', y='logVpp', 
                       hue='Session', col='Condition', kind='point', join=False, 
                       estimator=trim_mean, ci=95, hue_order = ['pre','post'])
     
@@ -458,10 +545,10 @@ if __name__ == '__main__':
     sham_sessions = [sham_y_points_pre,sham_y_points_post, 'sham']
     
     for session in (down_sessions, sham_sessions, up_sessions):
-        p0 = [max(session[0]), trim_mean(x_points),1, min(session[0])] 
+        p0 = [max(session[0]), trim_mean(x_points), min(session[0])] 
         popt0, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p0,
                              ydata=session[0], maxfev=50000, method='lm')
-        p1 = [max(session[1]), trim_mean(x_points),1, min(session[1])] 
+        p1 = [max(session[1]), trim_mean(x_points), min(session[1])] 
         popt1, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p1,
                              ydata=session[1], maxfev=50000, method='lm')
         
@@ -478,22 +565,20 @@ if __name__ == '__main__':
     # TO-DO: REMOVE SUBJECTS WITH 2 OR LESS SESSIONS, DEAL WITH MISSING I/O PROTOCOL (~150 FOR SOME)
     # =============================================================================
     
-    fac_idx = []
     param = []
     subject = list(dict.fromkeys(list(subject_pre_post.Subject)))
     for sub in subject:
         sub_res = subject_pre_post[subject_pre_post.Subject == sub]
-        print(f'Computing faciliation index for subject: {sub}')
         # plt.figure()
-        axs = sns.catplot(x='Protocol', y='Normalized MEPs', 
-                          hue='Session', col='Condition', kind = 'point', join=False, 
-                          estimator=trim_mean, ci=95, hue_order = ['pre','post'],
-                          data=sub_res)
+        axs = sns.catplot(x='Protocol', y='logVpp', hue='Session', 
+                          col='Condition', kind = 'point', join=False, 
+                          ci=95, hue_order = ['pre','post'], data=sub_res) #estimator=trim_mean
         #sub_res[sub_res.Condition.isin(['sham'])]
         
         if len(axs.axes_dict) < 3:
             continue             
         else:
+            print(f'Computing faciliation index for subject: {sub}')
             x_points = [0,1,2,3,4,5]
             x_data_ext = np.linspace(0,5,100)
             for item in axs.axes_dict:
@@ -501,12 +586,14 @@ if __name__ == '__main__':
                 post_s = np.mean([axs.axes_dict[item].get_lines()[i].get_ydata() for i in range(6,12)], axis=1)
                 # sessions = [pre_s, post_s, item]
                 if all(~np.isnan([pre_s, post_s]).ravel()):
-                    p0 = [max(pre_s), trim_mean(x_points),1, min(pre_s)]
+                    p0 = [max(pre_s), trim_mean(x_points), 1]
                     popt0, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p0,
                                          ydata=pre_s, maxfev=200000, method='lm')
-                    p1 = [max(post_s), trim_mean(x_points),1, min(post_s)] 
+                                         # bounds=(0, [3., 1., 0.5])))
+                    p1 = [max(post_s), trim_mean(x_points), 1] 
                     popt1, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p1,
                                          ydata=post_s, maxfev=200000, method='lm')
+                                         #bounds=(0, [3., 1., 0.5])))
                 
                     ## get line points 
                     y_points_pre = function_sigmoid(x_data_ext, *popt0)
@@ -521,19 +608,28 @@ if __name__ == '__main__':
                     AUC_post = trapz(x = x_data_ext, y = y_points_post, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
         
                     # AUC based faciliation index
-                    fac_idx.append([sub, item, AUC_post / AUC_pre])
-                    # append further parameters (s50, k, MEP_max)
-                    # param.append()
+                    param.append([sub, item, AUC_post / AUC_pre,
+                                  popt1[0] - popt0[0],
+                                  popt1[1] - popt0[1],
+                                  popt1[2] - popt0[2]]) 
                 else:
-                    fac_idx.append([sub, item, np.nan])
+                    param.append([sub, item, np.nan,
+                                  np.nan, np.nan, np.nan]) 
         
         plt.tight_layout()
         plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/IO_curve_{sub}.jpg')
         plt.close('all')
 
-    fac_idx_df = pd.DataFrame(fac_idx, columns=['Subject','Condition','Facilitation Index (AUC Post/AUC Pre)'])
-    axs_fac_idx = sns.violinplot(data = fac_idx_df, x='Condition', y='Facilitation Index (AUC Post/AUC Pre)', 
-                                 estimator=np.median, ci=95)
+    param_df = pd.DataFrame(param, columns=['Subject','Condition','FacIdx',
+                                            'MEP_max', 's50', 'Slope'])
+    
+    param_df.to_csv('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_params.csv')
+    axs_fac_idx = sns.violinplot(data = param_df, x='Condition', y='FacIdx') 
+    
+    # remove thresholds 
+    # param_df_f = param_df[np.logical_xor(param_df['MEP_max'] > 100,
+    #                                      param_df['MEP_max'] > -100)]
+    
     
     
     ### 
@@ -544,26 +640,78 @@ if __name__ == '__main__':
     
     # annotate significance 
     pairs=[("down", "up"), ("down", "sham"), ("up", "sham")]
-    annotator = Annotator(ax = axs_fac_idx, pairs=pairs, data=fac_idx_df, 
-                          x='Condition', y='Facilitation Index (AUC Post/AUC Pre)')
+    annotator = Annotator(ax = axs_fac_idx, pairs=pairs, data=param_df, 
+                          x='Condition', y='FacIdx')
     annotator.configure(test='t-test_welch', text_format='star', loc='outside')
     annotator.apply_and_annotate()
     plt.tight_layout()
     
-    import statsmodels.api as sm
-    import statsmodels.formula.api as smf
-    fac_idx_df = pd.DataFrame(fac_idx, columns=['Subject','Condition','Facilitation_Idx'])
-    md = smf.mixedlm("Facilitation_Idx ~ Condition", fac_idx_df[fac_idx_df.Facilitation_Idx>0.001], 
-                     groups=fac_idx_df[fac_idx_df.Facilitation_Idx>0.001]["Subject"])
-    mdf = md.fit()
-    print(mdf.summary())
+    # LMM 
+    model = Lmer(f"Facilitation_Index ~ Condition + (1|Subject)", 
+                 data=fac_idx_df)
+   
+    model.fit(factors={"Condition": ["sham", "up", "down"]}, 
+              ordered=True, summarize=True)
+    
+    # Get ANOVA table
+    print(model.anova(force_orthogonal=True))
+    
+
+    ## Post-hoc tests 
+    marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
+                                                     marginal_vars='Condition',
+                                                     )
+    
+    print(marginal_estimates)
+    print(comparisons)
      
     ## rmANOVA
-    rmanova = pg.rm_anova(dv='Facilitation_Idx', within='Condition', subject='Subject', 
-                          detailed = True, data=fac_idx_df[fac_idx_df.Facilitation_Idx>0.001])
+    rmanova = pg.rm_anova(dv='Facilitation_Index', within='Condition', subject='Subject', 
+                          detailed = True, data=fac_idx_df[fac_idx_df.Facilitation_Index>0.001])
     # Pretty printing of ANOVA summary
     pg.print_table(rmanova)
     # Post hoc analysis
-    posthocs = pg.pairwise_ttests(dv='Facilitation_Idx', within='Condition',
-                                  subject='Subject', data=fac_idx_df[fac_idx_df.Facilitation_Idx>0.001])
+    posthocs = pg.pairwise_ttests(dv='Facilitation_Index', within='Condition',
+                                  subject='Subject', data=fac_idx_df[fac_idx_df.Facilitation_Index>0.001])
     pg.print_table(posthocs)
+    
+#%%
+sici_df = subject_pre_post_pulse_df.groupby(['Subject','Condition','Session','Protocol']).mean().reset_index().query("Protocol == 'sici'")
+icf_df = subject_pre_post_pulse_df.groupby(['Subject','Condition','Session','Protocol']).mean().reset_index().query("Protocol == 'icf'")
+sici_df.rename(columns = {'Normalized MEPs':'Normalized_Vpp'}, inplace = True)
+icf_df.rename(columns = {'Normalized MEPs':'Normalized_Vpp'}, inplace = True)
+
+
+for subject in sici_df['Subject']:
+    occurences = len(np.where((sici_df['Subject'] == subject).to_numpy())[0])
+    if occurences <= 4 or occurences == 5:
+        sici_df.drop(sici_df.loc[sici_df['Subject']==subject].index, inplace=True)
+        
+sici_contrast = sici_df.groupby(['Subject','Condition']).mean().reset_index()
+sici_contrast['Vpp_difference'] = np.nan
+for (sub, cond), df_s in sici_df.groupby(['Subject','Condition']):
+    diff = (df_s.query("Session == 'post'").logVpp.to_numpy() - 
+            df_s.query("Session == 'pre'").logVpp.to_numpy())[0]
+    loc = sici_contrast[np.logical_and(sici_contrast.Subject==sub, 
+                                       sici_contrast.Condition==cond)]
+    sici_contrast['Vpp_difference'][loc.index[0]] = diff
+    
+for subject in icf_df['Subject']:
+    occurences = len(np.where((icf_df['Subject'] == subject).to_numpy())[0])
+    if occurences <= 4 or occurences == 5:
+        icf_df.drop(icf_df.loc[icf_df['Subject']==subject].index, inplace=True)
+        
+icf_contrast = icf_df.groupby(['Subject','Condition']).mean().reset_index()
+icf_contrast['Vpp_difference'] = np.nan
+for (sub, cond), df_s in icf_df.groupby(['Subject','Condition']):
+    diff = (df_s.query("Session == 'post'").logVpp.to_numpy() - 
+            df_s.query("Session == 'pre'").logVpp.to_numpy())[0]
+    loc = icf_contrast[np.logical_and(icf_contrast.Subject==sub, 
+                                      icf_contrast.Condition==cond)]
+    icf_contrast['Vpp_difference'][loc.index[0]] = diff
+    
+#%%
+## plot
+sns.set_theme(color_codes=True)
+sns.violinplot(data = sici_contrast, x='Condition', y='Vpp_difference',
+               palette="Set3", bw=.2, linewidth=1) 

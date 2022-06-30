@@ -107,3 +107,30 @@ def get_mask(events, sf):
             
     return np.squeeze(mask)     
    
+def spectral_sorting_func_mne(times, epochs, trange=(-0.5, 0.5)):
+    """
+    For more details on spectral sortin, see:
+        
+         Gramfort, A., Keriven, R., & Clerc, M. (2010). 
+         Graph-based variability estimation in single-trial 
+         event-related neural responses. 
+         IEEE Transactions on Biomedical Engineering, 57(5), 1051-1061.
+         
+    see also:
+        https://mne.tools/stable/auto_examples/visualization/channel_epochs_image.html#sphx-glr-auto-examples-visualization-channel-epochs-image-py   
+
+    Returns
+    -------
+    None.
+
+    """
+    from sklearn.manifold import spectral_embedding 
+    from sklearn.metrics.pairwise import rbf_kernel
+
+    # process epoched data
+    this_data = epochs[:, (times > trange[0]) & (times < trange[1])]
+    this_data /= np.sqrt(np.sum(this_data ** 2, axis=1))[:, np.newaxis]
+    
+    # return sorted epochs 
+    return np.argsort(spectral_embedding(rbf_kernel(this_data, gamma=1.),
+                      n_components=1, random_state=0).ravel())

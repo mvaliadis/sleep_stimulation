@@ -27,75 +27,33 @@ import scipy.signal as signal
 from tensorpac.utils import PeakLockedTF, PSD, ITC, BinAmplitude
 from matplotlib import cm
 import emd
+from sleepstim.sleep_funs import unravel_hypnogram_visbrain
 from sleepstim.Analysis.analysis_pre_process import (Data_Struct, _pre_process_sleep_data, preprocess_sleep_data, 
                                                      compare_hypnograms, check_match_data_hypno_elements,
                                                      label_artifacts, load_preprocessed_data, Data_SW, spectral_conn, 
                                                      art_detect, plot_ndPAC)
 from sleepstim.sleep_funs import (load_xdf, channel_parser, bfr_butter_filt, thresholdcrossings)
 from sleepstim.Analysis.pac import unit_root_test, add_stimulus_onset, ERPAC, extract_pha_amp, SO_spindle_coupling, imf_analytical_transform
-from sleepstim.Analysis.time_frequency import tfr_analysis
+from sleepstim.Analysis.time_frequency import tfr_analysis, analytical_transform
 from sleepstim.Analysis.Resting_State.rs_preproc import (plot_psd, norm_wavelet_power, subject_cond_parser)
 import tensorpac.methods as tpm
 from sleepstim.Analysis.foof import oscillatory_plot_psd_map, periodic_fit
 from fooof.plts.spectra import plot_spectrum
 from sleepstim.Analysis.hilbert_huang import hilbert_huang_spectrum
-from sleepstim.Analysis.utils import coincidence_matrix, find_nearest, plot_cm, get_mask, _coincidence
+from sleepstim.Analysis.utils import (coincidence_matrix, find_nearest, plot_cm, 
+                                      get_mask, _coincidence, spectral_sorting_func_mne)
 import neurokit2 as nk
 from PCIst.PCIst import pci_st
 import scipy
-sns.set_theme(color_codes=True) 
+import pickle
+from functools import reduce
+from mne.stats import (spatio_temporal_cluster_1samp_test,
+                       permutation_cluster_1samp_test)
+
+# sns.set_theme(color_codes=True) 
 mne.set_log_level("CRITICAL")
       
 def find_cooccurring_rrpeaks(sws, spindles, lookaround=1.2):
-    """Given a spindles detection summary dataframe, find slow-waves that co-occur with
-    sleep spindles.
-
-    .. versionadded:: 0.6.0
-
-    Parameters
-    ----------
-    spindles : :py:class:`pandas.DataFrame`
-        Output dataframe of :py:meth:`yasa.SpindlesResults.summary`.
-    lookaround : float
-        Lookaround window, in seconds. The default is +/- 1.2 seconds around the
-        negative peak of the slow-wave, as in [1]_. This means that YASA will look for a
-        spindle in a 2.4 seconds window centered around the downstate of the slow-wave.
-
-    Returns
-    -------
-    _events : :py:class:`pandas.DataFrame`
-        The slow-wave detection is modified IN-PLACE (see Notes). To see the updated dataframe,
-        call the :py:meth:`yasa.SWResults.summary` method.
-
-    Notes
-    -----
-    From [1]_:
-
-        "SO–spindle co-occurrence was first determined by the number of spindle centers
-        occurring within a ±1.2-sec window around the downstate peak of a SO, expressed as
-        the ratio of all detected SO events in an individual channel."
-
-    This function adds three columns to the output detection dataframe:
-
-    * `CooccurringSpindle`: a boolean column (True / False) that indicates whether the given
-      slow-wave co-occur with a sleep spindle.
-
-    * `CooccurringSpindlePeak`: the timestamp of the peak of the co-occurring,
-      in seconds from beginning of recording. Values are set to np.nan when no co-occurring
-      spindles were found.
-
-    * `DistanceSpindleToSW`: The distance in seconds from the center peak of the spindles and
-      the negative peak of the slow-waves. Negative values indicate that the spindles occured
-      before the negative peak of the slow-waves. Values are set to np.nan when no co-occurring
-      spindles were found.
-
-    References
-    ----------
-    .. [1] Kurz, E. M., Conzelmann, A., Barth, G. M., Renner, T. J., Zinke, K., & Born, J.
-           (2021). How do children with autism spectrum disorder form gist memory during sleep?
-           A study of slow oscillation–spindle coupling. Sleep, 44(6), zsaa290.
-    """
-    assert isinstance(signals, pd.DataFrame), "spindles must be a detection dataframe."
     distance_rrpeak_to_sw_peak = []
     cooccurring_rr_peaks = []
 
@@ -399,9 +357,9 @@ def sw_spindle_detection_stim_auditory(save=True):
     # configure paths 
     path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
-    report_path = '/media/administrator/data/Study_1_data/Data_tracking/[].csv'
+    #report_path = '/media/administrator/data/Study_1_data/Data_tracking/[].csv'
     fig_path = '/media/administrator/data/Study_1_data/Figures/Pinknoise_epochs/'
-    results = defaultdict(lambda: [])
+    #results = defaultdict(lambda: [])
     sw_df, sp_df, couple_df = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     for i, file in enumerate(tqdm(maindir)):
         # print(i, file.split('/')[-1])
@@ -535,10 +493,11 @@ def auditory_stim_results(maindir):
     # configure paths
     path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
-    report_path = '/media/administrator/data/Study_1_data/Data_tracking/[].csv'
+    report_path = '/media/administrator/data/Study_1_data/Statistics/'
     fig_path = '/media/administrator/data/Study_1_data/Figures/Pinknoise_epochs/'
     # initialize dictionary for results
     results = defaultdict(lambda: [])
+    results_pci = defaultdict(lambda: [])
     # params for single subject analysis
     par = {'baseline_window':(-3000,-1500),'response_window':(0,2000), 'k':1.2,
            'min_snr':1.1, 'max_var':99, 'embed':False,'n_steps':100}
@@ -553,22 +512,76 @@ def auditory_stim_results(maindir):
             reference = 'Linked Mastoids'
         else:
             reference = 'Cpz'
+            
+        if reference == 'Linked Mastoids':
+            # load data & create evoked object
+            evk = mne.read_epochs(file, preload=True).apply_baseline((-4, -1.5)).average().resample(128)
+            
+            # compute subject wise PCI
+            global_pci = pci_st.calc_PCIst(signal_evk = evk.get_data('eeg', units='uV'), 
+                                           times = evk.times*1000, 
+                                           full_return=False, **par)
+            
+            # frontal contralateral pci
+            FCContra = pci_st.calc_PCIst(signal_evk = evk.get_data(['F3','Fz'], 
+                                                                   units='uV'),
+                                             times = evk.times*1000, 
+                                             full_return=False, **par)
         
-        # load data & create evoked object
-        evk = mne.read_epochs(file, preload=True).apply_baseline((-4, -1.5)).average().resample(128)
+            # frontal ipsilateral pci
+            FCIpsi = pci_st.calc_PCIst(signal_evk = evk.get_data(['F4','Fz'],
+                                                                   units='uV'),
+                                           times = evk.times*1000, 
+                                           full_return=False, **par)
+                        
+            # contalateral motor cortex pci
+            MCContra = pci_st.calc_PCIst(signal_evk = evk.get_data(['C3','Cz'], 
+                                                                   units='uV'), 
+                                           times = evk.times*1000, 
+                                           full_return=False, **par)
         
-        # compute subject wise PCI
-        pci = pci_st.calc_PCIst(signal_evk = evk.get_data('eeg')*1e6, times = evk.times*1000, **par)
+            # ipsilateral motor cortex pci
+            MCIpsi = pci_st.calc_PCIst(signal_evk = evk.get_data(['C4','Cz'],
+                                                                   units='uV'),
+                                         times = evk.times*1000, 
+                                         full_return=False, **par)
+            
+            # contralateral parietal cortex pci 
+            PCContra = pci_st.calc_PCIst(signal_evk = evk.get_data(['P3','Pz'],
+                                                                       units='uV'),
+                                             times = evk.times*1000, 
+                                             full_return=False, **par)
+            
+            # ipsilateral parietal cortex pci
+            PCIpsi = pci_st.calc_PCIst(signal_evk = evk.get_data(['P4','Pz'],
+                                                                     units='uV'),
+                                           times = evk.times*1000, 
+                                           full_return=False, **par)
+    
+            # update results dictionary
+            results['Subject'].append(subject)
+            results['Condition'].append(cond)
+            results['Reference'].append(reference)
+            results['Global_PCI'].append(global_pci)
+            results['Data'].append(evk)
         
-        # update results dictionary
-        results['Subject'].append(subject)
-        results['Condition'].append(cond)
-        results['Reference'].append(reference)
-        results['PCI'].append(pci)
-        results['Data'].append(evk)
+            # do local 
+            for area in (['FC','MC','PC']):
+                for laterality in (['Contra','Ipsi']):
+                    results_pci['Subject'].append(subject)
+                    results_pci['Condition'].append(cond)
+                    results_pci['Brain_area'].append(area)
+                    results_pci['Hemisphere'].append(laterality)
+                    results_pci['PCI'].append(eval(area + laterality))
+                    
+        else:
+            pass
         
     # convert results dict to dataframe
     df = pd.DataFrame(results)
+    df_pci = pd.DataFrame(results_pci)
+    pickle.dump(df, open(report_path + 'Sleep_evk_pci_global.p',"wb"))
+    pickle.dump(df_pci, open(report_path + 'Sleep_evk_pci_local.p',"wb"))
     
     # create contrast within subjects, only!
     def create_subj_comp_evoked(df):
@@ -609,8 +622,10 @@ def auditory_stim_results(maindir):
     
     gav_down_comp = mne.grand_average(list(comp_df.copy().drop(comp_df.loc[comp_df['Evoked Difference Down']==0].index)
                                            ['Evoked Difference Down']))
+    plt.savefig(fig_path + 'Evoked_diff_down.png')
     gav_up_comp = mne.grand_average(list(comp_df.copy().drop(comp_df.loc[comp_df['Evoked Difference Up']==0].index)
                                          ['Evoked Difference Up']))
+    plt.savefig(fig_path + 'Evoked_diff_up.png')
 
     ## Plotting fun
     ts_args = dict(spatial_colors = True, gfp=True, time_unit='s')
@@ -624,8 +639,8 @@ def auditory_stim_results(maindir):
         gav.plot_joint(times, ts_args = ts_args, topomap_args = topomap_args,
                        title = cond.capitalize() + ' ' + ref.capitalize())     
         gav.plot_topomap(all_times, ch_type='eeg', ncols='auto', nrows='auto',
-                         title=f'Amplitude distributions - {cond.capitalize()} - {ref.capitalize()}',
-                         **topomap_args) 
+                          title=f'Amplitude distributions - {cond.capitalize()} - {ref.capitalize()}',
+                          **topomap_args) 
         
         results_gav['Condition'].append(cond)
         results_gav['Reference'].append(ref)
@@ -633,7 +648,8 @@ def auditory_stim_results(maindir):
         
     # convert results dict to dataframe
     df_gav = pd.DataFrame(results_gav)
-    
+    pickle.dump(df_gav, open(report_path + 'Sleep_gav_comp.p',"wb"))
+ 
 def auditory_phase_analysis(plot=True, save=True):
     path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
@@ -745,15 +761,86 @@ def foo_power():
     # TF analysis 
     _, Sxx = tfr_analysis(Data=epoch, l_freq=5, h_freq=20, steps=0.25, 
                           method = 'wavelet', baseline=[-3, 3], chan = 'C3', 
-                          itc_calculation = None, plot=True, output='avg', 
-                          cmap = 'Spectral_r', save_path=fig_path + subject)
-    
+                          itc_calculation=None, plot=True, length=[-3,3], 
+                          cmap = 'Spectral_r', save_path=fig_path + subject,
+                          inst_power=None) 
+
     return Sxx
    
+def tfr_sleep_analysis(picks='eeg'):
+    sns.set_theme(color_codes=True) 
+    # configure paths
+    path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
+    maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
+    report_path = '/media/administrator/data/Study_1_data/Statistics/'
+    fig_path = '/media/administrator/data/Study_1_data/Figures/Pinknoise_epochs/'
+    # initialize dictionary for results
+    results_ip = defaultdict(lambda: [])
+    results_tfr = defaultdict(lambda: [])
+    for i, file in enumerate(tqdm(maindir)):
+        subject = file.split("/")[-1].split("_")[0]
+        if '_mast_' not in file:
+            pass
+        else:
+            if '_sham_down_' in file:
+                cond = 'sham down'
+            else:
+                cond = file.split("/")[-1].split("_")[1]
+            print(i, file.split('/')[-1])
+
+            # load data & create evoked object
+            epoch = mne.read_epochs(file, preload=True).apply_baseline((-4, -1.5)).resample(128)
+            
+            # Instantaneous power
+            for bands, freqs in zip(['Delta', 'Spindle'], [(0.5, 4), (9, 16)]):
+                _, _, amp = analytical_transform(epoch, picks='eeg', 
+                                                 freqs=freqs, method='imf_hilbert')
+                time_window1 = epoch.time_as_index([0, 1.075])
+                time_window2 = epoch.time_as_index([1.075, 2.150])
+                time_window3 = epoch.time_as_index([-3, 0])
+                time_window4 = epoch.time_as_index([0, 3])
+                if picks=='eeg':
+                    for idx, chan in enumerate(epoch.copy().pick('eeg').ch_names):
+                        # log subject/trial info
+                        results_ip['Subject'].extend([subject])
+                        results_ip['Condition'].extend([cond])  
+                        amp_mean = amp.mean(0)[idx].squeeze()
+                        results_ip['Channel'].extend([chan])
+                        results_ip['Band'].extend([bands])
+                        results_ip['IPI'].append(amp_mean[time_window1[0]:time_window1[1]].mean(0))
+                        results_ip['Post2'].append(amp_mean[time_window2[0]:time_window2[1]].mean(0))
+                        results_ip['Pre'].append(amp_mean[time_window3[0]:time_window3[1]].mean(0))
+                        results_ip['Post'].append(amp_mean[time_window4[0]:time_window4[1]].mean(0))
+                else:
+                    # log subject/trial info
+                    results_ip['Subject'].extend([subject])
+                    results_ip['Condition'].extend([cond])
+                    amp_mean = amp.mean(0).squeeze()
+                    results_ip['Band'].extend([bands])
+                    results_ip['IPI'].append(amp_mean[time_window1[0]:time_window1[1]].mean(0))
+                    results_ip['Post2'].append(amp_mean[time_window2[0]:time_window2[1]].mean(0))
+                    results_ip['Pre'].append(amp_mean[time_window3[0]:time_window3[1]].mean(0))
+                    results_ip['Post'].append(amp_mean[time_window4[0]:time_window4[1]].mean(0))
+
+            # TF analysis 
+            _, Sxx = tfr_analysis(Data=epoch, l_freq=5, h_freq=25, steps=0.25, 
+                                  method = 'wavelet', baseline=[-3, 3], chan = 'all', 
+                                  itc_calculation=None, plot=True, length=[-3,3], 
+                                  cmap = 'Spectral_r', save_path=fig_path + subject + '_' + cond,
+                                  inst_power=True)
+            results_tfr['Subject'].extend([subject])
+            results_tfr['Condition'].extend([cond])
+            results_tfr['TFR_avg'].append(Sxx.average())
+            results_tfr['Evoked'].append(epoch.average())
+            
+            plt.close('all')
+
+    return pd.DataFrame(results_tfr), pd.DataFrame(results_ip)
+
 def group_so_sp_analysis():
     log_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(log_path) for i in files])
-    fig_path
+    fig_path = []
     df_sync, sws, sp = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     for i, files in enumerate(tqdm(maindir)):
         if 'half_co_mask_' in files:
@@ -773,15 +860,377 @@ def group_so_sp_analysis():
     
     ## Plot ndPAC- Group level
     plt.figure()
-    for cond in 
+    # for cond in 
     sws.groupby(['Condition','Subject']).mean()['ndPAC'].sham.plot.kde();
     plt.savefig(fig_path + files.split('/')[-1] + '_ndPAC_' + epoch_name + '.png')
     print(f'ndPAC means: {sws.groupby("Channel")["ndPAC"].mean()}')
-    pg.plot_circmean(df_sw['PhaseAtSigmaPeak'])
-    plt.savefig(fig_path + files.split('/')[-1] + '_circular_phase_' + epoch_name + '.png')
-    print('Circular mean: %.3f rad' % pg.circ_mean(df_sw['PhaseAtSigmaPeak']))
-    print('Vector length: %.3f' % pg.circ_r(df_sw['PhaseAtSigmaPeak'])) 
+    pg.plot_circmean(sws['PhaseAtSigmaPeak'])
+    plt.savefig(fig_path + 'group_circular_phase_.png')
+    print('Circular mean: %.3f rad' % pg.circ_mean(sws['PhaseAtSigmaPeak']))
+    print('Vector length: %.3f' % pg.circ_r(sws['PhaseAtSigmaPeak'])) 
 
+    ## Plot group co-occurence 
+    plot_co_occurence(sws, mask, df_sync, fig_path, subject, 
+                      cond, save=True)
+    
+    ## stats
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+    
+    df = sws.reset_index(drop=True)
+    md = smf.mixedlm("ndPAC ~ Condition", data=df, groups=df["Subject"], 
+                     missing='drop')
+    mdf = md.fit()
+    print(mdf.summary())
+    
+    #
+    new_df = df.groupby(['Subject','Condition']).mean()['ndPAC'].reset_index()
+    slalom_df = pd.read_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.csv')
+    slalom_df = slalom_df.groupby(["Subject","Condition"]).mean().reset_index()
+    df_comb = pd.merge(new_df, slalom_df, on=["Subject","Condition"]) 
+
+    # drop the following subjects 
+    for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','6QF3HOJC','IBYYXKMB','NW2JV7YA']):
+        df_comb.drop(df_comb.loc[df_comb['Subject']==i[0]].index, inplace=True)
+    
+    # stats 
+    md = smf.mixedlm("Absolute_RMSE_difference ~ ndPAC + Condition", data=df_comb, groups=df_comb["Subject"], 
+                     missing='drop')
+    mdf = md.fit()
+    print(mdf.summary())
+ 
+def data_qc():
+    path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/'
+    maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files if 'av.p' in i])
+    maindir = maindir[24:30]
+    for i, files in enumerate(tqdm(maindir)):
+        print(i, files.split('/')[-1])
+        # load data instead of pre-processing data 
+        Data = load_preprocessed_data(files)[0]
+        # take first (adjusted) pinknoise bursts as center point
+        burst_range = Data.pinknoise_times_sync[0:-1]
+        if len(burst_range) != 0:
+            # check condition 
+            cond = subject_cond_parser(files, study_phase = 'sleep')
+            subject = files.split("/")[-1].split('_')[0]
+            # load bad channel info before epoching
+            data_sheet = pd.read_csv('/media/administrator/data/Study_1_data/Data_tracking/epoch_reports.csv')
+            mask = np.logical_and(data_sheet['Subject']==subject, 
+                                  data_sheet['Condition']==cond)
+            bad_items = data_sheet[mask]['Bad Channels'].to_numpy()
+            if len(bad_items) > 0:
+                Data.bad_chans = bad_items[0].split("'")[1::2]
+            else:
+                Data.bad_chans = []
+            
+            ## Data length based
+            # create mne epoch object
+            info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)  
+            info['bads'] = Data.bad_chans        
+            # create epochs with online reference
+            epochs = mne.io.RawArray(Data.data.T/1e6, info)
+            # cut data to length
+            # epochs.crop(tmin=(burst_range[0]/512)-2, tmax=(burst_range[-1]/512)+2)
+            if epochs.times.shape[0]/epochs.info['sfreq']/60 >= 210:
+                epochs.crop(tmin=0, tmax=210*60)
+            epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
+            epochs.interpolate_bads()
+            # mastoid referencing
+            epochs.set_eeg_reference(['M1','M2'])  
+            epochs.resample(128)
+            epochs.plot_psd(0.5, 35)
+            plt.close('all')
+            del epochs, Data
+            
+
+#%%
+tfr_df, ip_df = tfr_sleep_analysis()
+save_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/'
+pickle.dump(tfr_df, open(save_path + 'TFR.p', "wb"))
+pickle.dump(ip_df,  open(save_path + 'Inst_power.p', "wb"))
+
+load_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/TFR.p'
+tfr_df = pickle.load(open(load_path, "rb"))
+
+def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
+    double_contrast_df = pd.DataFrame(columns=list(tfr_df.columns)[1:])
+    for contrast in zip(['up', 'down'], ['sham', 'sham down']):
+        print(contrast)
+        df = tfr_df.query(f"Condition == '{contrast[0]}' or Condition == '{contrast[1]}'")
+        good_subs = []
+        for sub in df.Subject.unique():
+            count = len(df[df.Subject==sub])
+            stimuli = [df[df.Subject==sub].reset_index()['Evoked'][i].nave for i in range(len(df[df.Subject==sub]))]
+            t_stimuli = [i for i in stimuli if i >= 30]
+            temp_data = (df[df.Subject==sub].reset_index()\
+                         ['Evoked'][0].copy().pick('eeg').data*1e6).squeeze()
+            if count == 2 and len(t_stimuli) == 2: # and np.ptp(temp_data) > 30:
+                good_subs.append(sub)
+                common_df = df.loc[df['Subject'].isin(good_subs)]
+            else:
+                print(f'Excluded Subjects: {sub}')
+                
+        inst_stim = common_df.copy()[common_df['Condition']==contrast[0]].reset_index()
+        tfr_stim = mne.grand_average([inst_stim['TFR_avg'][i].copy().drop_channels(['M1','M2']) for i in range(len(inst_stim))])
+        gav_stim = mne.grand_average([inst_stim['Evoked'][i].copy().drop_channels(['M1','M2']) for i in range(len(inst_stim))])
+        Sxx_stim = tfr_stim.copy().pick('eeg').crop(tmin=length[0],tmax=length[1]).data.mean(0) #mean over channels
+       
+        inst_sham = common_df.copy()[common_df['Condition']==contrast[1]].reset_index()
+        tfr_sham = mne.grand_average([inst_sham['TFR_avg'][i].copy().drop_channels(['M1','M2']) for i in range(len(inst_sham))])
+        gav_sham = mne.grand_average([inst_sham['Evoked'][i].copy().drop_channels(['M1','M2']) for i in range(len(inst_sham))])
+        Sxx_sham = tfr_sham.copy().pick('eeg').crop(tmin=length[0],tmax=length[1]).data.mean(0) #mean over channels
+       
+        Sxx_ = mne.combine_evoked([tfr_stim.copy().pick('eeg').crop(tmin=length[0],tmax=length[1]),
+                                   tfr_sham.copy().pick('eeg').crop(tmin=length[0],tmax=length[1])],
+                                   weights=[1, -1])
+        gav_ = mne.combine_evoked([gav_stim.copy().pick('eeg').crop(tmin=length[0],tmax=length[1]),
+                                   gav_sham.copy().pick('eeg').crop(tmin=length[0],tmax=length[1])], 
+                                  weights = [1, -1])
+        times = tfr_sham.copy().crop(tmin=length[0],tmax=length[1]).times
+           
+        fig, axs = plt.subplots(2, figsize=(10, 8))
+        axs[0].set_title("\u0394" + f' Average TFR Plot - {contrast[0].capitalize()}')
+        vmin=-.1; vmax=.6
+        # vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
+        # norm = Normalize(vmin=vmin, vmax=vmax)
+        CM = axs[0].pcolormesh(times, tfr_stim.freqs, Sxx_.data.mean(0).squeeze(), shading='gouraud', 
+                               cmap='Spectral_r', rasterized = True, #norm = norm, 
+                               vmin=vmin, vmax=vmax, antialiased=True)
+        axs[0].set_ylabel('Frequency (Hz)')
+        axs[1].set_title("\u0394" + f' Average Evoked Response (uV)')
+        axs[1].plot(gav_.times, gav_.data.T*1e6)
+        axs[1].set_xlim([length[0], length[1]])
+        axs[1].set_ylabel('Amplitude')
+        plt.xlabel('Time (s)')
+        plt.tight_layout()
+        # if save_path is not None:
+        #     plt.savefig(save_path + '_tf_plot.png')
+
+        ## Combine tfr contrasts for double contrast
+        new_row = {'Condition': contrast[0],
+                   'TFR_avg' : Sxx_.data.squeeze(),
+                   'Evoked' : gav_.data.squeeze()*1e6}
+        double_contrast_df = double_contrast_df.append(new_row, 
+                                                       ignore_index=True)
+    
+    gav = (double_contrast_df['Evoked'][0] - double_contrast_df['Evoked'][1])
+    Sxx = (double_contrast_df['TFR_avg'][0] - double_contrast_df['TFR_avg'][1])
+    
+    fig, axs = plt.subplots(2, figsize=(10, 8))
+    axs[0].set_title("\u0394" + ' Average TFR Plot - Double Contrast')
+    vmin=-.1; vmax=.6
+    # vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
+    # norm = Normalize(vmin=vmin, vmax=vmax)
+    CM = axs[0].pcolormesh(times, tfr_stim.freqs, Sxx.mean(0), shading='gouraud', 
+                           cmap='Spectral_r', rasterized = True, #norm = norm, 
+                           vmin=vmin, vmax=vmax, antialiased=True)
+    axs[0].set_ylabel('Frequency (Hz)')
+    axs[1].set_title("\u0394" + f' Average Evoked Response (uV)')
+    axs[1].plot(gav_.times, gav.T)
+    axs[1].set_xlim([length[0], length[1]])
+    axs[1].set_ylabel('Amplitude')
+    plt.xlabel('Time (s)')
+    plt.tight_layout()
+               
+def plot_tfr_erp(tfr_df):
+    for cond in tfr_df.Condition.unique():
+        print(cond)
+        inst = tfr_df.copy()[tfr_df['Condition']==cond].reset_index()
+        tfr = mne.grand_average([inst['TFR_avg'][i] for i in range(len(inst))])
+        gav = mne.grand_average([inst['Evoked'][i] for i in range(len(inst))])
+        
+        length=[-3.05, 3.05]
+        Sxx_ = tfr.copy().pick('eeg').drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]).data.mean(0) #mean over channels
+        times = tfr.copy().crop(tmin=length[0],tmax=length[1]).times  
+        
+        fig, axs = plt.subplots(2, figsize=(10, 8))
+        axs[0].set_title(f' Average TFR Plot - {cond.capitalize()}')
+        vmin=-.1; vmax=.6
+        # vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
+        # norm = Normalize(vmin=vmin, vmax=vmax)
+        CM = axs[0].pcolormesh(times, tfr.freqs, Sxx_, shading='gouraud', 
+                               cmap='Spectral_r', rasterized = True, #norm = norm, 
+                               antialiased=True, vmin=vmin, vmax=vmax)
+        axs[0].set_ylabel('Frequency (Hz)')
+        axs[1].set_title(f'Average Evoked Response (uV)')
+        t_min = (np.abs(gav.times - length[0])).argmin()
+        t_max = (np.abs(gav.times - length[1])).argmin()
+        axs[1].plot(gav.times[t_min:t_max+1], 
+                    gav.copy().pick('eeg').data[:,t_min:t_max+1].T*1e6)
+        axs[1].set_xlim([length[0], length[1]])
+        axs[1].set_ylabel('Amplitude')
+        plt.xlabel('Time (s)')
+        plt.tight_layout()
+        
+#%%
+
+def tfr_stats(tfr_df, length=[-3, 3]):   
+    common_subs = []
+    for cond_df in tfr_df.groupby('Condition')['Subject']:
+        common_subs.append(list(cond_df[1]))
+    to_del = reduce(np.setxor1d, [common_subs[0], common_subs[1],
+                                  common_subs[2], common_subs[3]])
+    to_del[-1] = ('P289L2RH')
+    [tfr_df.drop(tfr_df.loc[tfr_df['Subject']==to_del[i]].index,
+                 inplace=True) for i in range(len(to_del))]
+    contrast_ = [] 
+    for contrast in zip(['up', 'down'], ['sham', 'sham down']):
+        print(contrast)
+        df = tfr_df.query(f"Condition == '{contrast[0]}' or Condition == '{contrast[1]}'")
+        good_subs = []
+        for sub in df.Subject.unique():
+            count = len(df[df.Subject==sub])
+            stimuli = [df[df.Subject==sub].reset_index()['Evoked'][i].nave for i in range(len(df[df.Subject==sub]))]
+            t_stimuli = [i for i in stimuli if i >= 30]
+            temp_data = (df[df.Subject==sub].reset_index()\
+                         ['Evoked'][0].copy().pick('eeg').data*1e6).squeeze()
+            if count == 2 and len(t_stimuli) == 2: # and np.ptp(temp_data) > 30:
+                good_subs.append(sub)
+                common_df = df.loc[df['Subject'].isin(good_subs)]
+                #print(f'Included Subjects: {sub}')
+            else:
+                #print(f'Excluded Subjects: {sub}')
+                continue
+                
+        inst_stim = common_df.copy()[common_df['Condition']==contrast[0]].reset_index()
+        tfr_stim = list([inst_stim['TFR_avg'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]) 
+                         for i in range(len(inst_stim))])
+        Sxx_stim_ = np.concatenate([np.expand_dims(tfr_stim[i].copy().data, 0)
+                                   for i in range(len(tfr_stim))])
+        # subj x time x freq x chan
+        Sxx_stim = np.moveaxis(Sxx_stim_, 1, 3) 
+       
+        inst_sham = common_df.copy()[common_df['Condition']==contrast[1]].reset_index()
+        tfr_sham = list([inst_sham['TFR_avg'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]) 
+                         for i in range(len(inst_stim))])
+        Sxx_sham_ = np.concatenate([np.expand_dims(tfr_sham[i].copy().data, 0)
+                                   for i in range(len(tfr_sham))])
+        # subj x time x freq x chan
+        Sxx_sham = np.moveaxis(Sxx_sham_, 1, 3) 
+    
+        times = tfr_sham[0].copy().crop(tmin=length[0],tmax=length[1]).times
+        
+        # contrast 
+        contrast_.append(Sxx_stim - Sxx_sham)
+        
+    # adjust contrast   
+    contrast_ = (contrast_[0] - contrast_[1])
+    
+    # prepare adjacency matrix
+    adjacency, ch_names = mne.channels.find_ch_adjacency(df['Evoked'][0].copy().drop_channels(['M1','M2']).info, 
+                                                         'eeg')
+    adj4D = mne.stats.combine_adjacency(contrast_.shape[1], contrast_.shape[2],
+                                        adjacency)
+    
+    # compute threshold
+    pval = 0.05  # arbitrary
+    df = contrast_.shape[0] - 1  # degrees of freedom for the test
+    thresh = scipy.stats.t.ppf(1 - pval / 2, df)  # two-tailed, t distribution
+         
+    # do stats 
+    t_obs, clusters, cluster_p_values, h0 = spatio_temporal_cluster_1samp_test(
+        contrast_,                          # numpy array for contrast [n_subjects, n_voltage, n_channels]
+        n_permutations=1024,                # 1000 is the minimum
+        threshold=thresh,                   # TFCE, starting at 0, in 0.2 steps (in t-values)
+        tail=0,                             # two-tailed test (1 or -1 for one-tailed)
+        n_jobs=-1,                          # increase value to speed up computations
+        adjacency=adj4D,                    # sparse matrix for channel adjacency as computed above
+        buffer_size=None,
+        out_type='mask',                    # returns a mask map instead of indices of sig. points
+        seed= 1503
+        ) 
+    
+    # return mask
+    mask = cluster_p_values <= 0.05
+    
+    return t_obs, clusters, cluster_p_values, h0, mask 
+
+def erp_stats(tfr_df, length=[-3, 3]):   
+    common_subs = []
+    for cond_df in tfr_df.groupby('Condition')['Subject']:
+        common_subs.append(list(cond_df[1]))
+    to_del = reduce(np.setxor1d, [common_subs[0], common_subs[1],
+                                  common_subs[2], common_subs[3]])
+    to_del[-1] = ('P289L2RH')
+    [tfr_df.drop(tfr_df.loc[tfr_df['Subject']==to_del[i]].index,
+                 inplace=True) for i in range(len(to_del))]
+    contrast_ = [] 
+    for contrast in zip(['up', 'down'], ['sham', 'sham down']):
+        print(contrast)
+        df = tfr_df.query(f"Condition == '{contrast[0]}' or Condition == '{contrast[1]}'")
+        good_subs = []
+        for sub in df.Subject.unique():
+            count = len(df[df.Subject==sub])
+            stimuli = [df[df.Subject==sub].reset_index()['Evoked'][i].nave for i in range(len(df[df.Subject==sub]))]
+            t_stimuli = [i for i in stimuli if i >= 30]
+            temp_data = (df[df.Subject==sub].reset_index()\
+                         ['Evoked'][0].copy().pick('eeg').data*1e6).squeeze()
+            if count == 2 and len(t_stimuli) == 2: # and np.ptp(temp_data) > 30:
+                good_subs.append(sub)
+                common_df = df.loc[df['Subject'].isin(good_subs)]
+                print(f'Included Subjects: {sub}')
+            else:
+                print(f'Excluded Subjects: {sub}')
+                
+        inst_stim = common_df.copy()[common_df['Condition']==contrast[0]].reset_index()
+        inst_sham = common_df.copy()[common_df['Condition']==contrast[1]].reset_index()
+
+        # calculate difference        
+        diff_waves = []
+        for i in range(len(inst_sham)):
+            diff_waves.append(mne.combine_evoked([inst_stim['Evoked'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]), 
+                                                  inst_sham['Evoked'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1])],
+                                                 weights=[1, -1]))
+        
+        # gav for plotting
+        gav = mne.grand_average(diff_waves).copy().crop(tmin=length[0],
+                                                        tmax=length[1])
+        
+        # calculate contrast for all subjects
+        contrast_sub = np.concatenate([np.expand_dims(diff_waves[i].copy().data*1e6, 0) 
+                                       for i in range(len(diff_waves))], 0)
+
+        # subj x timepoints x chan
+        contrast_sub = np.moveaxis(contrast_sub, 1, 2)
+       
+        # times
+        times = gav.copy().crop(tmin=length[0],tmax=length[1]).times
+        
+        # contrast 
+        contrast_.append(contrast_sub)
+        
+    # adjust contrast   
+    contrast_ = (contrast_[0] - contrast_[1])
+    
+    # prepare adjacency matrix
+    adjacency, ch_names = mne.channels.find_ch_adjacency(gav.info, 'eeg')
+    
+    # compute threshold
+    pval = 0.05  # arbitrary
+    df = contrast_.shape[0] - 1  # degrees of freedom for the test
+    thresh = scipy.stats.t.ppf(1 - pval / 2, df)  # two-tailed, t distribution
+         
+    # do stats 
+    t_obs, clusters, cluster_p_values, h0 = spatio_temporal_cluster_1samp_test(
+        contrast_,                          # numpy array for contrast [n_subjects, n_voltage, n_channels]
+        n_permutations=1024,                # 1000 is the minimum
+        threshold=thresh,                   # TFCE, starting at 0, in 0.2 steps (in t-values)
+        tail=0,                             # two-tailed test (1 or -1 for one-tailed)
+        n_jobs=-1,                          # increase value to speed up computations
+        adjacency=adjacency,                # sparse matrix for channel adjacency as computed above
+        buffer_size=None,
+        out_type='mask',                    # returns a mask map instead of indices of sig. points
+        seed= 1503
+        ) 
+    
+    # return mask
+    mask = cluster_p_values <= 0.05
+    
+    # plot
+    gav.plot_image(mask=clusters[np.argmax(mask)].T, 
+                   show_names="all", mask_cmap='Blues')
+    
+    return t_obs, clusters, cluster_p_values, h0, mask 
 
 #%%
 ## Run things here dumb dumb
