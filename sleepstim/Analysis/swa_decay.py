@@ -42,7 +42,8 @@ def find_runs(x):
     run_values = x[loc_run_start]
     # Find run lengths
     run_lengths = np.diff(np.append(run_starts, n))
-    return pd.DataFrame({'values': run_values, 'start': run_starts, 'length': run_lengths})
+    return pd.DataFrame({'values': run_values, 'start': run_starts, 
+                         'length': run_lengths})
 
 
 def _decay_func(t, asym, intercept, tau):
@@ -269,9 +270,10 @@ def swa_decay(data, hypno, *, sf=None, ch_names=None, include=(2, 3), freq_swa=(
     logger.info(
         f"{n_epochs} NREM epochs longer than {epoch_length} were found in hypno.")
     if n_epochs < 4:
-        raise ValueError(
-            f"Less than 4 NREM epochs > {epoch_length} were found in hypno. SWA decay cannot be "
-            f"calculated. Please decrease {epoch_length}.")
+        print(f"Less than 4 NREM epochs > {epoch_length} were found in hypno")
+    #     raise ValueError(
+    #         f"Less than 4 NREM epochs > {epoch_length} were found in hypno. SWA decay cannot be "
+    #         f"calculated. Please decrease {epoch_length}.")
 
     # Calculate the onset time (relative to sleep onset) of each NREM period
     epochs['time_onset_hrs'] = (epochs['start'] - idx_onset) / sf / 3600
@@ -297,7 +299,8 @@ def swa_decay(data, hypno, *, sf=None, ch_names=None, include=(2, 3), freq_swa=(
         win_sec=win_sec, relative=True, bandpass=False, kwargs_welch=kwargs_welch)
 
     # Initialize output
-    df_decay = {"Intercept": [], "Asym": [], "Tau": [], "Decay": [], "MAE": []}
+    df_decay = {"Intercept": [], "Asym": [], "Tau": [], "Decay": [], "MAE": [],
+                "X-data": [], "Y-data": []}
 
     # Calculate exponential decline, for each channel
     # Note that we use the midpoint of each epoch as the xdata, and not the onset, to account for
@@ -321,6 +324,8 @@ def swa_decay(data, hypno, *, sf=None, ch_names=None, include=(2, 3), freq_swa=(
         df_decay["Tau"].append(popt[2])
         df_decay["Decay"].append(1 / popt[2])
         df_decay["MAE"].append(mae)
+        df_decay["X-data"].append(xdata)
+        df_decay["Y-data"].append(ydata)
 
     # Convert to dataframe
     return pd.DataFrame(df_decay, index=ch_names)

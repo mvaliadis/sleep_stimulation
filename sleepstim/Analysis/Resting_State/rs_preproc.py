@@ -25,7 +25,7 @@ from collections import OrderedDict
 import scipy.stats as stats
 from scipy.stats import skewnorm
 import scipy.signal as signal
-from statsmodels.api import tsa
+#from statsmodels.api import tsa
 import statsmodels
 # import easyEEG.structure as eeg_stats
 # from PCIst.PCIst import pci_st

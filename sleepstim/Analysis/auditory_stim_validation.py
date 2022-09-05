@@ -15,8 +15,6 @@ import os
 import yasa
 import mne
 import pingouin as pg
-from os import chdir as cd
-from os import listdir
 import logging 
 from tqdm import tqdm
 from scipy.signal import welch, butter, filtfilt, hilbert, detrend
@@ -36,6 +34,7 @@ from sleepstim.sleep_funs import (load_xdf, channel_parser, bfr_butter_filt, thr
 from sleepstim.Analysis.pac import unit_root_test, add_stimulus_onset, ERPAC, extract_pha_amp, SO_spindle_coupling, imf_analytical_transform
 from sleepstim.Analysis.time_frequency import tfr_analysis, analytical_transform
 from sleepstim.Analysis.Resting_State.rs_preproc import (plot_psd, norm_wavelet_power, subject_cond_parser)
+from sleepstim.Analysis.swa_decay import swa_decay, _decay_func
 import tensorpac.methods as tpm
 from sleepstim.Analysis.foof import oscillatory_plot_psd_map, periodic_fit
 from fooof.plts.spectra import plot_spectrum
@@ -49,10 +48,78 @@ import pickle
 from functools import reduce
 from mne.stats import (spatio_temporal_cluster_1samp_test,
                        permutation_cluster_1samp_test)
-
+from sleepstim.Analysis.transitional_probabilities import (transition_matrix, 
+                                                           transition_matrix_plot, 
+                                                           transition_matrix_prob)
 # sns.set_theme(color_codes=True) 
 mne.set_log_level("CRITICAL")
-      
+
+#%%
+def subject_night_parser(subject, cond, study_phase='sleep'):
+    # data sheet with true subject condition nights
+    sheet = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
+    subj_cond = np.loadtxt(sheet, delimiter=',', dtype='str', skiprows=1) 
+    cond_dict = {'sham' : 0, 'up' : 1, 'down' : 2} 
+    # find condition by night
+    if study_phase == 'sleep':
+        index_name = list(subj_cond[:,0]).index(subject)
+        # true condition night name
+        condition_night = np.where(subj_cond[index_name, 1:].astype(int)==cond_dict[cond])[0][0] 
+    
+    return condition_night
+
+def df_sw_sp_density(df, spindle=True):
+    hypno_path1 = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/'
+    hypno_path2 = '/media/administrator/data/Study_1_data/Pre-processed_data/EDFs/Auto_hypnograms/'     
+    df = df.groupby(['Condition','Subject','Channel',
+                     'Stage']).agg('count')['Start'].reset_index()
+    df.rename(columns = {'Start':'Count'}, inplace = True)
+    if spindle:
+        df = df[np.logical_or(df['Stage']==2, df['Stage']==3)]
+    df_ = pd.DataFrame(columns = ['Condition', 'Subject', 'Channel', 'Stage', 
+                                  'Count', 'Density'])
+    for i, subject in enumerate(df.Subject.unique()):
+        df_s = df[df.Subject==subject]
+        for cond in df_s.Condition.unique():
+            df_s_c = df_s[df_s.Condition==cond]
+            night = subject_night_parser(subject, cond, study_phase='sleep')
+            try:
+                hypno_pred_s = unravel_hypnogram_visbrain(hypno_path1 + f'{subject}_{night + 1}_hypno.txt')
+            except:
+                hypno_pred_s = np.load(hypno_path2 + f'{subject}_{night + 1}_hypnogram.npy')
+            
+            hypno_pred_s = hypno_pred_s[0:420]
+            N2_counts = pd.Series(hypno_pred_s).value_counts()[2]
+            N3_counts = pd.Series(hypno_pred_s).value_counts()[3]
+            
+            df_s_c['Density'] = np.ones(len(df_s_c))
+            df_s_c['Density'].loc[df_s_c.Stage==2] = df_s_c.loc[df_s_c.Stage==2]['Count']/N2_counts
+            df_s_c['Density'].loc[df_s_c.Stage==3] = df_s_c.loc[df_s_c.Stage==3]['Count']/N3_counts
+            
+            df_ = df_.append(df_s_c, ignore_index=True)
+            
+    return df_
+
+def swa_dissipation_plot(sws_decay):
+    sns.set_theme(color_codes=True) 
+    pal = sns.color_palette("Blues_d", n_colors=len(sws_decay))
+    for idx in range(len(sws_decay)):
+        xdata = sws_decay['X-data'][idx]
+        ydata = sws_decay['Y-data'][idx]
+        popt = np.asarray([sws_decay['Asym'][idx],
+                            sws_decay['Intercept'][idx],
+                            sws_decay['Tau'][idx]])
+ 
+        plt.plot(xdata, _decay_func(xdata, *popt), marker="o",
+                  color=pal[idx]);
+        #plt.plot(xdata, ydata, linewidth=0, marker="o");
+        plt.ylim(ydata.min()-0.2, 1)
+        plt.xlim(0, None)
+        plt.xlabel("Time (hours)")
+        plt.ylabel("Relative SWA (0.5-4 Hz) power")
+        #plt.legend(frameon=True, loc="lower right");
+        plt.title(f"{subject} - {cond} - Exponential decline", fontweight="bold")
+                        
 def find_cooccurring_rrpeaks(sws, spindles, lookaround=1.2):
     distance_rrpeak_to_sw_peak = []
     cooccurring_rr_peaks = []
@@ -95,18 +162,63 @@ def cooccuring_fun(sws, coi='C3'):
    
 def plot_co_occurence(sws, mask, df_sync, fig_path, subject, cond, save=True):   
     plt.figure()
-    ax = sns.histplot(sws.summary()[mask]['DistanceSpindleToSW'], 
-                      binwidth=0.1, stat='probability')
+    if len(mask) < 0:
+        ax = sns.histplot(sws[sws.Channel=='C3']['DistanceSpindleToSW'], 
+                          binwidth=0.1, stat='probability')
+    else:
+        ax = sns.histplot(sws.summary()[mask]['DistanceSpindleToSW'], 
+                          binwidth=0.1, stat='probability')
     ax.set_xlim(-1.2,1.2)
     plt.axvline(0., lw=1.5, color='k', linestyle='--')
     ax2 = ax.twinx()
-    sns.lineplot(x='Time',y='Amplitude',data=df_sync, ci=False, 
+    sns.lineplot(x='Time', y='Amplitude',data=df_sync, ci=False, 
                  axes=ax2, linewidth=5, color='k')
     plt.tight_layout()
     if save:
         plt.savefig(fig_path + f'event_peri_hist_{subject}_{cond}')
         plt.close('all')
-                    
+        
+def group_co_occurence(sws):
+    # ## Plot ridge plots --> push back 
+    # sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
+    # g = sns.FacetGrid(sws, row="Channel", col="Condition", aspect=9, height=1.2)
+    # g.map_dataframe(sns.histplot, binwidth=0.1, stat='probability', 
+    #                 x="DistanceSpindleToSW", fill=True, alpha=1)
+    # g.map_dataframe(sns.kdeplot, x="DistanceSpindleToSW", fill=True, alpha=1)
+    # g.fig.subplots_adjust(hspace=-.5)
+    # g.set_titles("")
+    # g.set(yticks=[])
+    # g.despine(left=True)
+    # plt.tight_layout()
+
+    sns.set_theme(style="white", rc={"axes.facecolor": (0, 0, 0, 0)})
+    pal = sns.cubehelix_palette(23, rot=-.25, light=.7)
+    g = sns.FacetGrid(sws, row="Channel", col="Condition", hue="Channel", 
+                      aspect=15, height=.5, palette=pal)
+    g.map_dataframe(sns.kdeplot, "DistanceSpindleToSW",
+          bw_adjust=.5, clip_on=False,
+          fill=True, alpha=1, linewidth=1.5)
+    g.map(sns.kdeplot, "DistanceSpindleToSW", clip_on=False, 
+          color="w", lw=2, bw_adjust=.5)
+    g.refline(y=0, linewidth=2, linestyle="-", color=None, clip_on=False)
+    # Define and use a simple function to label the plot in axes coordinates
+    def label(x, color, label):
+        ax = plt.gca()
+        ax.text(0, .2, label, fontweight="bold", color=color,
+                ha="left", va="center", transform=ax.transAxes)
+    g.map(label, "DistanceSpindleToSW")
+    
+    # Set the subplots to overlap
+    g.figure.subplots_adjust(hspace=-.25)
+    
+    # Remove axes details that don't play well with overlap
+    g.set_titles("")
+    g.set(yticks=[], ylabel="", 
+          #xticks=[], xlabel="",
+          xticks=np.arange(-1.5, 2.0, 0.5), xlabel="",
+          xlim = (-1.5, 1.5))
+    g.despine(bottom=True, left=True)
+                        
 def sw_phase_binning(epoch):
     # filter data to perform slow wave detection
     data_lp = epoch.copy().filter(l_freq=None, h_freq=2).get_data('eeg')*1e6
@@ -238,7 +350,9 @@ def SO_spindle_analysis(epoch, reference, subject, condition, fig_path):
              
     return df_sw, df_sp, df_couple
     
-def auditory_stim_epochs(maindir, epoch_time = (-4, 4)):
+def auditory_stim_epochs(epoch_time = (-4, 4)):
+    path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/'
+    maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     # create log file 
     log_path = '/media/administrator/data/Study_1_data/Data_tracking/epoch_reports.csv'
     for i, files in tqdm(enumerate(maindir)):
@@ -303,7 +417,7 @@ def auditory_stim_epochs(maindir, epoch_time = (-4, 4)):
             
             # create epochs with online reference
             epochs = mne.EpochsArray(np.swapaxes(Data.data[center]/1e6, 1, 2), info, tmin = epoch_time[0], 
-                                     baseline=None, proj=False, reject = None)
+                                     baseline=None, proj=False, reject=None)
             epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
             epochs.interpolate_bads()
             if cond != 'sham':
@@ -352,6 +466,8 @@ def auditory_stim_epochs(maindir, epoch_time = (-4, 4)):
             
             # save dataframe
             df.to_csv(log_path)
+            
+    return df
 
 def sw_spindle_detection_stim_auditory(save=True):
     # configure paths 
@@ -405,7 +521,10 @@ def sw_spindle_detection_half_night(plot=True):
         fig_path = '/media/administrator/data/Study_1_data/Figures/Half_night/'
         log_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'
         # load data instead of pre-processing data 
-        Data = load_preprocessed_data(files)[0]
+        try:
+            Data = load_preprocessed_data(files)[0]
+        except:
+            Data = load_preprocessed_data(files)    
         # take first (adjusted) pinknoise bursts as center point
         burst_range = Data.pinknoise_times_sync[0:-1]
         if len(burst_range) != 0:
@@ -443,30 +562,60 @@ def sw_spindle_detection_half_night(plot=True):
             # epochs.crop(tmin=(burst_range[0]/512)-2, tmax=(burst_range[-1]/512)+2)
             if epochs.times.shape[0]/epochs.info['sfreq']/60 >= 210:
                 epochs.crop(tmin=0, tmax=210*60)
+            else:
+                pass
+            # if epochs.times.shape[0]/epochs.info['sfreq']/60 <= 210:
+            #     pass
             epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
             epochs.interpolate_bads()
             # mastoid referencing
-            epochs.set_eeg_reference(['M1','M2'])  
+            epochs.set_eeg_reference(['M1','M2']) 
+            # resample data
             epochs.resample(128)
             # create sudo hypno for now
-            sls = yasa.SleepStaging(epochs, eeg_name='Cz', eog_name='EOG_R', emg_name='EMG_L')
-            hypno_pred = yasa.hypno_upsample_to_data(hypno = yasa.hypno_str_to_int(sls.predict()),
-                                                     data = epochs, sf_hypno = 1/30, sf_data = 128)
-            hypno_pred = scipy.ndimage.median_filter(hypno_pred, size=128*10)
+            try:
+                hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/' + subject + '_' + files.split('/')[-1].split('_')[1]
+                hypno_pred_s =  unravel_hypnogram_visbrain(hypno_path + '_hypno.txt')
+                hypno_pred = yasa.hypno_upsample_to_data(hypno_pred_s, sf_hypno = 1/30, 
+                                                         sf_data = 128, data = epochs)
+                print('Self-Scored Hypnogram Utilized! ')
+            except:
+                hypno_path = '/media/administrator/data/Study_1_data/Pre-processed_data/EDFs/Auto_hypnograms/' + subject + '_' + files.split('/')[-1].split('_')[1]  + '_hypnogram.npy'
+                hypno_pred_s = np.load(hypno_path)
+                hypno_pred = yasa.hypno_upsample_to_data(hypno = hypno_pred_s, data = epochs, 
+                                                         sf_hypno = 1/30, sf_data = 128)
+                print('U-Sleep Classfier Hypnogram Utilized! ')
+            # artifact detection
+            art_idx, _ = yasa.art_detect(epochs, hypno = hypno_pred, 
+                                         window = 2)
+            #art_idx = art_detect(epochs, raw=True)
+            # The resolution of art is 2 seconds, so its sampling frequency is 1/2 (= 0.5 Hz)
+            sf_art = 1 / 2
+            art_up = yasa.hypno_upsample_to_data(art_idx, sf_art, epochs)
+            # Add -1 to hypnogram where artifacts were detected
+            hypno_with_art = hypno_pred.copy()
+            hypno_with_art[art_up] = -1            
+            # Proportion of each stage in ``hypno_with_art``
+            pd.Series(hypno_with_art).value_counts(normalize=True).round(4)*100
+            
             # sw detection
-            sws = yasa.sw_detect(data = epochs.pick('eeg'), coupling = True, 
-                                 remove_outliers = True, hypno = hypno_pred, 
-                                 coupling_params={"freq_sp": (12, 16), "time": 2, "p": 0.05}) 
+            try:
+                sws = yasa.sw_detect(data = epochs.pick('eeg'), coupling = True, 
+                                     remove_outliers = True, hypno = hypno_with_art, 
+                                     coupling_params={"freq_sp": (12, 16), "time": 2, "p": 0.05}) 
+            except:
+                sws = yasa.sw_detect(data = epochs.pick('eeg'), coupling = False, 
+                                     remove_outliers = True, hypno = hypno_with_art) 
             # spindle detection
             sp = yasa.spindles_detect(data = epochs.pick('eeg'), freq_sp=(12, 16), remove_outliers = True,
                                       duration=(0.5, 3), thresh={'rel_pow': None, 'corr': None, 'rms': 1.5},
-                                      hypno = hypno_pred)
+                                      hypno = hypno_with_art)
             # coupling fun
             sws.find_cooccurring_spindles(sp.summary(), lookaround=1.2)
-            
+        
             # save co-occurence df with mask
             mask, df_sync = cooccuring_fun(sws)
-            
+        
             # plot co-occurence
             if len(df_sync) > 0:
                 if plot:
@@ -475,7 +624,7 @@ def sw_spindle_detection_half_night(plot=True):
                 df_sync['Condition'] = [cond]*len(df_sync)
                 df_sync['Subject'] = [subject]*len(df_sync)
                 df_sync.to_csv(log_path + f'half_co_mask_{subject}_{cond}.csv')
-            
+                
             # save sw df
             sws_summary = sws.summary()
             sws_summary['Condition'] = [cond]*len(sws_summary)
@@ -488,13 +637,158 @@ def sw_spindle_detection_half_night(plot=True):
             sp_summary.to_csv(log_path + f'half_sp_{subject}_{cond}.csv')
             
             del Data, epochs, sws, sp, df_sync
-    
-def auditory_stim_results(maindir):
+  
+def sleep_statistics_decay_stability(save=True):
+    fig_path = '/media/administrator/data/Study_1_data/Figures/Full_night_sleep/'
+    path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/'
+    maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files if 'av.p' in i])
+    sws_decay_ = pd.DataFrame(columns=['Subject','Condition','Channel','Intercept',
+                                       'Asym','Tau','Decay', 'MAE', 'X-data', 'Y-data'])
+    sleep_stats = pd.DataFrame()
+    for i, files in enumerate(tqdm(maindir)):
+        print(i, files.split('/')[-1])
+        # load data instead of pre-processing data 
+        Data = load_preprocessed_data(files)[0]
+        # take first (adjusted) pinknoise bursts as center point
+        burst_range = Data.pinknoise_times_sync[0:-1]
+        if len(burst_range) != 0:
+            # check condition 
+            cond = subject_cond_parser(files, study_phase = 'sleep')
+            subject = files.split("/")[-1].split('_')[0]
+            # load bad channel info before epoching
+            data_sheet = pd.read_csv('/media/administrator/data/Study_1_data/Data_tracking/epoch_reports.csv')
+            mask = np.logical_and(data_sheet['Subject']==subject, 
+                                  data_sheet['Condition']==cond)
+            bad_items = data_sheet[mask]['Bad Channels'].to_numpy()
+            if len(bad_items) > 0:
+                Data.bad_chans = bad_items[0].split("'")[1::2]
+            else:
+                Data.bad_chans = []
+                
+            ## Data length based
+            # create mne epoch object
+            info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)  
+            info['bads'] = Data.bad_chans        
+            # create epochs with online reference
+            epochs = mne.io.RawArray(Data.data.T/1e6, info)
+            # cut data to length
+            # if epochs.times.shape[0]/epochs.info['sfreq']/60 >= 210:
+            #     #epochs.crop(tmin=0, tmax=210*60)
+            if epochs.times.shape[0]/epochs.info['sfreq']/60 <= 210:
+                pass
+            epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
+            epochs.interpolate_bads()
+            # mastoid referencing
+            epochs.set_eeg_reference(['M1','M2']) 
+            # resample data
+            epochs.resample(128)
+            # hypnograms
+            try:
+                hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/' + subject + '_' + files.split('/')[-1].split('_')[1]
+                hypno_pred_s =  unravel_hypnogram_visbrain(hypno_path + '_hypno.txt')
+                hypno_pred_s[0] = 0
+                probs = transition_matrix_prob(transition_matrix(hypno_pred_s))
+                transition_matrix_plot(probs, save=True, path=fig_path + subject + '_' + cond)
+                plt.close('all')
+                stability = np.diag(probs[2:, 2:]).mean().round(4)
+                hypno_pred = yasa.hypno_upsample_to_data(hypno_pred_s, sf_hypno = 1/30, 
+                                                         sf_data = 128, data = epochs)
+                print('Self-Scored Hypnogram Utilized! ')
+            except:
+                hypno_path = '/media/administrator/data/Study_1_data/Pre-processed_data/EDFs/Auto_hypnograms/' + subject + '_' + files.split('/')[-1].split('_')[1]  + '_hypnogram.npy'
+                hypno_pred_s = np.load(hypno_path)
+                hypno_pred_s[0] = 0
+                probs = transition_matrix_prob(transition_matrix(hypno_pred_s))
+                transition_matrix_plot(probs, save=True, path=fig_path + subject + '_' + cond)
+                plt.close('all')
+                stability = np.diag(probs[2:, 2:]).mean().round(4)
+                hypno_pred = yasa.hypno_upsample_to_data(hypno = hypno_pred_s, data = epochs, 
+                                                         sf_hypno = 1/30, sf_data = 128)
+                print('U-Sleep Classfier Hypnogram Utilized! ')
+
+            # artifact detection
+            art_idx, _ = yasa.art_detect(epochs, hypno = hypno_pred, 
+                                         window = 2)
+            # The resolution of art is 2 seconds, so its sampling frequency is 1/2 (= 0.5 Hz)
+            sf_art = 1 / 2
+            art_up = yasa.hypno_upsample_to_data(art_idx, sf_art, epochs)
+            # Add -1 to hypnogram where artifacts were detected
+            hypno_with_art = hypno_pred.copy()
+            hypno_with_art[art_up] = -1            
+            # Proportion of each stage in ``hypno_with_art``
+            pd.Series(hypno_with_art).value_counts(normalize=True).round(4)*100
+                    
+            # sw decay analysis
+            if i == 0:
+                try:
+                    sws_decay = swa_decay(data = epochs.copy().pick('eeg'),
+                                          hypno = hypno_with_art,
+                                          epoch_length="5min").reset_index()
+                except:
+                    sws_decay = swa_decay(data = epochs.copy().pick('eeg'),
+                                          hypno = hypno_with_art,
+                                          epoch_length="4min").reset_index()
+                # plot here
+                swa_dissipation_plot(sws_decay)
+                plt.savefig(fig_path + subject + '_' + cond + '_swa_dissipation.png', dpi=100, bbox_inches='tight')
+                plt.close('all')
+                
+                sws_decay.rename(columns = {'index':'Channel'}, inplace = True)
+                sws_decay.insert(0, "Subject", subject)
+                sws_decay.insert(1, "Condition", cond)
+                sws_decay = sws_decay_.append(sws_decay, 1)
+            else:
+                try:
+                    sws_decay2 = swa_decay(data = epochs.copy().pick('eeg'), 
+                                           hypno = hypno_with_art,
+                                           epoch_length="5min").reset_index()
+                except:
+                    sws_decay2 = swa_decay(data = epochs.copy().pick('eeg'), 
+                                           hypno = hypno_with_art,
+                                           epoch_length="4min").reset_index()
+                
+                # plot here
+                swa_dissipation_plot(sws_decay2)
+                plt.savefig(fig_path + subject + '_' + cond + '_swa_dissipation.png', dpi=100, bbox_inches='tight')
+                plt.close('all')
+                
+                sws_decay2.rename(columns = {'index':'Channel'}, inplace = True)
+                sws_decay2.insert(0, "Subject", subject)
+                sws_decay2.insert(1, "Condition", cond)
+                sws_decay = sws_decay.append(sws_decay2, 1)      
+                       
+            # plot spectrogram, hypnogram, and SWA dissipation 
+            yasa.plot_spectrogram(
+                data=epochs.get_data('eeg', units='uV').mean(0), 
+                hypno=hypno_with_art, sf=128, cmap='Spectral_r')
+            plt.tight_layout()
+            plt.savefig(fig_path + subject + '_' + cond + '_hypnogram.png', dpi=100, bbox_inches='tight')
+            plt.close('all')       
+            
+            # sleep stats --> use down sampled hypno
+            stats_ = yasa.sleep_statistics(hypno_pred_s, sf_hyp=1/30)
+            sleep_stats_ = {'Subject': subject,
+                            'Condition': cond, 
+                            'Stability': stability}
+            sleep_stats_.update(stats_)
+            # update dataframe 
+            sleep_stats = sleep_stats.append(sleep_stats_, ignore_index=True)
+            
+            del Data, epochs
+
+    if save:
+        save_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/'
+        sws_decay.to_csv(save_path + 'swa_decay.csv')
+        sleep_stats.to_csv(save_path + 'sleep_stage.csv')
+        
+    return sws_decay, sleep_stats
+        
+def auditory_stim_results():
     # configure paths
     path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     report_path = '/media/administrator/data/Study_1_data/Statistics/'
-    fig_path = '/media/administrator/data/Study_1_data/Figures/Pinknoise_epochs/'
+    fig_path = '/media/administrator/data/Study_1_data/Figures/Group_pinknoise_epochs/'
     # initialize dictionary for results
     results = defaultdict(lambda: [])
     results_pci = defaultdict(lambda: [])
@@ -573,7 +867,7 @@ def auditory_stim_results(maindir):
                     results_pci['Brain_area'].append(area)
                     results_pci['Hemisphere'].append(laterality)
                     results_pci['PCI'].append(eval(area + laterality))
-                    
+                     
         else:
             pass
         
@@ -620,31 +914,41 @@ def auditory_stim_results(maindir):
      
     comp_df = create_subj_comp_evoked(df)
     
-    gav_down_comp = mne.grand_average(list(comp_df.copy().drop(comp_df.loc[comp_df['Evoked Difference Down']==0].index)
-                                           ['Evoked Difference Down']))
-    plt.savefig(fig_path + 'Evoked_diff_down.png')
-    gav_up_comp = mne.grand_average(list(comp_df.copy().drop(comp_df.loc[comp_df['Evoked Difference Up']==0].index)
-                                         ['Evoked Difference Up']))
-    plt.savefig(fig_path + 'Evoked_diff_up.png')
-
     ## Plotting fun
     ts_args = dict(spatial_colors = True, gfp=True, time_unit='s')
     topomap_args = dict(outlines = 'head', time_unit='s', cmap = 'Spectral_r', time_format = "%0.2f s")
     times = np.asarray([-0.5, 0, 0.25, 0.5, .75, 1.0, 1.25, 1.5, 1.75, 2.0])
     all_times = np.arange(-3.0, 3.25, 0.25)
     results_gav = defaultdict(lambda: [])
+    gav_down_comp = mne.grand_average(list(comp_df.copy().drop(comp_df.loc[comp_df['Evoked Difference Down']==0].index)
+                                           ['Evoked Difference Down']))
+    gav_down_comp.plot_joint(times, ts_args = ts_args, 
+                             topomap_args = topomap_args,
+                             title = 'Down Evoked Difference')
+    plt.savefig(fig_path + 'down_erp_diff.png')
+    gav_up_comp = mne.grand_average(list(comp_df.copy().drop(comp_df.loc[comp_df['Evoked Difference Up']==0].index)
+                                         ['Evoked Difference Up']))
+    gav_up_comp.plot_joint(times, ts_args = ts_args, 
+                           topomap_args = topomap_args,
+                           title = 'Up Evoked Difference') 
+    plt.savefig(fig_path + 'up_erp_diff.png')
+    
     for (cond, ref), evok in df.groupby(['Condition', 'Reference'])['Data']:
         print(cond, ref)
         gav = mne.grand_average(list(evok))
         gav.plot_joint(times, ts_args = ts_args, topomap_args = topomap_args,
                        title = cond.capitalize() + ' ' + ref.capitalize())     
+        plt.savefig(fig_path + f'{cond} {ref} ERP.png')
         gav.plot_topomap(all_times, ch_type='eeg', ncols='auto', nrows='auto',
                           title=f'Amplitude distributions - {cond.capitalize()} - {ref.capitalize()}',
                           **topomap_args) 
+        plt.savefig(fig_path + f'{cond} {ref} Topography.png')
         
         results_gav['Condition'].append(cond)
         results_gav['Reference'].append(ref)
         results_gav['Data'].append(gav)
+    
+    plt.close('all')
         
     # convert results dict to dataframe
     df_gav = pd.DataFrame(results_gav)
@@ -652,6 +956,7 @@ def auditory_stim_results(maindir):
  
 def auditory_phase_analysis(plot=True, save=True):
     path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
+    sns.set_theme(style="darkgrid")
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     fig_path = '/media/administrator/data/Study_1_data/Figures/Pinknoise_epochs/'
     results = defaultdict(lambda: [])
@@ -811,6 +1116,7 @@ def tfr_sleep_analysis(picks='eeg'):
                         results_ip['Post2'].append(amp_mean[time_window2[0]:time_window2[1]].mean(0))
                         results_ip['Pre'].append(amp_mean[time_window3[0]:time_window3[1]].mean(0))
                         results_ip['Post'].append(amp_mean[time_window4[0]:time_window4[1]].mean(0))
+                        results_ip['Epoch_IP'].append([amp_mean[time_window3[0]:time_window4[-1]]])
                 else:
                     # log subject/trial info
                     results_ip['Subject'].extend([subject])
@@ -821,7 +1127,8 @@ def tfr_sleep_analysis(picks='eeg'):
                     results_ip['Post2'].append(amp_mean[time_window2[0]:time_window2[1]].mean(0))
                     results_ip['Pre'].append(amp_mean[time_window3[0]:time_window3[1]].mean(0))
                     results_ip['Post'].append(amp_mean[time_window4[0]:time_window4[1]].mean(0))
-
+                    results_ip['Epoch_IP'].append([amp_mean[time_window3[0]:time_window4[-1]]])
+         
             # TF analysis 
             _, Sxx = tfr_analysis(Data=epoch, l_freq=5, h_freq=25, steps=0.25, 
                                   method = 'wavelet', baseline=[-3, 3], chan = 'all', 
@@ -837,10 +1144,34 @@ def tfr_sleep_analysis(picks='eeg'):
 
     return pd.DataFrame(results_tfr), pd.DataFrame(results_ip)
 
+def group_pac_plot(df, chan='C3', bins=12):
+    #df = df.groupby(['Channel','Condition']).mean().reset_index()
+    df = df.reset_index()
+    kwargs_arrow={'fc': 'tab:red', 'ec': 'tab:red'}
+    with plt.style.context('seaborn'):
+        sns.set_palette("flare")
+        sns.set_theme(color_codes=True)
+        #df[df.Channel==chan]
+        g = sns.FacetGrid(df, col='Condition', hue='Condition',
+                          subplot_kws=dict(projection='polar'), height=4.5,
+                          sharex=True, sharey=True, despine=False, ylim=[0, 0.75])
+        g.map_dataframe(sns.histplot, f'PhaseAtSigmaPeak', 
+                        stat='density', bins=bins)
+        for ax, con in zip(range(len(g.axes[0])), df.Condition.unique()):
+            rv = pg.circ_r(df[df.Condition==con][f'PhaseAtSigmaPeak'])
+            phi = pg.circ_mean(df[df.Condition==con][f'PhaseAtSigmaPeak'])
+            circ_std = scipy.stats.circstd(df[df.Condition==con][f'PhaseAtSigmaPeak'], nan_policy='omit')
+            z, pval = pg.circ_rayleigh(df[df.Condition==con][f'PhaseAtSigmaPeak'])
+            g.axes[0, ax].arrow(0, 0, phi, rv, **kwargs_arrow)       
+            plt.tight_layout()
+            print(f'The circular mean for {con.upper()} is {phi.round(4)} with a stand deviation of {circ_std.round(4)}, and a resultant vector length of : {rv.round(4)}')
+            print(f'The Rayleigh Z-statistic for non-uniformity of circular data for {con.upper()} : {z.round(4)} with a p-value : {pval.round(4)}')
+        plt.show()
+            
 def group_so_sp_analysis():
     log_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(log_path) for i in files])
-    fig_path = []
+    fig_path = '/media/administrator/data/Study_1_data/Figures/Group_half_night/'
     df_sync, sws, sp = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     for i, files in enumerate(tqdm(maindir)):
         if 'half_co_mask_' in files:
@@ -849,28 +1180,43 @@ def group_so_sp_analysis():
             sws = pd.concat([sws,pd.read_csv(files, index_col=0)])
         elif 'half_sp_' in files:
             sp = pd.concat([sp,pd.read_csv(files, index_col=0)])
-          
+            
+    ## SW/Spindle density analysis
+    sws_density = df_sw_sp_density(sws, spindle=False)
+    sws_density['Density'] = sws_density['Density'].astype(float)
+    sp_density = df_sw_sp_density(sp, spindle=True)  
+    sp_density['Density'] = sp_density['Density'].astype(float)
+    # save
+    stat_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'
+    sws_density.to_csv(stat_path + 'sws_density.csv')
+    sp_density.to_csv(stat_path + 'sp_density.csv')
+    sws.to_csv(stat_path + 'sws_full.csv')
+    sp.to_csv(stat_path + 'sp_full.csv')
+    df_sync.to_csv(stat_path + 'df_sync_full.csv')
+    
     ## Coincidence matrices for spindles and SOs- Group level
     cm_sp = coincidence_matrix(sp, sf=128, plot=True, 
-                               window='group', standardize=True)
-    plt.savefig(fig_path + 'group_coincidence_matrix_sp_.png')
+                               window='group', standardize=False)
+    plt.suptitle('Spindle Coincidence Matrix', fontsize=16)
+    plt.savefig(fig_path + 'group_coincidence_matrix_sp.png')
     cm_sw = coincidence_matrix(sws, sf=128, plot=True, 
-                               window='group', standardize=True)
-    plt.savefig(fig_path + 'group_coincidence_matrix_sw_.png')
+                               window='group', standardize=False)
+    plt.suptitle('Slow Wave Coincidence Matrix', fontsize=16)
+    plt.savefig(fig_path + 'group_coincidence_matrix_sw.png')
     
     ## Plot ndPAC- Group level
     plt.figure()
-    # for cond in 
-    sws.groupby(['Condition','Subject']).mean()['ndPAC'].sham.plot.kde();
-    plt.savefig(fig_path + files.split('/')[-1] + '_ndPAC_' + epoch_name + '.png')
+    sns.violinplot(data = sws, x='Channel', y='ndPAC', 
+                   hue='Condition', cut=0)
+    plt.savefig(fig_path + '_ndPAC.png')
     print(f'ndPAC means: {sws.groupby("Channel")["ndPAC"].mean()}')
-    pg.plot_circmean(sws['PhaseAtSigmaPeak'])
-    plt.savefig(fig_path + 'group_circular_phase_.png')
-    print('Circular mean: %.3f rad' % pg.circ_mean(sws['PhaseAtSigmaPeak']))
-    print('Vector length: %.3f' % pg.circ_r(sws['PhaseAtSigmaPeak'])) 
+        
+    group_pac_plot(sws, bins=12)
+    plt.savefig(fig_path + 'group_circular_phase.png')
+
 
     ## Plot group co-occurence 
-    plot_co_occurence(sws, mask, df_sync, fig_path, subject, 
+    plot_co_occurence(sws, mask, df_sync, fig_path, 
                       cond, save=True)
     
     ## stats
@@ -897,60 +1243,16 @@ def group_so_sp_analysis():
     md = smf.mixedlm("Absolute_RMSE_difference ~ ndPAC + Condition", data=df_comb, groups=df_comb["Subject"], 
                      missing='drop')
     mdf = md.fit()
-    print(mdf.summary())
- 
-def data_qc():
-    path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/'
-    maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files if 'av.p' in i])
-    maindir = maindir[24:30]
-    for i, files in enumerate(tqdm(maindir)):
-        print(i, files.split('/')[-1])
-        # load data instead of pre-processing data 
-        Data = load_preprocessed_data(files)[0]
-        # take first (adjusted) pinknoise bursts as center point
-        burst_range = Data.pinknoise_times_sync[0:-1]
-        if len(burst_range) != 0:
-            # check condition 
-            cond = subject_cond_parser(files, study_phase = 'sleep')
-            subject = files.split("/")[-1].split('_')[0]
-            # load bad channel info before epoching
-            data_sheet = pd.read_csv('/media/administrator/data/Study_1_data/Data_tracking/epoch_reports.csv')
-            mask = np.logical_and(data_sheet['Subject']==subject, 
-                                  data_sheet['Condition']==cond)
-            bad_items = data_sheet[mask]['Bad Channels'].to_numpy()
-            if len(bad_items) > 0:
-                Data.bad_chans = bad_items[0].split("'")[1::2]
-            else:
-                Data.bad_chans = []
-            
-            ## Data length based
-            # create mne epoch object
-            info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)  
-            info['bads'] = Data.bad_chans        
-            # create epochs with online reference
-            epochs = mne.io.RawArray(Data.data.T/1e6, info)
-            # cut data to length
-            # epochs.crop(tmin=(burst_range[0]/512)-2, tmax=(burst_range[-1]/512)+2)
-            if epochs.times.shape[0]/epochs.info['sfreq']/60 >= 210:
-                epochs.crop(tmin=0, tmax=210*60)
-            epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
-            epochs.interpolate_bads()
-            # mastoid referencing
-            epochs.set_eeg_reference(['M1','M2'])  
-            epochs.resample(128)
-            epochs.plot_psd(0.5, 35)
-            plt.close('all')
-            del epochs, Data
-            
+    print(mdf.summary())          
 
 #%%
-tfr_df, ip_df = tfr_sleep_analysis()
-save_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/'
-pickle.dump(tfr_df, open(save_path + 'TFR.p', "wb"))
-pickle.dump(ip_df,  open(save_path + 'Inst_power.p', "wb"))
+# tfr_df, ip_df = tfr_sleep_analysis()
+# save_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/'
+# pickle.dump(tfr_df, open(save_path + 'TFR.p', "wb"))
+# pickle.dump(ip_df,  open(save_path + 'Inst_power.p', "wb"))
 
-load_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/TFR.p'
-tfr_df = pickle.load(open(load_path, "rb"))
+# load_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/TFR.p'
+# tfr_df = pickle.load(open(load_path, "rb"))
 
 def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
     double_contrast_df = pd.DataFrame(columns=list(tfr_df.columns)[1:])
@@ -1064,7 +1366,7 @@ def plot_tfr_erp(tfr_df):
         
 #%%
 
-def tfr_stats(tfr_df, length=[-3, 3]):   
+def tfr_stats(tfr_df, length=[-3.05, 3.05], pick='eeg'):   
     common_subs = []
     for cond_df in tfr_df.groupby('Condition')['Subject']:
         common_subs.append(list(cond_df[1]))
@@ -1087,13 +1389,13 @@ def tfr_stats(tfr_df, length=[-3, 3]):
             if count == 2 and len(t_stimuli) == 2: # and np.ptp(temp_data) > 30:
                 good_subs.append(sub)
                 common_df = df.loc[df['Subject'].isin(good_subs)]
-                #print(f'Included Subjects: {sub}')
+                # print(f'Included Subjects: {sub}')
             else:
-                #print(f'Excluded Subjects: {sub}')
                 continue
+                #print(f'Excluded Subjects: {sub}')
                 
         inst_stim = common_df.copy()[common_df['Condition']==contrast[0]].reset_index()
-        tfr_stim = list([inst_stim['TFR_avg'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]) 
+        tfr_stim = list([inst_stim['TFR_avg'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]).pick(pick) 
                          for i in range(len(inst_stim))])
         Sxx_stim_ = np.concatenate([np.expand_dims(tfr_stim[i].copy().data, 0)
                                    for i in range(len(tfr_stim))])
@@ -1101,7 +1403,7 @@ def tfr_stats(tfr_df, length=[-3, 3]):
         Sxx_stim = np.moveaxis(Sxx_stim_, 1, 3) 
        
         inst_sham = common_df.copy()[common_df['Condition']==contrast[1]].reset_index()
-        tfr_sham = list([inst_sham['TFR_avg'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]) 
+        tfr_sham = list([inst_sham['TFR_avg'][i].copy().drop_channels(['M1','M2']).crop(tmin=length[0],tmax=length[1]).pick(pick) 
                          for i in range(len(inst_stim))])
         Sxx_sham_ = np.concatenate([np.expand_dims(tfr_sham[i].copy().data, 0)
                                    for i in range(len(tfr_sham))])
@@ -1113,13 +1415,13 @@ def tfr_stats(tfr_df, length=[-3, 3]):
         # contrast 
         contrast_.append(Sxx_stim - Sxx_sham)
         
-    # adjust contrast   
+    # adjust contrast  
     contrast_ = (contrast_[0] - contrast_[1])
     
     # prepare adjacency matrix
     adjacency, ch_names = mne.channels.find_ch_adjacency(df['Evoked'][0].copy().drop_channels(['M1','M2']).info, 
                                                          'eeg')
-    adj4D = mne.stats.combine_adjacency(contrast_.shape[1], contrast_.shape[2],
+    adj4D = mne.stats.combine_adjacency(contrast_.shape[1],contrast_.shape[2],
                                         adjacency)
     
     # compute threshold
@@ -1134,7 +1436,7 @@ def tfr_stats(tfr_df, length=[-3, 3]):
         threshold=thresh,                   # TFCE, starting at 0, in 0.2 steps (in t-values)
         tail=0,                             # two-tailed test (1 or -1 for one-tailed)
         n_jobs=-1,                          # increase value to speed up computations
-        adjacency=adj4D,                    # sparse matrix for channel adjacency as computed above
+        adjacency=None, #adj4D              # sparse matrix for channel adjacency as computed above
         buffer_size=None,
         out_type='mask',                    # returns a mask map instead of indices of sig. points
         seed= 1503
@@ -1143,7 +1445,41 @@ def tfr_stats(tfr_df, length=[-3, 3]):
     # return mask
     mask = cluster_p_values <= 0.05
     
-    return t_obs, clusters, cluster_p_values, h0, mask 
+    # get vars
+    freqs = inst_stim['TFR_avg'][0].freqs
+    times = inst_stim['TFR_avg'][0].copy().crop(length[0], length[1]).times
+    
+    # plot stats
+    if np.mean(mask) == 0:
+        sns.set_theme(style="darkgrid")
+        fig, ax = plt.subplots(1, figsize=(10, 8))
+        CM = ax.pcolormesh(times, freqs, t_obs.mean(-1), 
+                           shading='gouraud', cmap='Spectral_r', rasterized = True, 
+                           antialiased=True, vmin=-4, vmax=4)
+        cbar = plt.colorbar(CM, ax=ax)
+        cbar.set_label('T-Values', rotation=270)
+        ax.set_ylabel('Frequency (Hz)')
+        ax.set_xlabel('Time (s)')
+        plt.tight_layout()
+    
+    # 
+    else:
+        fig, ax = plt.subplots(1, figsize=(10, 8))
+        CM = ax.pcolormesh(times, freqs, t_obs.mean(-1), 
+                           shading='gouraud', cmap='Spectral_r', rasterized = True, 
+                           antialiased=True, vmin=-4, vmax=4, alpha=1)
+        ax.set_ylabel('Frequency (Hz)')
+        ax.set_xlabel('Time (s)')
+        cbar = plt.colorbar(CM, ax=ax)
+        cbar.set_label('T-Values', rotation=270)
+        CM2 = ax.pcolormesh(times, freqs, np.ma.masked_where(clusters[np.argmax(mask)].squeeze(),
+                                                             clusters[np.argmax(mask)].squeeze()),
+                             shading='gouraud', cmap='Spectral_r', rasterized = True,
+                             antialiased=True, vmin=-4, vmax=4, alpha=0.25)
+        plt.tight_layout()
+
+    
+    return t_obs, clusters, cluster_p_values, h0, mask, times, freqs 
 
 def erp_stats(tfr_df, length=[-3, 3]):   
     common_subs = []
@@ -1155,6 +1491,7 @@ def erp_stats(tfr_df, length=[-3, 3]):
     [tfr_df.drop(tfr_df.loc[tfr_df['Subject']==to_del[i]].index,
                  inplace=True) for i in range(len(to_del))]
     contrast_ = [] 
+    gavs = []
     for contrast in zip(['up', 'down'], ['sham', 'sham down']):
         print(contrast)
         df = tfr_df.query(f"Condition == '{contrast[0]}' or Condition == '{contrast[1]}'")
@@ -1185,6 +1522,7 @@ def erp_stats(tfr_df, length=[-3, 3]):
         # gav for plotting
         gav = mne.grand_average(diff_waves).copy().crop(tmin=length[0],
                                                         tmax=length[1])
+        gavs.append(diff_waves)
         
         # calculate contrast for all subjects
         contrast_sub = np.concatenate([np.expand_dims(diff_waves[i].copy().data*1e6, 0) 
@@ -1199,6 +1537,9 @@ def erp_stats(tfr_df, length=[-3, 3]):
         # contrast 
         contrast_.append(contrast_sub)
         
+    # final gav
+    gav_f = mne.grand_average(gavs[0], gavs[1])
+     
     # adjust contrast   
     contrast_ = (contrast_[0] - contrast_[1])
     
@@ -1227,10 +1568,93 @@ def erp_stats(tfr_df, length=[-3, 3]):
     mask = cluster_p_values <= 0.05
     
     # plot
-    gav.plot_image(mask=clusters[np.argmax(mask)].T, 
+    gav_f.plot_image(mask=clusters[np.argmax(mask)].T, 
                    show_names="all", mask_cmap='Blues')
     
     return t_obs, clusters, cluster_p_values, h0, mask 
+
+#%%
+# from pymer4.models import Lmer
+# import pandas as pd
+# import numpy as np
+
+# save_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/'
+# df = pd.read_csv(save_path + 'swa_decay.csv', index_col=0)
+
+# good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', '886MCPKG', 'A4VCLD2I', 
+#              'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 'KEQB5AWM', 
+#              'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 'YIOYSRPX']
+
+# # remove mne objects for stats
+# df2 = df.loc[np.logical_and(df["Channel"] != 'M1', 
+#                             df['Channel'] != 'M2')]
+# df2 = df2.loc[df2['Subject'].isin(good_subs)]
+# idx = list([0,1,2,6])
+# df2 = df2[df2.columns[idx]]
+
+# df2 = df2[df2['Decay'] < 20]
+
+# model = Lmer(f"Decay ~ Condition*Channel + (Condition|Subject)",
+#              data=df2, family='gaussian')
+    
+# # Using dummy-coding; suppress summary output
+# model.fit(factors={"Condition": ["sham", "up", "down"],
+#                    "Channel" : list(df2.Channel.unique())}, 
+#           ordered=True, summarize=True)
+
+# # Get ANOVA table, but this time force orthogonality for valid SS III inferences
+# # In this case the data are balanced so nothing changes
+# print(model.anova(force_orthogonal=True))
+
+# ## Post-hoc tests 
+# marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
+#                                                  marginal_vars='Condition',
+#                                                  grouping_vars=None)
+
+# print(marginal_estimates);
+# print(comparisons);
+
+
+# #%%
+# load_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/TFR.p'
+# tfr_df = pickle.load(open(load_path, "rb"))
+# info = tfr_df['Evoked'][0].copy().pick('eeg').drop_channels(['M1','M2']).info
+# def plot_sw_decay(df2):
+#     sns.set_theme(style="darkgrid")
+#     fig, axes = plt.subplots(1, 3, figsize=(20, 20))
+#     for idx, cond in  enumerate(np.unique(df2.reset_index().Condition)):
+#         # Create a topomap for the current oscillation band
+#         decay = df2[df2.Condition == cond].groupby(['Channel']).mean()['Decay']
+#         im, cn = mne.viz.plot_topomap(decay, info, cmap='Spectral_r', contours=1, axes=axes[idx], 
+#                                       show=False, names=df2.Channel.unique(), show_names=True,
+#                                       vmin=np.percentile(df2['Decay'], 5), vmax=np.percentile(df2['Decay'], 95))
+#         # add color bar
+#         mne.viz.topomap._add_colorbar(axes[idx], im, cmap = 'Spectral_r', side='right', pad=0.05, 
+#                                       title=None, format=None, size='5%')
+#         # Set the plot title
+#         axes[idx].set_title(f'SWA Dissipation - {cond.capitalize()} Condition')
+
+#         # tighten layout
+#         plt.tight_layout()
+
+# plot_sw_decay(df2)
+
+# #%%
+
+# contrast = np.ones([len(df2.Subject.unique()), 
+#                     len(df2.Condition.unique()), 
+#                     len(df2.Channel.unique())])*(np.nan)
+# for i, cond in enumerate(df2.Condition.unique()):
+#     print(cond)
+#     decay = df2[df2.Condition == cond].reset_index()
+#     for j, sub in enumerate(decay.Subject.unique()):
+#         print(sub)
+#         decay_ = decay[decay.Subject == sub].reset_index()
+#         for k, ch in enumerate(info.ch_names):
+#             #print(ch)
+#             decay__ = decay_[decay_.Channel==ch]
+#             contrast[j, i, k] = decay__.Decay.to_numpy()[0]
+                 
 
 #%%
 ## Run things here dumb dumb

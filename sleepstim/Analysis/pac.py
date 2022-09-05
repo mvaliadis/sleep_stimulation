@@ -72,8 +72,8 @@ def extract_pha_amp(data_narrow, data_broad, sf, method = 'hilbert'):
     return sw_pha, sp_amp  
 
 ## Create ERPAC plot
-def ERPAC(data, f_pha=[0.5, 4], f_amp=(4, 30, .25, .25), n_perm=None, smooth=200, 
-          method = 'gc', edges=0.5, stationarity_t=False, plot=True, save_path=None):
+def ERPAC(data, f_pha=[0.5, 4], f_amp=(5, 25, .25, .25), n_perm=None, smooth=100, 
+          method = 'gc', edges=1.0, stationarity_t=False, plot=True, save_path=None):
     rp_obj = EventRelatedPac(f_pha=f_pha, f_amp=f_amp)
     edges=int(edges*data.info['sfreq'])
     if stationarity_t:

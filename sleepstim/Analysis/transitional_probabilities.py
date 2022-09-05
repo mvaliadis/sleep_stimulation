@@ -29,7 +29,7 @@ def transition_matrix(transitions):
         logging.warning(f'One of the datasets contains only {states} sleep stages')
     
     # extract instances of each state
-    for (i,j) in zip(transitions,transitions[1:]):
+    for (i,j) in zip(transitions.astype(int), transitions[1:].astype(int)):
         trans_matrix[i][j] += 1
         
     return trans_matrix
@@ -41,7 +41,7 @@ def transition_matrix_prob(trans_matrix):
 
     return np.round(np.array(probs).astype(float), 4) 
  
-def transition_matrix_plot(probs):
+def transition_matrix_plot(probs, save=False, path=None):
     grid_kws = {"height_ratios": (.9, .05), "hspace": .1}
     f, (ax, cbar_ax) = plt.subplots(2, gridspec_kw=grid_kws, figsize=(5, 5))
     sns.heatmap(probs, ax=ax, square=False, vmin=0, vmax=1, cbar=True,
@@ -52,17 +52,18 @@ def transition_matrix_plot(probs):
     ax.xaxis.tick_top()
     ax.set_ylabel("From sleep stage")
     ax.xaxis.set_label_position('top')
-    # plt.savefig('transition.png', dpi=100, bbox_inches='tight')
+    if save:
+        plt.savefig(path + '_transition.png', dpi=100, bbox_inches='tight')
 
 
 #%%
 ## Apply over all training sets and plot sum of probabilities       
-hypno_trans = []
-for j in np.unique(z_train):
-    hypno_test = [int(i) for i in list(y_train[np.where(z_train==j)])]
-    hypno_trans.append(transition_matrix(hypno_test))
-all_hypno_trans = sum(np.array(hypno_trans))
-probs = transition_matrix_prob(all_hypno_trans)
-for row in probs: print(' '.join('{0:.2f}'.format(x) for x in row))
-transition_matrix_plot(probs)
+# hypno_trans = []
+# for j in np.unique(z_train):
+#     hypno_test = [int(i) for i in list(y_train[np.where(z_train==j)])]
+#     hypno_trans.append(transition_matrix(hypno_test))
+# all_hypno_trans = sum(np.array(hypno_trans))
+# probs = transition_matrix_prob(all_hypno_trans)
+# for row in probs: print(' '.join('{0:.2f}'.format(x) for x in row))
+# transition_matrix_plot(probs)
 

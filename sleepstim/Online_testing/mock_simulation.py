@@ -16,11 +16,10 @@ import time
 import seaborn as sns 
 import yasa
 import mne
-import heartpy as hp
 sns.set(style='darkgrid', font_scale=1.2)
 
 # parse data
-stream_dict = load_xdf('/media/administrator/data/Study_1_data/Raw_data/Experimental/475MQ9BL_1/sleepstim_R001.xdf') 
+stream_dict = load_xdf('/media/administrator/data/Study_1_data/Raw_data/Experimental/EQDORXF6_2/sleepstim_R001.xdf') 
 
 # extract C3 data  
 data = stream_dict['eego']['time_series']
@@ -40,11 +39,15 @@ C3_og = data[:,ch_names.index('C3')]*1e6
 del stream_dict, data, ch_names, ch_types
   
 # filter data for later
-C3 = C3_og[pinknoise_times_sync[0]::]
-new_times = times[pinknoise_times_sync[0]::]
+C3 = C3_og#[pinknoise_times_sync[0]::]
+new_times = times#[pinknoise_times_sync[0]::]
 C3_filt = filter_data(C3.astype('float64'), sfreq=sf, l_freq=.3, h_freq=4.0, method='fir')
 C3_filt_notch = notch_filter(C3_filt, Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50), 
                              mt_bandwidth=2, p_value=0.01, filter_length='10s')
+
+C3_filt_broad = filter_data(C3.astype('float64'), sfreq=sf, l_freq=.3, h_freq=35, method='fir')
+C3_filt_notch_broad = notch_filter(C3_filt_broad, Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*2+1,50), 
+                                   mt_bandwidth=2, p_value=0.01, filter_length='10s')
 
 #%%
 ## Imitate sliding-window procedure of original experiment
@@ -79,12 +82,12 @@ while ix < len(C3):
     if crit < minamp and (new_times[ix] - time_reconstruct[-1] > 4): 
         time_reconstruct.append(new_times[ix])
         crit_reconstruct.append(crit)
-        ts_up = new_times[ix] + .610
+        ts_up = new_times[ix] + .475
         time_reconstruct_up.append(ts_up)
         crit_reconstruct_up.append(d[int(ts_up)])
     ix += 4
     
-    if len(crit_reconstruct) > 10:
+    if len(crit_reconstruct) > 250:
         break
 
 #%%
@@ -96,21 +99,30 @@ plt.plot(time_reconstruct_up[1::], crit_reconstruct_up[1::], 'xg')
 
 #%%
 ## Epoch plotting with MNE
+# down
+reject_criteria = dict(eeg=550e-6)
 ts_pinknoise_times_sync = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct]
 ts_pinknoise_times_sync_up = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct_up]
 
-center_crit, _ = yasa.get_centered_indices(C3_filt_notch, np.asarray(ts_pinknoise_times_sync[1::]), 
-                                      npts_before = sf*3, npts_after = sf*3)
+center_crit, _ = yasa.get_centered_indices(C3_filt_notch_broad, np.asarray(ts_pinknoise_times_sync[1::]), 
+                                           npts_before = sf*4, npts_after = sf*4)
 info = mne.create_info(ch_names=1, sfreq=sf, ch_types='eeg')
-epochs_crit = mne.EpochsArray(np.expand_dims(C3_filt_notch[center_crit], 1)/1e6, info, tmin = -3, 
-                         baseline=(None), proj=False)
+epochs_crit = mne.EpochsArray(np.expand_dims(C3_filt_notch_broad[center_crit], 1)/1e6, info, tmin = -4, 
+                              baseline=(-4, -1.5), proj=False)
+art_idx = art_detect(epochs_crit)
+epochs_crit.drop(art_idx)
+epochs_crit.drop_bad(reject = reject_criteria) 
 # epochs_crit.average(method='mean').plot()
 epochs_crit.plot_image()
 
-center_up, _ = yasa.get_centered_indices(C3_filt_notch, np.asarray(ts_pinknoise_times_sync_up[1::]), 
-                                         npts_before = sf*3, npts_after = sf*3)
+# up
+center_up, _ = yasa.get_centered_indices(C3_filt_notch_broad, np.asarray(ts_pinknoise_times_sync_up[1::]), 
+                                         npts_before = sf*4, npts_after = sf*4)
 info = mne.create_info(ch_names=1, sfreq=sf, ch_types='eeg')
-epochs_up = mne.EpochsArray(np.expand_dims(C3_filt_notch[center_up], 1)/1e6, info, tmin = -3, 
-                         baseline=(None), proj=False)
+epochs_up = mne.EpochsArray(np.expand_dims(C3_filt_notch_broad[center_up], 1)/1e6, info, tmin = -4, 
+                            baseline=(-4, -1.5), proj=False)
+art_idx = art_detect(epochs_up)
+epochs_up.drop(art_idx)
+epochs_up.drop_bad(reject = reject_criteria) 
 # epochs_up.average(method='mean').plot()
-epochs_up.plot_image()
+epochs_up.plot_image()               

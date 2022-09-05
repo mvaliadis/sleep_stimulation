@@ -29,24 +29,25 @@ def _coincidence(x, y, scaled=True):
             coincidence /= denom
     return coincidence
         
-def coincidence_matrix(events, sf, plot=True, window='group', standardize=True):       
+def coincidence_matrix(events, sf, plot=True, window='group', standardize=False):       
     # noqa
     if window == 'whole':
         coin_mat = [events[i].get_coincidence_matrix(scaled=True) for i in range(len(events)) if events[i] != None]
         cumulative = [coin_mat[i].to_numpy() for i in range(len(coin_mat))]
         
-    elif window == 'group':
-        coincidences = []
+    elif window == 'group':       
+        cumulative = []
         # remove mastoids
         mask_ch = np.logical_and(events.Channel!='M1', events.Channel!='M2')
         for (sub, cond), sess in events[mask_ch].groupby(['Subject','Condition']):
             mask = get_mask(sess, sf=sf) 
-            coincidences.append(mask)
-        mean_coincidence = np.mean(coincidences, 0)
-        mask_ = pd.DataFrame(mean_coincidence.T, 
-                             columns=events[mask_ch].Channel.unique()) 
-        mask_.columns.name = "Channel" 
-        cumulative = mask_.corr(method=_coincidence)
+            mask_ = pd.DataFrame(mask.T, 
+                                 columns=events[mask_ch].Channel.unique()) 
+            mask_.columns.name = "Channel" 
+            coincidences = mask_.corr(method=_coincidence)
+            cumulative.append(coincidences)
+        cumulative = np.nanmean(np.asarray([cumulative[i].to_numpy() 
+                                 for i in range(len(cumulative))]), 0)
     
     # noqa
     elif window == 'post_stim':

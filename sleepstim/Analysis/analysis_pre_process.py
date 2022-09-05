@@ -634,9 +634,14 @@ def check_match_data_hypno_elements(data_path, hypno_path):
         raise TypeError('No subject entries align! Please check whether the paths have any corresponding data and hypnogram files')
  
 #%%
-def art_detect(epochs):     
+def art_detect(epochs, raw=False): 
+    if raw:
+        _, epochs = yasa.sliding_window(epochs.get_data('eeg')*1e6, window=2, 
+                                       sf = epochs.info['sfreq'])
+    else:
+        epochs = epochs.get_data('eeg')*1e6
     # Calculate the covariance matrices
-    covmats = Covariances().fit_transform(epochs.get_data('eeg')*1e6)
+    covmats = Covariances().fit_transform(epochs)
     # Shrink the covariance matrix (ensure positive semi-definite)
     covmats = Shrinkage().fit_transform(covmats)
     # Define Potato instance: 0 = clean, 1 = art
