@@ -69,6 +69,7 @@ def slalom_results(path, plot=False):
                 "RMSE_Post": error_post_rms,
                 #"Amplitude envelope RMSE (Pre)": amplitude_envelope_pre_rms,
                 #"Amplitude envelope RMSE (Post)": amplitude_envelope_post_rms,
+                "RMSE_difference_ratio": ((error_post_rms - error_pre_rms)/error_pre_rms*100),
                 "RMSE_difference": error_post_rms - error_pre_rms,
                 #"Amplitude envelope RMSE difference": amplitude_envelope_post_rms - amplitude_envelope_pre_rms,
                 "Subject": pre_f.split('/')[-1].split('_')[0][-8::],

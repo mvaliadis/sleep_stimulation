@@ -174,7 +174,12 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
     ecg_score_plot.savefig(fig_path + subj_cond + '_ecg_component_score.png')
     
     # Automated component detection assistance 
-    ica.detect_artifacts(raw)
+    from mne_icalabel import label_components
+    ic_labels = label_components(raw, ica, method="iclabel")
+    labels = ic_labels["labels"]
+    exclude_idx = [idx for idx, label in enumerate(labels) if label not in ["brain", "other"]]
+    print(f"Excluding these ICA components: {exclude_idx}")
+    #ica.detect_artifacts(raw) -> now deprecated in mne 
      
     # Plot sources separated by ICA
     ic_source_plot = ica.plot_sources(raw, show_scrollbars=True, title='EEG sources estimated by ICA')
@@ -185,7 +190,7 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
     ic_comp_plot[0].savefig(fig_path + subj_cond + '_ic_topo_plot.png')
     
     # components to exclude 
-    ica.exclude = ica.exclude + ecg_idx
+    ica.exclude = exclude_idx + ecg_idx
      
     # save ICA object
     ica.save(ica_path + subj_cond + '_ica_obj.fif')

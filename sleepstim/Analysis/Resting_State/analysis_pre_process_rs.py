@@ -55,6 +55,18 @@ def resting_state_power_analysis(path):
     pre_files, post_files = check_match_prepost_data_elements(path, files=None, dtype='rs')
     psd_results = defaultdict(lambda: [])
     # topo_results = defaultdict(lambda: [])
+    bp_pre_open = pd.DataFrame(columns=['Chan', 'Delta', 'Theta', 'Alpha', 'Beta', 
+                                       'Gamma', 'TotalAbsPow','FreqRes', 'Relative',
+                                       'Session', 'Eyes'])
+    bp_pre_close = pd.DataFrame(columns=['Chan', 'Delta', 'Theta', 'Alpha', 'Beta', 
+                                       'Gamma', 'TotalAbsPow','FreqRes', 'Relative',
+                                       'Session', 'Eyes'])
+    bp_post_open = pd.DataFrame(columns=['Chan', 'Delta', 'Theta', 'Alpha', 'Beta', 
+                                    'Gamma', 'TotalAbsPow','FreqRes', 'Relative',
+                                    'Session', 'Eyes'])
+    bp_post_close = pd.DataFrame(columns=['Chan', 'Delta', 'Theta', 'Alpha', 'Beta', 
+                                    'Gamma', 'TotalAbsPow','FreqRes', 'Relative',
+                                    'Session', 'Eyes'])
     for j, (pre_f, post_f) in tqdm(enumerate(zip(pre_files, post_files))):
         if pre_f.split('/')[-1].split('_')[0:2] == post_f.split('/')[-1].split('_')[0:2]:
             print(j, pre_f.split('/')[-1], post_f.split('/')[-1])
@@ -70,10 +82,16 @@ def resting_state_power_analysis(path):
             # load pre/post
             Data_pre = load_preprocessed_data(pre_f)
             Data_post = load_preprocessed_data(post_f)
+            # eyes open epochs
             epochs_eyes_open_pre = mne.EpochsArray(Data_pre.data_eyes_open/1e3, Data_pre.mne_info, 
                                                    tmin = 0, baseline=(None), verbose=0) 
-            epochs_eyes_open_pre.save('/media/administrator/data/Study_1_data/ex_epo.fif', overwrite=True)
+            #epochs_eyes_open_pre.save('/media/administrator/data/Study_1_data/ex_epo.fif', overwrite=True)
             epochs_eyes_open_post = mne.EpochsArray(Data_post.data_eyes_open/1e3, Data_post.mne_info, 
+                                                    tmin = 0, baseline=(None), verbose=0) 
+            # eyes closed epochs
+            epochs_eyes_close_pre = mne.EpochsArray(Data_pre.data_eyes_close/1e3, Data_pre.mne_info, 
+                                                    tmin = 0, baseline=(None), verbose=0) 
+            epochs_eyes_close_post = mne.EpochsArray(Data_post.data_eyes_close/1e3, Data_post.mne_info, 
                                                     tmin = 0, baseline=(None), verbose=0) 
 
             # from sleepstim.Analysis.foof import periodic_fit, channel_epoch_psd, oscillatory_plot_psd_map
@@ -83,24 +101,52 @@ def resting_state_power_analysis(path):
             # pre_psd = channel_epoch_psd(epochs_eyes_open_pre, foi=(1, 40), tmin=0, tmax=2,
             #                             session='prepost')
             
-            
             from mne.time_frequency import psd_multitaper
             bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),(8, 13, 'Alpha'), 
                    (13, 30, 'Beta'), (30, 40, 'Gamma')]
-            # bp_ = pd.DataFrame(columns=['Subject', 'Night', 'Condition', 'Session', 
-            #                             'Chan', 'Delta', 'Theta', 'Alpha', 'Beta', 
-            #                             'Gamma', 'TotalAbsPow', 'FreqRes', 'Relative'])
-            for idx, (session, sess_name) in enumerate(zip([epochs_eyes_open_pre, epochs_eyes_open_post],['pre','post'])):
-                spectra, freqs = psd_multitaper(session, fmin=1, fmax=40,
-                                                tmin=0, tmax=2)
-                if sess_name == 'pre':
-                    bp_pre = yasa.bandpower_from_psd(spectra.mean(0), freqs, ch_names = session.ch_names[0:64],
-                                                     bands=bands, relative=True)
-                elif sess_name == 'post':
-                    bp_post = yasa.bandpower_from_psd(spectra.mean(0), freqs, ch_names = session.ch_names[0:64],
-                                                      bands=bands, relative=True)
-                                        
-                    
+            # Create dataframe 
+            for idx, (post, pre, eyes) in enumerate(zip([epochs_eyes_open_post, epochs_eyes_close_post],
+                                                        [epochs_eyes_open_pre, epochs_eyes_close_pre],
+                                                        ['Open','Close'])):
+                print(idx, pre, post, eyes)
+                spectra_post, freqs_post = psd_multitaper(post, fmin=1, fmax=40,
+                                                          tmin=0, tmax=2)
+                bp_post = yasa.bandpower_from_psd(spectra_post.mean(0), freqs_post, 
+                                                  ch_names = post.ch_names[0:64],
+                                                  bands=bands, relative=True)
+                spectra_pre, freqs_pre = psd_multitaper(pre, fmin=1, fmax=40,
+                                                        tmin=0, tmax=2)
+                bp_pre = yasa.bandpower_from_psd(spectra_pre.mean(0), freqs_pre, 
+                                                 ch_names = post.ch_names[0:64],
+                                                 bands=bands, relative=True)
+                
+                psd_results["Subject"].extend([subjname.split(' ')[0]]*len(bp_pre))
+                psd_results["Night"].extend([night]*len(bp_pre))
+                psd_results["Condition"].extend([cond]*len(bp_pre))
+                psd_results["Channel"].extend(bp_pre.Chan)
+                psd_results["Session"].extend([eyes]*len(bp_pre))
+                psd_results["Delta"].extend(bp_post.Delta.to_numpy() - 
+                                            bp_pre.Delta.to_numpy())
+                psd_results["Delta_log"].extend(np.log10(bp_post.Delta.to_numpy()) -
+                                                np.log10(bp_pre.Delta.to_numpy()))
+                psd_results["Theta"].extend(bp_post.Theta.to_numpy() - 
+                                            bp_pre.Theta.to_numpy())
+                psd_results["Theta_log"].extend(np.log10(bp_post.Theta.to_numpy()) -
+                                                np.log10(bp_pre.Theta.to_numpy()))
+                psd_results["Alpha"].extend(bp_post.Alpha.to_numpy() - 
+                                            bp_pre.Alpha.to_numpy())
+                psd_results["Alpha_log"].extend(np.log10(bp_post.Alpha.to_numpy()) -
+                                                np.log10(bp_pre.Alpha.to_numpy()))
+                psd_results["Beta"].extend(bp_post.Beta.to_numpy() - 
+                                           bp_pre.Beta.to_numpy())
+                psd_results["Beta_log"].extend(np.log10(bp_post.Beta.to_numpy()) -
+                                               np.log10(bp_pre.Beta.to_numpy()))
+                psd_results["Gamma"].extend(bp_post.Gamma.to_numpy() - 
+                                            bp_pre.Gamma.to_numpy())
+                psd_results["Gamma_log"].extend(np.log10(bp_post.Gamma.to_numpy()) -
+                                                np.log10(bp_pre.Gamma.to_numpy()))
+
+            
                 # if j == 0 and idx == 0:
                 #     bp = yasa.bandpower_from_psd(spectra.mean(0), freqs, ch_names = session.ch_names[0:64],
                 #                                  bands=bands, relative=True)
@@ -131,18 +177,7 @@ def resting_state_power_analysis(path):
             # # plot_spectrum(pre_freqs, post_peak_fit - pre_peak_fit, color='green', label='Final Periodic Fit - Difference')
             # # plt.close('all')
             
-            # Create dataframe with post - pre differences 
-            psd_results["Subject"].extend([subjname.split(' ')[0]]*len(bp_post))
-            psd_results["Night"].extend([night]*len(bp_post))
-            psd_results["Condition"].extend([cond]*len(bp_post))
-            psd_results["Channel"].extend(bp_post.Chan)
-            psd_results["Delta"].extend(bp_post['Delta'] - bp_pre['Delta'])
-            psd_results["Theta"].extend(bp_post['Theta'] - bp_pre['Theta'])
-            psd_results["Alpha"].extend(bp_post['Alpha'] - bp_pre['Alpha'])
-            psd_results["Beta"].extend(bp_post['Beta'] - bp_pre['Beta'])
-            psd_results["Gamma"].extend(bp_post['Gamma'] - bp_pre['Gamma'])
-            
-            ###
+            # ###
             # post_psd_df = pd.DataFrame(post_psd, 
             #                            columns=['Epochs','Bands','Chans','PSD']).groupby(['Bands','Chans']).mean()['PSD']
             # pre_psd_df = pd.DataFrame(pre_psd, 
@@ -161,7 +196,7 @@ def resting_state_power_analysis(path):
     return psd_results
 
 def remove_subs(df):    
-    for i in zip(['9PJZ8Z8F','475MQ9BL', '5LNKD1MG', 'CWESJCNJ']):
+    for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ']):
         df.drop(df.loc[df['Subject']==i[0]].index, inplace=True)
         
 #%%
@@ -173,7 +208,7 @@ if run == 'yes':
     #df_psd = remove_subs(df_psd)
     df_psd.to_csv(save_path + 'rs_results_psd.csv')
 else:
-    df_psd = pd.read_csv(save_path + 'rs_results_psd.csv', index_col=0)
+    df_psd2 = pd.read_csv(save_path + 'rs_results_psd.csv', index_col=0)
 
 #%%
 

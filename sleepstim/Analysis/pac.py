@@ -15,6 +15,7 @@ import yasa
 from scipy.fftpack import next_fast_len
 import emd 
 import tensorpac.methods as tpm
+import scipy.signal as signal
 
 #%%
 ## Test stationarity - Augmented Dickey-Fuller test (unit root test)
@@ -57,6 +58,10 @@ def extract_pha_amp(data_narrow, data_broad, sf, method = 'hilbert'):
         # Now extract the instantaneous phase/amplitude using Hilbert transform
         sw_pha = np.angle(signal.hilbert(data_narrow, N=nfast)[:n_samples])
         sp_amp = np.abs(signal.hilbert(data_sp, N=nfast)[:n_samples])
+    elif method == 'neurodsp':
+        from neurodsp.timefrequency import amp_by_time, freq_by_time, phase_by_time
+        sw_pha = phase_by_time(data_narrow, sf, freqs=(0.5, 2))
+        sp_amp = amp_by_time(data_sp, sf, freqs=(12,16))
     elif method == 'emd':
         import emd           
         ## get sw phase    
@@ -67,7 +72,7 @@ def extract_pha_amp(data_narrow, data_broad, sf, method = 'hilbert'):
         ## get sp phase
         imf_sp = emd.sift.sift(data_sp, imf_opts={'sd_thresh': 0.1}, max_imfs = 1)[:,0]
         # emd.plotting.plot_imfs(imf_sp, cmap=True, scale_y=True)
-        _, _, sp_amp = emd.spectra.frequency_transform(imf_sw, sf, 'nht')
+        _, _, sp_amp = emd.spectra.frequency_transform(imf_sp, sf, 'nht')
                  
     return sw_pha, sp_amp  
 

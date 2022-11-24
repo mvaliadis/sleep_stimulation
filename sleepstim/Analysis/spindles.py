@@ -286,30 +286,4 @@ def Data_spindle(path, hypno_path, pre_method='Cox', surface_laplacian = True):
 #   Note that in the original paper by Cox and colleagues, a surface Laplacian filter is also applied on the raw data to enhance spatial precision for topographical analyses.
 # =============================================================================
 
-
-
-
-
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
         

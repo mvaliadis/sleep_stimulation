@@ -38,8 +38,6 @@ from meegkit.utils import demean, normcol
 from os import chdir as cd
 from os import listdir
 import os, shutil
-from mne_connectivity import spectral_connectivity_time, spectral_connectivity_epochs
-from autoreject import Ransac
 from sklearn.ensemble import IsolationForest
 from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
                                   downsample_scaled, load_xdf, channel_parser, thresholdcrossings, 
@@ -96,6 +94,7 @@ class Data_Struct:
         
         ## RANSAC
         elif method == 'RANSAC':
+            from autoreject import Ransac
             _, epoched_data = yasa.sliding_window(self.data.T, sf=self.sfreq, window=2)
             info = mne.create_info(ch_names=self.chans, sfreq=self.sfreq, ch_types=self.chtypes)
             epochs = mne.EpochsArray(epoched_data/1e6, info, tmin = 0, baseline=(None), verbose=0) 
@@ -679,6 +678,7 @@ def label_artifacts(path, hypno_path, save=True):
         
             picks = mne.pick_types(epochs.info, eeg=True, stim=False, eog=False,
                                     include=[], exclude=[])
+            from autoreject import Ransac
             ransac = Ransac(verbose='progressbar', picks=picks, n_jobs=-1)
             ransac.fit_transform(epochs)
             logging.warning(f'The RANSAC algorithm detected the following as bad channels: {ransac.bad_chs_}!')

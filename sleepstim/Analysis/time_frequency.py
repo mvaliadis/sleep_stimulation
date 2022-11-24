@@ -17,7 +17,7 @@ import scipy.stats as stats
 
 #%%
 
-def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavelet', baseline=[-4,4], 
+def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavelet', baseline=(-4,4), 
                  mode='zscore', chan = 'C3', itc_calculation = 'tensorpac', length=[-3,3], 
                  plot=True, cmap = cm.Spectral_r, save_path=None, inst_power=False, band=None):            
 
@@ -59,7 +59,10 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
     if chan == 'CM_area':
         chan = ['F3','C3','Cz','T7','P3']
     elif chan == 'all':
-        chan = Data.pick('eeg').ch_names
+        try:
+            chan = Data[0].pick('eeg').ch_names
+        except:
+            chan = Data.pick('eeg').ch_names
     else:
         chan = chan
     
@@ -68,13 +71,19 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
     n_cyc = freqs
     
     # compute tfr via wavelet method - multitaper noqa
-    if method == 'wavelet':      
-        Sxx = mne.time_frequency.tfr_morlet(Data, freqs, n_cycles=n_cyc, picks = chan,
+    if method == 'wavelet':    
+        try:
+            Sxx = mne.time_frequency.tfr_morlet(Data[0], freqs, n_cycles=n_cyc, picks = chan,
+                                            zero_mean=True, use_fft=True, decim=5, 
+                                            output='power', n_jobs=16, verbose=None,
+                                            average=False, return_itc=False)
+        except:
+            Sxx = mne.time_frequency.tfr_morlet(Data, freqs, n_cycles=n_cyc, picks = chan,
                                             zero_mean=True, use_fft=True, decim=5, 
                                             output='power', n_jobs=16, verbose=None,
                                             average=False, return_itc=False)
     elif method == 'multitaper':
-        Sxx = mne.time_frequency.tfr_multitaper(Data, freqs, n_cycles=n_cyc, use_fft=True,
+        Sxx = mne.time_frequency.tfr_multitaper(Data[0], freqs, n_cycles=n_cyc, use_fft=True,
                                                 decim=5, picks = chan, return_itc=False,
                                                 n_jobs=16, verbose=None, average = False)
     else:
@@ -100,7 +109,7 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
             vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
             norm = Normalize(vmin=vmin, vmax=vmax)
             CM = axs[0].pcolormesh(times, freqs, Sxx_, shading='gouraud', 
-                                   cmap=cmap, rasterized = True, norm = norm, 
+                                   cmap=cmap, rasterized = True, 
                                    antialiased=True, vmin=vmin, vmax=vmax)
             axs[0].set_ylabel('Frequency (Hz)')
             # cbar = plt.colorbar(CM, ax=axs[0])
@@ -131,7 +140,7 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
             norm = Normalize(vmin=vmin, vmax=vmax)
             CM = ax.pcolormesh(times, freqs, Sxx_, 
                                shading='gouraud', cmap=cmap, rasterized = True, 
-                               norm = norm, antialiased=True, vmin=vmin, vmax=vmax)
+                               antialiased=True, vmin=vmin, vmax=vmax)
             ax.set_ylabel('Frequency (Hz)')
             ax.set_xlabel('Time (s)')
             cbar = plt.colorbar(CM, ax=ax)

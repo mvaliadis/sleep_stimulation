@@ -112,7 +112,7 @@ plt.plot(times, data)
 plt.vlines(sp_loc/sf, ymin=min(data), ymax=max(data))
 
 #%%
-## EMD --> too sleow
+## EMD --> too slow
 # Compute EMD
 imf = emd.sift.sift(data, max_imfs=5)
 

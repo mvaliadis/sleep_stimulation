@@ -288,6 +288,7 @@ def SO_spindle_analysis(epoch, reference, subject, condition, fig_path):
         coupling_summaries = []
         for i in range(len(sws)):
             if sws[i] != None:
+                #print(i)
                 coupling_summaries.append(SO_spindle_coupling(sws[i], data_broad = epoch.get_data(picks='eeg')*1e6, 
                                                               idx=i, sf=128, target='stim_onset'))
         
@@ -364,7 +365,10 @@ def auditory_stim_epochs(epoch_time = (-4, 4)):
             df = pd.read_csv(log_path, usecols = ['Subject', 'Condition', 'Stimuli', 'First bursts', 
                                                   'Bad Channels', 'Epochs included']) 
         # load data instead of pre-processing data 
-        Data = load_preprocessed_data(files)[0]
+        try:
+            Data = load_preprocessed_data(files)[0]
+        except:
+            Data = load_preprocessed_data(files)
         # Data = _pre_process_sleep_data(files, low_density=True, reference=None, validation='auditory', stageing=False)
         
         # take first (adjusted) pinknoise bursts as center point
@@ -507,9 +511,9 @@ def sw_spindle_detection_stim_auditory(save=True):
     
     if save:
         stat_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'
-        sw_df.to_csv(stat_path + 'sw_summary.csv')
-        sp_df.to_csv(stat_path + 'sp_summary.csv')
-        couple_df.to_csv(stat_path + 'coupling_summary.csv')
+        sw_df.to_csv(stat_path + 'stim_sw_summary.csv')
+        sp_df.to_csv(stat_path + 'stim_sp_summary.csv')
+        couple_df.to_csv(stat_path + 'stim_coupling_summary.csv')
     else:
         return sw_df, sp_df, couple_df
       
@@ -969,11 +973,18 @@ def auditory_phase_analysis(plot=True, save=True):
             cond = file.split("/")[-1].split("_")[1]
         if '_mast_' not in file:
             # load data 
+            print(file)
             epoch = mne.read_epochs(file, preload=True).apply_baseline((-4, -1.5)).resample(128)
             # extract phase & such
             sw_pha, _, _ = imf_analytical_transform(epoch) 
+            from neurodsp.timefrequency import amp_by_time, freq_by_time, phase_by_time
+            C3_lp = epoch.copy().filter(l_freq=None, h_freq=2.0).get_data(picks='C3').squeeze()*1e6
+            sw_pha2 = [phase_by_time(C3_lp[i,:].squeeze(), epoch.info['sfreq'],
+                                     (0.5, 2)) for i in range(min(C3_lp.shape))]
+            sw_pha2 = np.asarray(sw_pha2) + (np.pi/2)
             epo_len = len(epoch.times)
             pn_phase = [sw_pha[i][int(epo_len/2)] for i in range(len(sw_pha))]
+            pn_phase2 = [sw_pha2[i][int(epo_len/2)] for i in range(len(sw_pha2))]
             # binned phases
             crossings = sw_phase_binning(epoch)
             if plot:
@@ -981,7 +992,13 @@ def auditory_phase_analysis(plot=True, save=True):
                 ax = plt.subplot(111, projection='polar')
                 ax.hist(pn_phase, density=True)
                 ax.set_title(f'Phase targeting accuracy (Analytical): {subject} {cond}', va='bottom')
-                plt.savefig(f'{fig_path}{subject}_{cond}_phase_targeting.png')
+                plt.savefig(f'{fig_path}{subject}_{cond}_phase_targeting_nht.png')
+                plt.close('all')
+                
+                ax = plt.subplot(111, projection='polar')
+                ax.hist(pn_phase2, density=True)
+                ax.set_title(f'Phase targeting accuracy (Analytical - Hilbert): {subject} {cond}', va='bottom')
+                plt.savefig(f'{fig_path}{subject}_{cond}_phase_targeting_hb.png')
                 plt.close('all')
             
                 ## polar plot for phase targets 
@@ -997,6 +1014,7 @@ def auditory_phase_analysis(plot=True, save=True):
             results['Subject'].extend([subject]*len(pn_phase))
             results['Condition'].extend([cond]*len(pn_phase))
             results['Target Phase (Analytical)'].extend(np.asarray(pn_phase))
+            results['Target Phase (Analytical - Hilbert)'].extend(np.asarray(pn_phase2))
             
             results_bin['Subject'].extend([subject]*len(crossings))
             results_bin['Condition'].extend([cond]*len(crossings))
@@ -1131,7 +1149,7 @@ def tfr_sleep_analysis(picks='eeg'):
          
             # TF analysis 
             _, Sxx = tfr_analysis(Data=epoch, l_freq=5, h_freq=25, steps=0.25, 
-                                  method = 'wavelet', baseline=[-3, 3], chan = 'all', 
+                                  method = 'wavelet', baseline=(-3, 3), chan = 'all', 
                                   itc_calculation=None, plot=True, length=[-3,3], 
                                   cmap = 'Spectral_r', save_path=fig_path + subject + '_' + cond,
                                   inst_power=True)
@@ -1167,7 +1185,19 @@ def group_pac_plot(df, chan='C3', bins=12):
             print(f'The circular mean for {con.upper()} is {phi.round(4)} with a stand deviation of {circ_std.round(4)}, and a resultant vector length of : {rv.round(4)}')
             print(f'The Rayleigh Z-statistic for non-uniformity of circular data for {con.upper()} : {z.round(4)} with a p-value : {pval.round(4)}')
         plt.show()
-            
+   
+def group_so_sp_stim_analysis():
+    couple = pd.read_csv('/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/stim_coupling_summary.csv', index_col=0)
+    d = couple.groupby(['Condition','Channel']).mean().loc['down']['ndPAC']
+    u = couple.groupby(['Condition','Channel']).mean().loc['up']['ndPAC']
+    s = couple.groupby(['Condition','Channel']).mean().loc['sham']['ndPAC']
+    s_d = couple.groupby(['Condition','Channel']).mean().loc['sham down']['ndPAC']
+    yasa.topoplot
+    yasa.topoplot(u)
+    yasa.topoplot(s)
+    yasa.topoplot(d)
+    yasa.topoplot(s_d)    
+     
 def group_so_sp_analysis():
     log_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(log_path) for i in files])
@@ -1195,13 +1225,64 @@ def group_so_sp_analysis():
     df_sync.to_csv(stat_path + 'df_sync_full.csv')
     
     ## Coincidence matrices for spindles and SOs- Group level
-    cm_sp = coincidence_matrix(sp, sf=128, plot=True, 
-                               window='group', standardize=False)
-    plt.suptitle('Spindle Coincidence Matrix', fontsize=16)
-    plt.savefig(fig_path + 'group_coincidence_matrix_sp.png')
-    cm_sw = coincidence_matrix(sws, sf=128, plot=True, 
-                               window='group', standardize=False)
-    plt.suptitle('Slow Wave Coincidence Matrix', fontsize=16)
+    cm_sp_n2_avg, cm_sp_n2_all, sc = coincidence_matrix(sp.set_index(['Stage']).loc[2], sf=128, plot=True, 
+                                                        window='group', standardize=False)
+    plt.suptitle('Spindle Coincidence Matrix - N2', fontsize=16)
+    plt.savefig(fig_path + 'group_coincidence_matrix_sp_N2.png')
+    sp_n2_co = np.nanmean(cm_sp_n2_all, axis=1)
+    #sp_n2_co = scipy.stats.tmean(cm_sp_n2_all, limits=(0,.99), axis=1)
+    
+    sp_n2_topo = np.ones([len(sp.set_index(['Stage']).loc[2].Subject.unique()), 
+                          len(sp.set_index(['Stage']).loc[2].Condition.unique()),
+                          21])*(np.nan)
+    contrast = np.reshape(sp_n2_co, sp_n2_topo.shape)
+    
+    def stat_fun(*args):
+        return mne.stats.f_mway_rm(np.swapaxes(args, 0, 0), factor_levels=[3],
+                                   effects='all', return_pvals=False)[0]
+    
+    
+    # load epoch data to compute adjacency 
+    file = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/YIOYSRPX_up_epo.fif'
+    epoch = mne.read_epochs(file, preload=True).apply_baseline((-4, -1.5)).resample(128)
+    adjacency, ch_names = mne.channels.find_ch_adjacency(epoch.info, ch_type='eeg')
+    
+    # threshold
+    pthresh = 0.05
+    n_observations = contrast.shape[0]
+    f_thresh = mne.stats.f_threshold_mway_rm(n_observations, factor_levels=[3], effects='all',
+                                             pvalue = pthresh)
+        
+    # spatial permuation cluster test
+    F_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_test(
+        contrast,                           # numpy array for contrast [n_subjects, n_voltage, n_channels]
+        n_permutations=1024,                # 1000 is the minimum
+        threshold=dict(start=0, step=0.2), # TFCE, starting at 0, in 0.2 steps (in t-values)
+        #threshold=f_thresh,
+        tail=1,                             # two-tailed test (1 or -1 for one-tailed)
+        n_jobs=-1,                          # increase value to speed up computations
+        adjacency=adjacency,                # sparse matrix for channel adjacency as computed above
+        buffer_size=None,
+        out_type='mask',                    # returns a mask map instead of indices of sig. points
+        seed=1503,
+        stat_fun=stat_fun,
+    )
+    
+
+    #
+    cm_sp_n3 = coincidence_matrix(sp.set_index(['Stage']).loc[3], sf=128, plot=True, 
+                                  window='group', standardize=False)
+    plt.suptitle('Spindle Coincidence Matrix - N3', fontsize=16)
+    plt.savefig(fig_path + 'group_coincidence_matrix_sp_N3.png')
+    
+    cm_sw_n2 = coincidence_matrix(sws.set_index(['Stage']).loc[2], sf=128, plot=True, 
+                                  window='group', standardize=False)
+    plt.suptitle('Slow Wave Coincidence Matrix - N2', fontsize=16)
+    plt.savefig(fig_path + 'group_coincidence_matrix_sw.png')
+    
+    cm_sw_n3 = coincidence_matrix(sws.set_index(['Stage']).loc[3], sf=128, plot=True, 
+                                  window='group', standardize=False)
+    plt.suptitle('Slow Wave Coincidence Matrix - N3', fontsize=16)
     plt.savefig(fig_path + 'group_coincidence_matrix_sw.png')
     
     ## Plot ndPAC- Group level

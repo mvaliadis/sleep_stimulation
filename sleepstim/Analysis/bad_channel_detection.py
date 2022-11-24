@@ -270,7 +270,7 @@ def qc_kurt(xs):
     kurt = stats.kurtosis(xs, axis=-1)
     return kurt
 
-def qc_calcEQI(data, fs, frange=(1,45)):
+def qc_calcEQI(data2, fs, frange=(1,45)):
     """
     Combines 6 quality index functions above and returns qc_arr matrix in the shape of
     number of measures x channels x segments
@@ -279,12 +279,12 @@ def qc_calcEQI(data, fs, frange=(1,45)):
     fs  : sampling frequency
 
     """
-    nch    = data.shape[0]
-    nsegs  = qc_segment(data[0,:],fs).shape[0]
+    nch    = data2.shape[0]
+    nsegs  = qc_segment(data2[0,:],fs).shape[0]
     qc_arr = np.zeros((6,nch,nsegs))
     
     # Loop over channels and segments and calculate quality indices
-    for ich, xch in enumerate(data):
+    for ich, xch in enumerate(data2):
         xsegs = qc_segment(xch,fs,window=2)
         for idxs, xs in enumerate(xsegs):
             # 1. Average Single-Sided Amplitude Spectrum in range given range

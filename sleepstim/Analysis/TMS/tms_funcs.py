@@ -566,6 +566,8 @@ if __name__ == '__main__':
     # =============================================================================
     
     param = []
+    param_2_post = []
+    param_2_pre = []
     subject = list(dict.fromkeys(list(subject_pre_post.Subject)))
     for sub in subject:
         sub_res = subject_pre_post[subject_pre_post.Subject == sub]
@@ -580,10 +582,13 @@ if __name__ == '__main__':
         else:
             print(f'Computing faciliation index for subject: {sub}')
             x_points = [0,1,2,3,4,5]
-            x_data_ext = np.linspace(0,5,100)
+            x_data_ext = np.linspace(0,5,50)
             for item in axs.axes_dict:
                 pre_s = np.mean([axs.axes_dict[item].get_lines()[i].get_ydata() for i in range(6)], axis=1)
                 post_s = np.mean([axs.axes_dict[item].get_lines()[i].get_ydata() for i in range(6,12)], axis=1)
+                prepost = sub_res[sub_res.Condition==item].groupby(['Protocol','Session']).median().reset_index()
+                pre_s2 = prepost[prepost.Session=='pre']
+                post_s2 = prepost[prepost.Session=='post']
                 # sessions = [pre_s, post_s, item]
                 if all(~np.isnan([pre_s, post_s]).ravel()):
                     p0 = [max(pre_s), trim_mean(x_points), 1]
@@ -604,26 +609,50 @@ if __name__ == '__main__':
                     axs.axes_dict[item].plot(x_data_ext,y_points_post, linestyle='--')
                     
                     ## AUC calculation - compute difference post - pre x condition
-                    AUC_pre = trapz(x = x_data_ext, y = y_points_pre, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
-                    AUC_post = trapz(x = x_data_ext, y = y_points_post, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
+                    #AUC_pre = trapz(x = x_data_ext, y = y_points_pre, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
+                    #AUC_post = trapz(x = x_data_ext, y = y_points_post, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
         
+                    AUC_pre = trapz(x = pre_s2.Protocol.to_numpy(), 
+                                    y = pre_s2.logVpp.to_numpy())
+                    AUC_post = trapz(x = post_s2.Protocol.to_numpy(), 
+                                     y = post_s2.logVpp.to_numpy())
+                    
                     # AUC based faciliation index
                     param.append([sub, item, AUC_post / AUC_pre,
                                   popt1[0] - popt0[0],
                                   popt1[1] - popt0[1],
-                                  popt1[2] - popt0[2]]) 
+                                  popt1[2] - popt0[2]])
+                    
+                    # params without AUC
+                    param_2_post.append([sub, item, 'post', popt1[0], 
+                                         popt1[1], popt1[2]])
+                    param_2_pre.append([sub, item, 'pre', popt0[0], 
+                                        popt0[1], popt0[2]])
                 else:
                     param.append([sub, item, np.nan,
                                   np.nan, np.nan, np.nan]) 
+                    param_2_post.append([sub, item, 'post',
+                                         np.nan, np.nan, np.nan])
+                    param_2_pre.append([sub, item, 'pre', 
+                                        np.nan, np.nan, np.nan]) 
         
         plt.tight_layout()
+        #plt.close('all')
         plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/TMS/IO_curve_{sub}.jpg')
         plt.close('all')
 
     param_df = pd.DataFrame(param, columns=['Subject','Condition','FacIdx',
                                             'MEP_max', 's50', 'Slope'])
     
+    param_df2 = pd.DataFrame(param_2_post, columns=['Subject','Condition','Session',
+                                                    'MEP_max', 's50', 'Slope'])
+    param_df3 = pd.DataFrame(param_2_pre, columns=['Subject','Condition','Session',
+                                                    'MEP_max', 's50', 'Slope'])
+    param_df_session = pd.concat([param_df2, param_df3])
+    
     param_df.to_csv('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_params.csv')
+    param_df_session.to_csv('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_params2.csv')
+    
     axs_fac_idx = sns.violinplot(data = param_df, x='Condition', y='FacIdx') 
     
     # remove thresholds 
