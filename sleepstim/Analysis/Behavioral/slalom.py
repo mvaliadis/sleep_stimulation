@@ -13,23 +13,23 @@ import os
 import pandas as pd
 import pingouin as pg
 #from scipy.signal import hilbert
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 import seaborn as sns
 from sleepstim.Analysis.Resting_State.rs_preproc import check_match_prepost_data_elements
 from pymer4.models import Lmer
 
+
 sns.set_theme(style="whitegrid")
 path = r'/media/administrator/data/Study_1_data/Pre_post_data'
 
-#%%
-def slalom_results(path, plot=False):
+def slalom_results(path, plot=False, figpath='/media/administrator/data/Study_1_data/Figures/Slalom/'):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files if '.csv' in i])  
     sheet = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
     subj_cond = np.loadtxt(sheet, delimiter=',', dtype='str', skiprows=1) 
     cond_dict = {0:'sham', 1:'up', 2:'down'}
     # sort files to make sure blocks are consistent between subject nights
     pre, post = check_match_prepost_data_elements(path, files=files_list, dtype='slalom')
-    slalom_dict = []
+    slalom_dict, slalom_dict2 = [],[]
     for j, (pre_f, post_f) in enumerate(zip(pre, post)):
         if pre_f.split('/')[-1][-16::] == post_f.split('/')[-1][-16::]:
             # decode night with stimulation condition
@@ -46,11 +46,23 @@ def slalom_results(path, plot=False):
             data_pre, data_post = np.genfromtxt(pre_f, delimiter=','), np.genfromtxt(post_f, delimiter=',')
                        
             # Calculate RMSE for pre/post with zscores & zscores + amplitude envelope
-            error_pre_rms = mean_squared_error(y_true = stats.zscore(data_pre[0,:]), 
-                                               y_pred = stats.zscore(data_pre[1,:]), squared=False)
+            error_pre_rms = mean_absolute_error(y_true = stats.zscore(data_pre[0,:]), 
+                                               y_pred = stats.zscore(data_pre[1,:]))#, squared=False)
 
-            error_post_rms = mean_squared_error(y_true = stats.zscore(data_post[0,:]), 
-                                                y_pred = stats.zscore(data_post[1,:]), squared=False)
+            error_post_rms = mean_absolute_error(y_true = stats.zscore(data_post[0,:]), 
+                                                y_pred = stats.zscore(data_post[1,:]))#, squared=False)
+            
+            
+            from scipy.integrate import trapz
+            error_pre_rms = trapz(x = np.arange(0, stats.zscore(data_pre[0,:]).shape[0], 1), 
+                            y = stats.zscore(data_pre[0,:])) - trapz(x = np.arange(0, stats.zscore(data_pre[1,:]).shape[0], 1), 
+                                                                     y = stats.zscore(data_pre[1,:]))
+            
+            error_pre_rms = trapz(x = np.arange(0, stats.zscore(data_post[0,:]).shape[0], 1), 
+                             y = stats.zscore(data_post[0,:])) - trapz(x = np.arange(0, stats.zscore(data_post[1,:]).shape[0], 1), 
+                                                                       y = stats.zscore(data_post[1,:]))
+            
+        
             # amplitude_envelope_pre_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_pre[0,:]))), 
             #                                                 y_pred = np.abs(hilbert(stats.zscore(data_pre[1,:]))), squared=False)            
             # amplitude_envelope_post_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_post[0,:]))), 
@@ -62,41 +74,75 @@ def slalom_results(path, plot=False):
             # amplitude_envelope_pre_diff = np.abs(hilbert(stats.zscore(data_pre[0,:]))) - np.abs(hilbert(stats.zscore(data_pre[1,:])))
             # amplitude_envelope_post_diff = np.abs(hilbert(stats.zscore(data_post[0,:]))) - np.abs(hilbert(stats.zscore(data_post[1,:])))
             
-                      
+            # define block for later
+            pre_block = int(pre_f.split('/')[-1].split('_')[2][0])
+            post_block = int(post_f.split('/')[-1].split('_')[2][0])
+            if pre_block == post_block:
+                block = pre_block
+            else:
+                print('Error, pre and post blocks do not match!!! ')
+            
             ## create dictionary with info
             s_dict = {
                 "RMSE_Pre": error_pre_rms,
                 "RMSE_Post": error_post_rms,
                 #"Amplitude envelope RMSE (Pre)": amplitude_envelope_pre_rms,
                 #"Amplitude envelope RMSE (Post)": amplitude_envelope_post_rms,
-                "RMSE_difference_ratio": ((error_post_rms - error_pre_rms)/error_pre_rms*100),
+                "RMSE_difference_ratio": (((error_post_rms - error_pre_rms)/error_pre_rms)*100),
                 "RMSE_difference": error_post_rms - error_pre_rms,
                 #"Amplitude envelope RMSE difference": amplitude_envelope_post_rms - amplitude_envelope_pre_rms,
                 "Subject": pre_f.split('/')[-1].split('_')[0][-8::],
                 "Night": int(pre_f.split('/')[-1].split('_')[1]),
                 "Condition": cond_dict[cond], 
-                "Block": int(pre_f.split('/')[-1].split('_')[2][0]),
+                "Block": block,
                 }
             
             slalom_dict.append(s_dict)
+            
+            for error_rms, sess in zip([error_pre_rms, error_post_rms], ['pre','post']):
+                s_dict2 = {
+                    "RMSE": error_rms,
+                    "Subject": pre_f.split('/')[-1].split('_')[0][-8::],
+                    "Night": int(pre_f.split('/')[-1].split('_')[1]),
+                    "Condition": cond_dict[cond], 
+                    "Session": sess,
+                    "Block": block,
+                    }
+            
+                slalom_dict2.append(s_dict2)
             
             if plot:
                 plt.figure()
                 plt.plot(stats.zscore(data_pre[0,:]), label = 'Slalom correct trajectory (pre)')
                 plt.plot(stats.zscore(data_pre[1,:]), label = 'Slalom attempted trajectory (pre)')
+                plt.legend()
+                plt.savefig(figpath + f'{subj}_{cond_dict[cond]}_{block}_pre.jpg')
+                
+                plt.figure()
                 plt.plot(stats.zscore(data_post[0,:]), label = 'Slalom correct trajectory (post)')
                 plt.plot(stats.zscore(data_post[1,:]), label = 'Slalom attempted trajectory (post)')
                 plt.legend()
+                plt.savefig(figpath + f'{subj}_{cond_dict[cond]}_{block}_post.jpg')
+                
+                plt.figure()
+                plt.plot(stats.zscore(data_pre[0,:]) - stats.zscore(data_pre[1,:]), label = 'Slalom error (pre)')
+                plt.plot(stats.zscore(data_post[0,:]) - stats.zscore(data_post[1,:]), label = 'Slalom error (post)')
+                plt.legend()
+                plt.savefig(figpath + f'{subj}_{cond_dict[cond]}_{block}_errors.jpg')
+                
+                plt.close('all')
                
         else:
             raise NameError('The given pre- and post- file names do not correspond! ')
         
     # covert to dataframe    
-    df = pd.DataFrame(slalom_dict)     
+    df = pd.DataFrame(slalom_dict) 
+    df2 = pd.DataFrame(slalom_dict2) 
     
-    return df
+    return df, df2
 
 #%%
+
 def slalom_stats(df): 
     # ttests
     #stats.ttest_ind(df[df['Stimulation night']=='sham']['Absolute RMSE difference'], df[df['Stimulation night']=='up']['Absolute RMSE difference'])
@@ -188,17 +234,29 @@ path = r'/media/administrator/data/Study_1_data/Pre_post_data'
 if __name__ == '__main__':
     run = input('Do you wish to restart the Slalom analysis? ')
     if run == 'yes':
-        df = slalom_results(path) 
+        df, df2 = slalom_results(path, plot=False) 
         df.to_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.csv')
+        df2.to_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results_sess.csv')
     else:
         df = pd.read_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.csv', index_col=0)
+        df2 = pd.read_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results_sess.csv', index_col=0)
         
+    # 
+    good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', '886MCPKG', 'A4VCLD2I', 
+                 'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 'KEQB5AWM', 
+                 'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 'YIOYSRPX', 'EQDORXF6']
+   
     # drop the following subjects 
     subjects = df['Subject'].unique()
-    for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ','RVQL2MRD','6QF3HOJC','IBYYXKMB','NW2JV7YA']):
+    for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ','6QF3HOJC','IBYYXKMB','NW2JV7YA']): #RVQL2MRD
         df.drop(df.loc[df['Subject']==i[0]].index, inplace=True)
+        df2.drop(df2.loc[df2['Subject']==i[0]].index, inplace=True)
+    #df = df.drop([0,1,2,3,180,181,182,183])
         
-    df = df.drop([0,1,2,3,180,181,182,183]) 
+    # remove bad subs
+    df = df.loc[df['Subject'].isin(good_subs)].reset_index(drop=True)
+    df2 = df2.loc[df2['Subject'].isin(good_subs)].reset_index(drop=True)
+
     # mean over blocks by subject and condition
     df_slalom.groupby(['Condition','Subject']).mean().reset_index(inplace=True)
     
@@ -240,3 +298,30 @@ marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
 
 print(marginal_estimates)
 print(comparisons)
+
+
+#%%
+
+model = Lmer(f"RMSE ~ Condition*Session*Block + (Condition|Subject)", 
+             data=df2)
+model.fit(factors={"Condition": ["sham", "up", "down"],
+                   "Session": ["pre","post"],
+                   "Block": ["0","1","2","3"]}, 
+          ordered=True, summarize=False)
+print(model.anova(force_orthogonal=True))
+
+
+model = Lmer(f"RMSE ~ Condition*Session + (Condition|Subject)", 
+             data=df2)
+model.fit(factors={"Condition": ["sham", "up", "down"],
+                   "Session": ["pre","post"]}, 
+          ordered=True, summarize=False)
+print(model.anova(force_orthogonal=True))
+
+
+model = Lmer(f"RMSE_difference_ratio ~ Condition + (1|Subject)", 
+             data=df)
+model.fit(factors={"Condition": ["sham", "up", "down"]},
+                   #"Block": ["0","1","2","3"]}, 
+          ordered=True, summarize=False)
+print(model.anova(force_orthogonal=True))

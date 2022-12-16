@@ -958,29 +958,43 @@ def create_subj_comp_evoked(df):
         
     return comp_df
    
-def group_stats_contrast(df_evoked, gavs, path=None, title=None):
+def group_stats_contrast(df_evoked, gavs, path=None, title=None, save=True):
     ## do stats
+    df_rmanova = []
     for it in ('Difference_c3_c4', 'Difference_c3_fz','Difference_fz_c4'):
         #print(it)
         for (peak, ref), obj in df_evoked.groupby(['Peak','Reference'])[it]:
             #print(peak, ref)
-            eps = []
+            eps, eps_df = [], []
             obj_ = [i for i in list(obj) if i != 0]
-            for item in obj_:
+            for k, item in enumerate(obj_):
                 #print(item)
                 try:
                     adjacency, ch_names = mne.channels.find_ch_adjacency(gavs.info, ch_type='eeg')
                     it_mean = item.get_data(units='uV', tmin=-0.01).mean(1)
+                    it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True).groupby(["channel"], sort=False).mean()
+                    it_mean_df['subject'] = f'Subject_{k}'
                     unit='uV'
+                    eps_df.append(it_mean_df)
                     eps.append(it_mean)
                 except:
                     adjacency, ch_names = mne.channels.find_ch_adjacency(gavs.info, ch_type=None)
                     it_mean = item.get_data(tmin=-0.01).mean(1)*1e3
+                    it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True).groupby(["channel"], sort=False).mean()
+                    it_mean_df['subject'] = f'Subject_{k}'
                     unit='mV/m2'
+                    eps_df.append(it_mean_df)
                     eps.append(it_mean)
                                
             contrast = np.concatenate([eps])
-                
+            df_contrast = pd.concat(eps_df)
+            
+            # rm anova
+            rm = df_contrast.reset_index().rm_anova(dv='value', within='channel', 
+                                                    subject='subject')
+            rm['Condition'] = it + '_' + peak + '_' + ref 
+            df_rmanova.append(rm)
+            
             # spatial permuation cluster test
             t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
                 contrast,                           # numpy array for contrast [n_subjects, n_voltage, n_channels]
@@ -994,14 +1008,33 @@ def group_stats_contrast(df_evoked, gavs, path=None, title=None):
                 seed=1503
             )
             
+            # compute effect size
+            ds = np.asarray([pg.compute_effsize_from_t(t_obs[i], N=min(contrast.shape), eftype='cohen') 
+                             for i in range(max(contrast.shape))])
+            
             # stats table for plotting
             df_stats = pd.DataFrame({'Chan': ch_names, 'T-Stat': t_obs, 
-                                     'Pval': cluster_p_values}) 
+                                     "Cohen's_d" : ds, 'Pval': cluster_p_values}) 
             df_stats = df_stats.set_index("Chan")
-            df_stats['Sig'] = (df_stats['Pval'] < 0.05)  
+            df_stats['Sig'] = (df_stats['Pval'] <= 0.01)  
+            #df_stats['Max_stat'] = np.abs(df_stats['T-Stat']) >= np.percentile(np.abs(df_stats['T-Stat'].sort_values()), 80)
+            
+            # sample size estimation
+            effects_of_int = df_stats["Cohen's_d"].loc[[it.split('_')[2].capitalize(), 
+                                                        it.split('_')[2].capitalize()]].to_numpy()
+            if np.sign(effects_of_int.mean()) == -1:
+                sample = pg.power_ttest(d=max(effects_of_int), alpha=0.05, 
+                                        power=0.95, contrast='paired')
+                print(it, peak, ref)
+                print('n: %.2f' % sample)
+            elif np.sign(effects_of_int.mean()) == 1:
+                sample = pg.power_ttest(d=min(effects_of_int), alpha=0.05, 
+                                        power=0.95, contrast='paired')
+                print(it, peak, ref)
+                print('n: %.2f' % sample)
             
             # Plot
-            fig, ax = plt.subplots(1, 2, figsize=(8,6))
+            fig, ax = plt.subplots(1, 3, figsize=(16, 6))
             im1, _ = mne.viz.plot_topomap(contrast.mean(0), 
                                           pos=gavs.info,
                                           axes=ax[0], show=0, cmap='RdBu_r',
@@ -1017,415 +1050,510 @@ def group_stats_contrast(df_evoked, gavs, path=None, title=None):
             cbar2 = fig.colorbar(im2, fraction=0.05, ax=ax[1])   
             cbar2.ax.set_ylabel('t-stat', rotation=270)
             plt.tight_layout()
+            im3, _ = mne.viz.plot_topomap(ds, pos=gavs.info, 
+                                          mask=None, #df_stats['Max_stat'],
+                                          axes=ax[2], show=0, cmap='RdBu_r',
+                                          names=None, show_names=False, 
+                                          mask_params=dict(markersize=8, markerfacecolor='y'))
+            cbar3 = fig.colorbar(im3, fraction=0.05, ax=ax[2])   
+            cbar3.ax.set_ylabel("Cohen's d", rotation=270)
+            plt.tight_layout()
             plt.suptitle(f'{it} {peak} {ref}')
-            plt.savefig(path + f'{it}_{peak}_{ref}_group_stats.png')
+            if save:
+                plt.savefig(path + f'{it}_{peak}_{ref}_group_stats.png')
             plt.show()
             plt.close('all')
-
-#%%
-## Run statistical test on subject vs. group correlations 
-df, df_evoked = pre_process_so_local_gavs()
-
-#%%
-
-mega = []
-# compute gavs per target chan, peak, and reference
-for idx, item in enumerate(df.groupby(['Target_Chan','Peak','Reference'])):
-    print(item[0])
-    # grand averages of all nights
-    gavs = mne.grand_average(list(item[1].Epochs))
-    try:
-        eps = [list(item[1].Epochs)[i].get_data(units='uV', tmin=-0.01).mean(1) for i in range(len(item[1]))]
-        contrast = np.concatenate([eps])
-        mega.append([item[0], list(item[1].Subject + '_' + item[1].Condition), 
-                     #gavs.get_data(units='uV', tmin=-0.01).mean(1), 
-                     contrast])
-    except:
-        eps = [list(item[1].Epochs)[i].get_data(tmin=-0.01).mean(1)*1e3 for i in range(len(item[1]))]
-        contrast = np.concatenate([eps])
-        mega.append([item[0], list(item[1].Subject + '_' + item[1].Condition),
-                     #gavs.get_data(tmin=-0.01).mean(1)*1e3, 
-                     contrast])
-
-# combos to compute pairwise correlations
-combos_csd_neg = list(map(list, [('C3', 'NegPeak', 'csd'),
-                                 ('C4', 'NegPeak', 'csd'),
-                                 ('Fz', 'NegPeak', 'csd')]))
-combos_csd_pos = list(map(list, [('C3', 'PosPeak', 'csd'),
-                                 ('C4', 'PosPeak', 'csd'),
-                                 ('Fz', 'PosPeak', 'csd')]))
-combos_lm_neg = list(map(list, [('C3', 'NegPeak', 'targeted'),
-                                ('C4', 'NegPeak', 'targeted'),
-                                ('Fz', 'NegPeak', 'targeted')]))
-combos_lm_pos = list(map(list, [('C3', 'PosPeak', 'targeted'),
-                                ('C4', 'PosPeak', 'targeted'),
-                                ('Fz', 'PosPeak', 'targeted')]))    
-
-coll = np.asarray([list(np.asarray(mega[i][0]))for i in range(len(mega))])   
-df_corr = pd.DataFrame(columns=['Subject_Cond','Target','Target_means',
-                                'Peak','Reference','Spearman_rho',
-                                'Fishers_ztransformed_rho'])
-for idx, combo in enumerate(zip([combos_csd_neg*2, combos_csd_pos*2,
-                                 combos_lm_neg*2, combos_lm_pos*2])):
-    combos = list(itertools.combinations(combo[0],2))
-    within = [combos[i][0] for i in range(len(combos))]
-    between = [combos[i][1] for i in range(len(combos))]
-    for x,y in zip(within, between):
-        #print(x,y)
-        within_index = statistics.mode(np.where((x == coll))[0])
-        between_index = statistics.mode(np.where((y == coll))[0])
+        
+        df_ranova_save = pd.concat(df_rmanova)
+        df_ranova_save.to_csv('/media/administrator/data/Study_2_data/stats/rmanova.csv')
+        
+def group_stats_topo_correlations(df, p_path):
+    ## Validation stats with topomap correlations 
+    mega = []
+    # compute gavs per target chan, peak, and reference
+    for idx, item in enumerate(df.groupby(['Target_Chan','Peak','Reference'])):
+        print(item[0])
+        # grand averages of all nights
+        #gavs = mne.grand_average(list(item[1].Epochs))
+        try:
+            eps = [list(item[1].Epochs)[i].get_data(units='uV', tmin=-0.01).mean(1) for i in range(len(item[1]))]
+            contrast = np.concatenate([eps])
+            mega.append([item[0], list(item[1].Subject + '_' + item[1].Condition), 
+                          #gavs.get_data(units='uV', tmin=-0.01).mean(1), 
+                          contrast])
+        except:
+            eps = [list(item[1].Epochs)[i].get_data(tmin=-0.01).mean(1)*1e3 for i in range(len(item[1]))]
+            contrast = np.concatenate([eps])
+            mega.append([item[0], list(item[1].Subject + '_' + item[1].Condition),
+                          #gavs.get_data(tmin=-0.01).mean(1)*1e3, 
+                          contrast])
+    
+    # combos to compute pairwise correlations
+    combos_csd_neg = list(map(list, [('C3', 'NegPeak', 'csd'),
+                                      ('C4', 'NegPeak', 'csd'),
+                                      ('Fz', 'NegPeak', 'csd')]))
+    combos_csd_pos = list(map(list, [('C3', 'PosPeak', 'csd'),
+                                      ('C4', 'PosPeak', 'csd'),
+                                      ('Fz', 'PosPeak', 'csd')]))
+    combos_lm_neg = list(map(list, [('C3', 'NegPeak', 'targeted'),
+                                    ('C4', 'NegPeak', 'targeted'),
+                                    ('Fz', 'NegPeak', 'targeted')]))
+    combos_lm_pos = list(map(list, [('C3', 'PosPeak', 'targeted'),
+                                    ('C4', 'PosPeak', 'targeted'),
+                                    ('Fz', 'PosPeak', 'targeted')]))    
+    
+    coll = np.asarray([list(np.asarray(mega[i][0]))for i in range(len(mega))])   
+    df_corr = pd.DataFrame(columns=['Subject_Cond','Target','Target_means',
+                                    'Peak','Reference','Spearman_rho',
+                                    'Fishers_ztransformed_rho'])
+    for idx, combo in enumerate(zip([combos_csd_neg*2, combos_csd_pos*2,
+                                      combos_lm_neg*2, combos_lm_pos*2])):
+        combos = list(itertools.combinations(combo[0],2))
+        within = [combos[i][0] for i in range(len(combos))]
+        between = [combos[i][1] for i in range(len(combos))]
+        for x,y in zip(within, between):
+            #print(x,y)
+            within_index = statistics.mode(np.where((x == coll))[0])
+            between_index = statistics.mode(np.where((y == coll))[0])
+                
+            unity = list(set(mega[between_index][1]) & set(mega[within_index][1]))
+    
+            pos_within = [unity.index(mega[within_index][1][i]) for i in range(len(mega[within_index][1])) if mega[within_index][1][i] in unity]
+            pos_between = [unity.index(mega[between_index][1][i]) for i in range(len(mega[between_index][1])) if mega[between_index][1][i] in unity]
             
-        unity = list(set(mega[between_index][1]) & set(mega[within_index][1]))
-
-        pos_within = [unity.index(mega[within_index][1][i]) for i in range(len(mega[within_index][1])) if mega[within_index][1][i] in unity]
-        pos_between = [unity.index(mega[between_index][1][i]) for i in range(len(mega[between_index][1])) if mega[between_index][1][i] in unity]
-        
-        within_mean = mega[within_index][-1][pos_within,:].mean(0)
-        between_comparison = mega[between_index][-1][pos_between,:]
-        
-        comparison = [stats.spearmanr([within_mean, between_comparison[i,:]], axis=1)[0] 
-                      for i in range(len(between_comparison))]
-        fishers_comparison = np.arctanh(comparison)
-        
-        print(f' Within: {mega[within_index][0]}, Between: {mega[between_index][0]}')
-        
-        
-        df_corr = df_corr.append(pd.DataFrame({'Subject_Cond': unity,
-                                               'Target': [mega[within_index][0][0] + '_' + mega[between_index][0][0]]*len(unity),
-                                               'Target_means': [mega[within_index][0][0]]*len(unity),
-                                               'Peak': [mega[within_index][0][1]]*len(unity),
-                                               'Reference': [mega[within_index][0][2]]*len(unity),
-                                               'Spearman_rho': comparison, 
-                                               'Fishers_ztransformed_rho': list(fishers_comparison)}))
-# reomve duplicates
-df_corr = df_corr.groupby(['Subject_Cond', 'Target', 'Target_means',
-                           'Peak', 'Reference']).mean().reset_index()
-        
-# mark within versus between
-comparisons = []
-for elem in range(len(df_corr)):
-    if len(np.unique(df_corr['Target'][elem].split('_'))) > 1:
-        comparisons.append("Between")
-    else:
-        comparisons.append("Within") 
-df_corr['Comparison'] = comparisons
-
-# mark when within is bigger than between --> descriptive stat
-df_corr_stacked = df_corr.groupby(['Subject_Cond'])
-for (sub, peak, ref, target), df in df_corr.groupby(['Subject_Cond','Peak',
-                                                     'Reference','Target_means']):
-    df['order'] = df.Fishers_ztransformed_rho.rank()
-    #print(df.Fishers_ztransformed_rho.rank())
-    if df[df['Comparison']=='Within'].order.to_numpy() == 3:
-        df_corr.loc[df.index]['Within_Between'] = True
-        df_corr_stacked.append(df_corr)
-    else:
-        df_corr.loc[df.index]['Within_Between'] = False
-        df_corr_stacked.append(df_corr)
-
-        
-# Stats - compute for each peak, reference, seperately
-from pymer4.models import Lmer
-for (peak, ref), df in df_corr.groupby(['Peak','Reference']):
-    print(peak, ref)
-    rm_anova = df.rm_anova(dv='Fishers_ztransformed_rho', 
-                           within=['Target_means', 'Comparison'], 
-                           subject='Subject_Cond', detailed=True)
-    model = Lmer('Fishers_ztransformed_rho ~ Target_means*Comparison + (1|Subject_Cond)', 
-                 data=df)
-    model.fit(factors={'Target_means': ['C3','C4','Fz'],
-                       'Comparison': ['Within','Between']}, summarize=False)
-    print(model.anova(force_orthogonal=True))
-
-#%%
-file = '/media/administrator/data/Study_1_data/Raw_data/Experimental/YIOYSRPX_3/sleepstim_R001.xdf'
-
-raw.set_montage(mne.channels.make_standard_montage('standard_1005')) 
-raw.set_eeg_reference(['M1','M2'])
-
-# compute power
-power = raw.compute_psd(method='multitaper', fmin=0.3, fmax=2.0, picks='eeg')
-fm = fooof.FOOOFGroup(max_n_peaks=SPEC_NR_PEAKS)
-fm.fit(power.freqs, power._data.mean(0))
-delta_bands = fooof.analysis.get_band_peak_fg(fm, [0.3, 2.0])
-peak = np.nanmean(delta_bands[:, 0])
-
-#SSD
-filters, patterns = compute_ssd(raw, signal_bp=(0.5, 2), sf=sf, use_mne=False,
-                                noise_bp=(0.1, 30), noise_bs=(49, 51))
-raw_ssd = apply_filters(raw, filters, use_mne=False)
-#raw_ssd.filter(0.3, 2, verbose=False)
-filtparams = signal.butter(2, (0.3, 2), fs = sf, btype='bandpass')
-raw_ssd = signal.filtfilt(*filtparams, raw_ssd[0:min(patterns.shape),:], axis=-1)
-
-# compute amplitude corrected spatial pattern coefficients
-#std_comp = np.std(raw_ssd._data, axis=-1)
-std_comp = np.std(raw_ssd, axis=1)
-weighted_patterns = std_comp * patterns
-
-# spatial complexity
-metric = compute_sensor_complexity(weighted_patterns, 10)
-
-# epoch based computation
-events = mne.make_fixed_length_events(raw, id=1, duration=2.0, overlap=1.0)
-# Epoch length is 5 seconds.
-epochs = mne.Epochs(raw, events, tmin=0., tmax=2,
-                    baseline=None, preload=True)
-epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
-
-#SSD
-filters, patterns = compute_ssd(epochs, signal_bp=(12, 16), 
-                                noise_bp=(0, 30), noise_bs=(49, 51))
-epochs_ssd = apply_filters(epochs, filters)
-
-# compute amplitude corrected spatial pattern coefficients
-std_comp = np.std(epochs_ssd._data, axis=-1)
-weighted_patterns = std_comp.mean(0) * patterns
-
-# spatial complexity
-metric = compute_sensor_complexity(weighted_patterns, 10)
-
-# plot patterns and spatial complexity
-plot_patterns(weighted_patterns, epochs, 4)
-yasa.topoplot(pd.Series(metric, epochs.ch_names), cmap='Spectral_r')
-
-#%%
-## Imitate sliding-window procedure of original experiment
-crit_reconstruct = [0]; crit_reconstruct_up = [0]
-time_reconstruct = [0]; time_reconstruct_up = [0]
-fs = 512
-ix = 2*fs
-
-b,a = signal.butter(2, 4, fs = fs)
-d,c = signal.butter(2, (0.2, 30), fs = fs, btype='bandpass')
-# fnyq = fs/2
-# N, beta = signal.kaiserord(60.0, 5/fnyq)
-# taps = signal.firwin(N, 4/fnyq, window=('kaiser', beta))
-while ix < len(C3):
-#while ix <= 512*60*10:
-    ix0 = ix - 2*fs
-    #pick 30 s window
-    window = C3[int(ix0):int(ix)]
-    d = signal.filtfilt(b,a,window)
-    #d = signal.filtfilt(taps, 1.0, window)
-    d -= np.median(d)
-    #plt.plot(d, 'k')
-    
-    # # median filter
-    # d = scipy.ndimage.median_filter(d, size=50)
-    # # savitzky golay filter
-    # d = hp.smooth_signal(d, sample_rate = fs, window_length=int(fs*1), polyorder=3)
-    # sin convolution
-    # d = np.convolve(np.sin(1), d)
-    
-    # SSD fun
-    data_wind = data[int(ix0):int(ix),:]
-    #data_wind = signal.filtfilt(d,c,data_wind, axis=0)
-    data_wind = signal.filtfilt(b,a,data_wind, axis=0)
-    data_wind -= np.median(data_wind, 0)
-    filters, patterns = compute_ssd(data_wind.T, signal_bp=(0.3, 2), use_mne=False,
-                                    noise_bp=(0.1, 30), noise_bs=(0.1, 30), sf=fs)
-    epochs_ssd = apply_filters(data_wind.T, filters)
-
-    # compute amplitude corrected spatial pattern coefficients
-    std_comp = np.std(epochs_ssd, axis=-1)
-    weighted_patterns = std_comp * patterns
-
-    # spatial complexity
-    metric = compute_sensor_complexity(weighted_patterns, len(weighted_patterns.shape)) #10
-
-    ix += 2*fs #remove after testing 
-    
-    # plot patterns and spatial complexity
-    #plot_patterns(weighted_patterns, epoch, 4)
-    #yasa.topoplot(pd.Series(metric, epoch.ch_names), cmap='Spectral_r')
-    yasa.topoplot(pd.Series(weighted_patterns[:,0], ch_names))
-    yasa.topoplot(pd.Series(metric, ch_names), cmap='Spectral_r')
-    
-    minamp = min(np.percentile((d[-2* int(sf):]), 10), -35)
-    crit = min(d[int(-0.02*sf):])
-
-    # if (min(d[-2:]) < -35) and (new_times[ix] - time_reconstruct[-1] > 3):
-    if crit < minamp and (new_times[ix] - time_reconstruct[-1] > 4): 
-        time_reconstruct.append(new_times[ix])
-        crit_reconstruct.append(crit)
-        ts_up = new_times[ix] + .475
-        time_reconstruct_up.append(ts_up)
-        crit_reconstruct_up.append(d[int(ts_up)])
-    ix += 2*fs
-    
-    if len(crit_reconstruct) > 250:
-        break
-
-#%%
-## Plot results
-plt.figure()
-plt.plot(new_times, C3_filt_notch)
-plt.plot(time_reconstruct[1::], crit_reconstruct[1::], 'xr')
-plt.plot(time_reconstruct_up[1::], crit_reconstruct_up[1::], 'xg')
-
-#%%
-reject_criteria = dict(eeg=550e-6)
-ts_pinknoise_times_sync = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct]
-center_crit, _ = yasa.get_centered_indices(data[:, ch_names.index('C3')], 
-                                           np.asarray(ts_pinknoise_times_sync[1::]), 
-                                           npts_before = sf*2, npts_after = sf*2)
-info = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types='eeg')
-epochs_crit = mne.EpochsArray(np.swapaxes(data[center_crit], 1, 2)/1e6, 
-                              info, tmin = -2, baseline=(-2, -1), proj=False)
-epochs_crit.filter(0.5, 2)
-epochs_crit.set_eeg_reference(['M1','M2'])
-epochs_crit.drop_bad(reject = reject_criteria) 
-epochs_crit.set_montage(mne.channels.make_standard_montage('standard_1005'))
-epochs_crit.plot_image('C3') 
-epochs_crit.average().plot_joint()
-mne.preprocessing.compute_current_source_density(epochs_crit).average().plot_joint()
-
-#%%
-## Epoch plotting with MNE
-# down
-reject_criteria = dict(eeg=550e-6)
-ts_pinknoise_times_sync = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct]
-ts_pinknoise_times_sync_up = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct_up]
-
-center_crit, _ = yasa.get_centered_indices(C3_filt_notch_broad, np.asarray(ts_pinknoise_times_sync[1::]), 
-                                           npts_before = sf*4, npts_after = sf*4)
-info = mne.create_info(ch_names=['C3'], sfreq=sf, ch_types='eeg')
-epochs_crit = mne.EpochsArray(np.expand_dims(C3_filt_notch_broad[center_crit], 1)/1e6, info, tmin = -4, 
-                              baseline=(-4, -1.5), proj=False)
-art_idx = art_detect(epochs_crit)
-epochs_crit.drop(art_idx)
-epochs_crit.drop_bad(reject = reject_criteria) 
-# epochs_crit.average(method='mean').plot()
-epochs_crit.plot_image()
-
-# up
-center_up, _ = yasa.get_centered_indices(C3_filt_notch_broad, np.asarray(ts_pinknoise_times_sync_up[1::]), 
-                                         npts_before = sf*4, npts_after = sf*4)
-info = mne.create_info(ch_names=1, sfreq=sf, ch_types='eeg')
-epochs_up = mne.EpochsArray(np.expand_dims(C3_filt_notch_broad[center_up], 1)/1e6, info, tmin = -4, 
-                            baseline=(-4, -1.5), proj=False)
-art_idx = art_detect(epochs_up)
-epochs_up.drop(art_idx)
-epochs_up.drop_bad(reject = reject_criteria) 
-# epochs_up.average(method='mean').plot()
-epochs_up.plot_image()     
-
-#%%
-def old_test(data=data, fs=sf, ch_names=ch_names):
-    mne.set_log_level("CRITICAL")
-    epochs, epochs_csd = [], []
-    info = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types='eeg')
-    info_csd = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types='csd')
-    info_csd.set_montage(mne.channels.make_standard_montage('standard_1005'))
-    #crit_reconstruct = [0]; crit_reconstruct_up = [0]
-    #time_reconstruct = [0]; time_reconstruct_up = [0]
-    fs = 512
-    #ix = 2*fs
-    b,a = signal.butter(2, 4, fs = fs)
-    #while ix <= 512*60*120:
-    for ep in neg_peak_idx:
-        #ix0 = ix - 2*fs
-        #pick 2s window
-        #data_wind = data[int(ix0):int(ix),:]
-        data_wind = data[ep,:]
-        data_wind = signal.filtfilt(b,a,data_wind, axis=0)
-        data_wind -= np.median(data_wind, 0)
-        #data_wind = scipy.signal.detrend(data_wind, axis=-1, type='constant')
-        data_wind = re_reference(data_wind, ch_names, reference='mastoids')
-        data_wind_csd = re_reference(data=data_wind/1e3, ch_names=ch_names, 
-                                     trans_csd=trans_csd, sf=512, reference='csd').T
-        
-        # determine 20th percentile of values for threshold of lowest values
-        # FLIP BASED ON CONDITION
-        percentiles = np.percentile(data_wind_csd[int(sf*-.04):,:].mean(0), 20)
-        
-        ## Ground truth analysis should probably contain interpolated data
-        epoch = mne.EpochsArray(np.expand_dims(data_wind.T, 0)/1e6, 
-                                info, tmin = -1.98, baseline=None)
-        epoch.set_montage(mne.channels.make_standard_montage('standard_1005'))
-        epoch = detect_bad_interpolate(epoch, method='NK')
-
-        # csd epoch
-        epoch_csd = mne.preprocessing.compute_current_source_density(epoch, lambda2=1e-03, 
-                                                                     verbose=0)
-        
-        ##
-        d = data_wind[:, ch_names.index('C3')]
-        #plt.plot(d, 'k')       
-        d_csd = data_wind_csd[:, ch_names.index('C3')]        
-        #plt.plot(d_csd, 'm')
-        #corr = np.corrcoef([d[int(-.5*sf):], d_csd[int(-.5*sf):]]).min()
-        #print(f'Correlation between C3 signals in last 500 ms: {corr.round(3)}')
-        
-        ## Append data
-        if d_csd[int(sf*-.04):].mean() < percentiles:
-            epochs.append(epoch)
-            epochs_csd.append(epoch_csd)
-    
-    # grand averages (where C3 is in the 80th percentile or higher) 
-    gav = mne.grand_average([epochs[i].average() for i in range(len(epochs)-1)])
-    gav_csd = mne.grand_average([epochs_csd[i].average() for i in range(len(epochs_csd)-1)])
-    gav.plot()
-    gav_csd.plot()
-        
-    # SSD fun
-    for name, inst in zip(['lm', 'csd'], [data_wind, data_wind_csd]):
-        print(name)
-        filters, patterns = compute_ssd(inst.T, signal_bp=(0.3, 2), use_mne=False,
-                                        noise_bp=(0.1, 30), noise_bs=(0.1, 30), sf=fs)
-        epochs_ssd = apply_filters(inst.T, filters)
-        
-        # narrowband filter 
-        #filtparams = signal.butter(2, 4, fs = sf)        
-        #epochs_ssd = signal.filtfilt(*filtparams, epochs_ssd, axis=-1)
-        epochs_ssd = signal.filtfilt(b,a, epochs_ssd, axis=-1)
-    
-        # compute amplitude corrected spatial pattern coefficients
-        std_comp = np.std(epochs_ssd, axis=-1)
-        weighted_patterns = std_comp * patterns
-    
-        # spatial complexity
-        metric = compute_sensor_complexity(weighted_patterns, 
-                                           np.min(weighted_patterns.shape)) #10
-        
-        # plot spatial complexity
-        yasa.topoplot(pd.Series(metric, ch_names), cmap='Spectral_r')
-        # plot voltage in last 20 ms
-        yasa.topoplot(pd.Series(np.mean(data_wind[int(-0.02*sf):,:],0), ch_names), cmap='Spectral_r')
-        # plot spatial patterns
-        yasa.topoplot(pd.Series(weighted_patterns[:,0], ch_names), cmap='Spectral_r')
-        # correlation between voltage maps and spatial pattern maps
-        print(f'Correlation between maps is: {np.corrcoef(weighted_patterns[:,0], np.median(data_wind[int(-0.02*sf):,:],0)).min().round(3)}')
-        
-        
-        # # minamp 
-        # minamp = min(np.percentile((d[-2* int(sf):]), 10), -35)
-        # crit = min(d[int(-0.02*sf):])
-        
-        # minamp_csd = min(np.percentile((d_csd[-2* int(sf):]), 10), -35)
-        # crit_csd = min(d_csd[int(-0.02*sf):])
-
-        # if (min(d[-2:]) < -35) and (new_times[ix] - time_reconstruct[-1] > 3):
-        #if crit < minamp and crit_csd < minamp_csd and (new_times[ix] - time_reconstruct[-1] > 3): 
-        # if crit_csd < minamp_csd and np.ptp(d_csd) < 500 and (new_times[ix] - time_reconstruct[-1] > 3): 
-        #     time_reconstruct.append(new_times[ix])
-        #     crit_reconstruct.append(crit)
-        #     #ts_up = new_times[ix] + .475
-        #     #time_reconstruct_up.append(ts_up)
-        #     #crit_reconstruct_up.append(d[int(ts_up)])
-        #     #plt.figure()
-        #     plt.plot(d)
-        #     #yasa.topoplot(pd.Series(metric, ch_names), cmap='Spectral_r')
-        #     #yasa.topoplot(pd.Series(np.mean(data_wind[int(-0.02*sf):,:],0), ch_names), cmap='Spectral_r')
-        #     #yasa.topoplot(pd.Series(weighted_patterns[:,0], ch_names), cmap='Spectral_r', vmax=20)
-        #     # print(f'Correlation between maps is: {np.corrcoef(weighted_patterns[:,0], np.median(data_wind[int(-0.02*sf):,:],0)).min().round(3)}')
+            within_mean = mega[within_index][-1][pos_within,:].mean(0)
+            between_comparison = mega[between_index][-1][pos_between,:]
             
-        #     if len(time_reconstruct) == 25:
-        #         break
+            comparison = [stats.spearmanr([within_mean, between_comparison[i,:]], axis=1)[0] 
+                          for i in range(len(between_comparison))]
+            fishers_comparison = np.arctanh(comparison)
+            
+            print(f' Within: {mega[within_index][0]}, Between: {mega[between_index][0]}')
+            
+            
+            df_corr = df_corr.append(pd.DataFrame({'Subject_Cond': unity,
+                                                    'Target': [mega[within_index][0][0] + '_' + mega[between_index][0][0]]*len(unity),
+                                                    'Target_means': [mega[within_index][0][0]]*len(unity),
+                                                    'Within': [mega[between_index][0][0]]*len(unity), 
+                                                    'Peak': [mega[within_index][0][1]]*len(unity),
+                                                    'Reference': [mega[within_index][0][2]]*len(unity),
+                                                    'Spearman_rho': comparison, 
+                                                    'Fishers_ztransformed_rho': list(fishers_comparison)}))
+    # reomve duplicates
+    df_corr = df_corr.groupby(['Subject_Cond', 'Target', 'Target_means',
+                                'Peak', 'Reference']).mean().reset_index()
+            
+    # mark within versus between
+    comparisons = []
+    for elem in range(len(df_corr)):
+        if len(np.unique(df_corr['Target'][elem].split('_'))) > 1:
+            comparisons.append("Between")
+        else:
+            comparisons.append("Within") 
+    df_corr['Comparison'] = comparisons
+    
+    # mark when within is bigger than between --> descriptive stat
+    df_corr_stacked = df_corr.groupby(['Subject_Cond','Peak',
+                                        'Reference','Target_means']).mean().reset_index()
+    statuses = []
+    for (sub, peak, ref, target), df_ in df_corr.groupby(['Subject_Cond','Peak',
+                                                          'Reference','Target_means']):
+        df_['order'] = df_.Fishers_ztransformed_rho.rank()
+        if len(df_['order']) < 3:
+            limit = 2
+        else:
+            limit = 3
+        if df_[df_['Comparison']=='Within'].order.to_numpy() == limit:
+            statuses.append(True)
+        else:
+            statuses.append(False)
+    df_corr_stacked['Within_v_Between'] = statuses
+    wb = df_corr_stacked.groupby(['Peak','Reference','Target_means']).mean()['Within_v_Between']
+    print(wb)
+    
+    # stack into within and between columns for t-test stats and paired plots
+    # df_new = df_corr.pivot_table(columns='Comparison', index=['Subject_Cond','Peak',
+    #                                                           'Reference','Target_means']).reset_index()
+    # df_new.columns = ['_'.join(col) for col in df_new.columns.values]
+    # fig, axs = plt.subplots(ncols=4, nrows=3, sharex=True, sharey=True, 
+    #                         **dict(figsize=(20, 12)))
+    fig, axs = plt.subplots(ncols=3, nrows=2, sharex=True, sharey=True, 
+                            **dict(figsize=(20, 12)))
+    ttests = []
+    for j, [(peak, ref, targets), (df_)] in enumerate(df_corr.groupby(['Peak','Reference','Target_means'])):
+        print(j, peak, ref, targets)
+        df_new_ = df_.groupby(['Subject_Cond','Target_means', 'Peak', 
+                               'Reference','Comparison']).mean().reset_index()
+        # mark when within is bigger than between --> descriptive stat
+        statuses = []
+        for (sub, peak, ref, target), df_ in df_new_.groupby(['Subject_Cond','Peak',
+                                                              'Reference','Target_means']):
+            df_['order'] = df_.Fishers_ztransformed_rho.rank()
+            if len(df_['order']) < 2:
+                limit = 1
+            else:
+                limit = 2
+            if df_[df_['Comparison']=='Within'].order.to_numpy() == limit:
+                statuses.append(True)
+            else:
+                statuses.append(False)
+        print(f"Proportion of subjects with higher correlation values within versus between: {np.mean(statuses).round(3)}")
+        # df_new_['Within_v_Between'] = statuses
+        # wb = df_new_.groupby(['Peak','Reference','Target_means']).mean()['Within_v_Between']
+        # print(wb)
+                
+        # do stats here as well, warum nicht
+        # pg.ttest(df_new_[df_new_.Comparison=='Within'].Fishers_ztransformed_rho, 
+        #          df_new_[df_new_.Comparison=='Between'].Fishers_ztransformed_rho, paired=True)
+        ttest = pg.pairwise_tests(dv='Fishers_ztransformed_rho', within='Comparison',
+                                  subject='Subject_Cond', padjust=None, data=df_new_)
+        pg.plot_paired(df_new_, dv='Fishers_ztransformed_rho', within='Comparison',
+                       subject='Subject_Cond', order=None, boxplot=True,
+                       boxplot_in_front=True, orient='v', figsize=(4, 4), dpi=100, 
+                       ax=axs.flatten()[j], colors=['green', 'grey', 'indianred'], 
+                       pointplot_kwargs={'scale': 0.6, 'marker': '.'}, 
+                       boxplot_kwargs={'color': 'lightslategrey', 'width': 0.2})   
+        axs.flatten()[j].title.set_text(f'{peak}_{ref}_{targets} (p = {ttest["p-unc"].to_numpy()[0].round(10)})')
+        ttest['Comparison'] = f'{peak}_{ref}_{targets}'
+        ttests.append(ttest)
+    
+    plt.tight_layout()
+    plt.show()
+    res = pd.concat(ttests).reset_index(drop=True)
+    res.to_csv(p_path + 'topo_ttests.csv')
+    fig_path = '/media/administrator/data/Study_2_data/figures/group/'
+    plt.savefig(fig_path + 'Paired_plots_topo_correlations.png')
+    
+    # Stats - compute for each peak, reference, seperately
+    from pymer4.models import Lmer
+    lmers = []
+    for (peak, ref), df_ in df_corr.groupby(['Peak','Reference']):
+        print(peak, ref)
+        # rm_anova = df_.rm_anova(dv='Fishers_ztransformed_rho', 
+        #                         within=['Target_means', 'Comparison'], 
+        #                         subject='Subject_Cond', detailed=True)
+        model = Lmer('Fishers_ztransformed_rho ~ Target_means*Comparison + (1|Subject_Cond)', 
+                      data=df_)
+        model.fit(factors={'Target_means': ['C3','C4','Fz'],
+                            'Comparison': ['Within','Between']}, summarize=False)
+        anova = model.anova(force_orthogonal=True)
+        anova['Tested_effect'] = ['Target_means', 'Comparison', 'Interaction']
+        anova['Comparison'] = [f'{peak}_{ref}_{targets}']*3
+        print(anova)
+        lmers.append(anova)
+    
+    res_lmm = pd.concat(lmers).reset_index(drop=True)
+    res_lmm.to_csv(p_path + 'topo_lmms.csv')
+    
+#%%
+## 1. Pre-process epochs first
+#pre_process_so_local_epochs()
+
+## 2. Run statistical test on subject vs. group correlations 
+# df, df_evoked = pre_process_so_local_gavs()
+p_path = '/media/administrator/data/Study_2_data/stats/'
+# df.to_pickle(p_path + 'df.p')
+# df_evoked.to_pickle(p_path + 'df_contrast.p')
+
+## 3. Load dataframes 
+df = pd.read_pickle('/media/administrator/data/Study_2_data/stats/df.p')
+df_evoked = pd.read_pickle('/media/administrator/data/Study_2_data/stats/df_contrast.p')
+df = df[df.Reference=='csd']
+df_evoked = df_evoked[df_evoked.Reference=='csd']
+
+## 4. Topo correlation stats
+#group_stats_topo_correlations(df, p_path)
+
+#%%
+# #%%
+# file = '/media/administrator/data/Study_1_data/Raw_data/Experimental/YIOYSRPX_3/sleepstim_R001.xdf'
+
+# raw.set_montage(mne.channels.make_standard_montage('standard_1005')) 
+# raw.set_eeg_reference(['M1','M2'])
+
+# # compute power
+# power = raw.compute_psd(method='multitaper', fmin=0.3, fmax=2.0, picks='eeg')
+# fm = fooof.FOOOFGroup(max_n_peaks=SPEC_NR_PEAKS)
+# fm.fit(power.freqs, power._data.mean(0))
+# delta_bands = fooof.analysis.get_band_peak_fg(fm, [0.3, 2.0])
+# peak = np.nanmean(delta_bands[:, 0])
+
+# #SSD
+# filters, patterns = compute_ssd(raw, signal_bp=(0.5, 2), sf=sf, use_mne=False,
+#                                 noise_bp=(0.1, 30), noise_bs=(49, 51))
+# raw_ssd = apply_filters(raw, filters, use_mne=False)
+# #raw_ssd.filter(0.3, 2, verbose=False)
+# filtparams = signal.butter(2, (0.3, 2), fs = sf, btype='bandpass')
+# raw_ssd = signal.filtfilt(*filtparams, raw_ssd[0:min(patterns.shape),:], axis=-1)
+
+# # compute amplitude corrected spatial pattern coefficients
+# #std_comp = np.std(raw_ssd._data, axis=-1)
+# std_comp = np.std(raw_ssd, axis=1)
+# weighted_patterns = std_comp * patterns
+
+# # spatial complexity
+# metric = compute_sensor_complexity(weighted_patterns, 10)
+
+# # epoch based computation
+# events = mne.make_fixed_length_events(raw, id=1, duration=2.0, overlap=1.0)
+# # Epoch length is 5 seconds.
+# epochs = mne.Epochs(raw, events, tmin=0., tmax=2,
+#                     baseline=None, preload=True)
+# epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
+
+# #SSD
+# filters, patterns = compute_ssd(epochs, signal_bp=(12, 16), 
+#                                 noise_bp=(0, 30), noise_bs=(49, 51))
+# epochs_ssd = apply_filters(epochs, filters)
+
+# # compute amplitude corrected spatial pattern coefficients
+# std_comp = np.std(epochs_ssd._data, axis=-1)
+# weighted_patterns = std_comp.mean(0) * patterns
+
+# # spatial complexity
+# metric = compute_sensor_complexity(weighted_patterns, 10)
+
+# # plot patterns and spatial complexity
+# plot_patterns(weighted_patterns, epochs, 4)
+# yasa.topoplot(pd.Series(metric, epochs.ch_names), cmap='Spectral_r')
+
+# #%%
+# ## Imitate sliding-window procedure of original experiment
+# crit_reconstruct = [0]; crit_reconstruct_up = [0]
+# time_reconstruct = [0]; time_reconstruct_up = [0]
+# fs = 512
+# ix = 2*fs
+
+# b,a = signal.butter(2, 4, fs = fs)
+# d,c = signal.butter(2, (0.2, 30), fs = fs, btype='bandpass')
+# # fnyq = fs/2
+# # N, beta = signal.kaiserord(60.0, 5/fnyq)
+# # taps = signal.firwin(N, 4/fnyq, window=('kaiser', beta))
+# while ix < len(C3):
+# #while ix <= 512*60*10:
+#     ix0 = ix - 2*fs
+#     #pick 30 s window
+#     window = C3[int(ix0):int(ix)]
+#     d = signal.filtfilt(b,a,window)
+#     #d = signal.filtfilt(taps, 1.0, window)
+#     d -= np.median(d)
+#     #plt.plot(d, 'k')
+    
+#     # # median filter
+#     # d = scipy.ndimage.median_filter(d, size=50)
+#     # # savitzky golay filter
+#     # d = hp.smooth_signal(d, sample_rate = fs, window_length=int(fs*1), polyorder=3)
+#     # sin convolution
+#     # d = np.convolve(np.sin(1), d)
+    
+#     # SSD fun
+#     data_wind = data[int(ix0):int(ix),:]
+#     #data_wind = signal.filtfilt(d,c,data_wind, axis=0)
+#     data_wind = signal.filtfilt(b,a,data_wind, axis=0)
+#     data_wind -= np.median(data_wind, 0)
+#     filters, patterns = compute_ssd(data_wind.T, signal_bp=(0.3, 2), use_mne=False,
+#                                     noise_bp=(0.1, 30), noise_bs=(0.1, 30), sf=fs)
+#     epochs_ssd = apply_filters(data_wind.T, filters)
+
+#     # compute amplitude corrected spatial pattern coefficients
+#     std_comp = np.std(epochs_ssd, axis=-1)
+#     weighted_patterns = std_comp * patterns
+
+#     # spatial complexity
+#     metric = compute_sensor_complexity(weighted_patterns, len(weighted_patterns.shape)) #10
+
+#     ix += 2*fs #remove after testing 
+    
+#     # plot patterns and spatial complexity
+#     #plot_patterns(weighted_patterns, epoch, 4)
+#     #yasa.topoplot(pd.Series(metric, epoch.ch_names), cmap='Spectral_r')
+#     yasa.topoplot(pd.Series(weighted_patterns[:,0], ch_names))
+#     yasa.topoplot(pd.Series(metric, ch_names), cmap='Spectral_r')
+    
+#     minamp = min(np.percentile((d[-2* int(sf):]), 10), -35)
+#     crit = min(d[int(-0.02*sf):])
+
+#     # if (min(d[-2:]) < -35) and (new_times[ix] - time_reconstruct[-1] > 3):
+#     if crit < minamp and (new_times[ix] - time_reconstruct[-1] > 4): 
+#         time_reconstruct.append(new_times[ix])
+#         crit_reconstruct.append(crit)
+#         ts_up = new_times[ix] + .475
+#         time_reconstruct_up.append(ts_up)
+#         crit_reconstruct_up.append(d[int(ts_up)])
+#     ix += 2*fs
+    
+#     if len(crit_reconstruct) > 250:
+#         break
+
+# #%%
+# ## Plot results
+# plt.figure()
+# plt.plot(new_times, C3_filt_notch)
+# plt.plot(time_reconstruct[1::], crit_reconstruct[1::], 'xr')
+# plt.plot(time_reconstruct_up[1::], crit_reconstruct_up[1::], 'xg')
+
+# #%%
+# reject_criteria = dict(eeg=550e-6)
+# ts_pinknoise_times_sync = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct]
+# center_crit, _ = yasa.get_centered_indices(data[:, ch_names.index('C3')], 
+#                                            np.asarray(ts_pinknoise_times_sync[1::]), 
+#                                            npts_before = sf*2, npts_after = sf*2)
+# info = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types='eeg')
+# epochs_crit = mne.EpochsArray(np.swapaxes(data[center_crit], 1, 2)/1e6, 
+#                               info, tmin = -2, baseline=(-2, -1), proj=False)
+# epochs_crit.filter(0.5, 2)
+# epochs_crit.set_eeg_reference(['M1','M2'])
+# epochs_crit.drop_bad(reject = reject_criteria) 
+# epochs_crit.set_montage(mne.channels.make_standard_montage('standard_1005'))
+# epochs_crit.plot_image('C3') 
+# epochs_crit.average().plot_joint()
+# mne.preprocessing.compute_current_source_density(epochs_crit).average().plot_joint()
+
+# #%%
+# ## Epoch plotting with MNE
+# # down
+# reject_criteria = dict(eeg=550e-6)
+# ts_pinknoise_times_sync = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct]
+# ts_pinknoise_times_sync_up = [np.argmin(np.abs(new_times - ts)) for ts in time_reconstruct_up]
+
+# center_crit, _ = yasa.get_centered_indices(C3_filt_notch_broad, np.asarray(ts_pinknoise_times_sync[1::]), 
+#                                            npts_before = sf*4, npts_after = sf*4)
+# info = mne.create_info(ch_names=['C3'], sfreq=sf, ch_types='eeg')
+# epochs_crit = mne.EpochsArray(np.expand_dims(C3_filt_notch_broad[center_crit], 1)/1e6, info, tmin = -4, 
+#                               baseline=(-4, -1.5), proj=False)
+# art_idx = art_detect(epochs_crit)
+# epochs_crit.drop(art_idx)
+# epochs_crit.drop_bad(reject = reject_criteria) 
+# # epochs_crit.average(method='mean').plot()
+# epochs_crit.plot_image()
+
+# # up
+# center_up, _ = yasa.get_centered_indices(C3_filt_notch_broad, np.asarray(ts_pinknoise_times_sync_up[1::]), 
+#                                          npts_before = sf*4, npts_after = sf*4)
+# info = mne.create_info(ch_names=1, sfreq=sf, ch_types='eeg')
+# epochs_up = mne.EpochsArray(np.expand_dims(C3_filt_notch_broad[center_up], 1)/1e6, info, tmin = -4, 
+#                             baseline=(-4, -1.5), proj=False)
+# art_idx = art_detect(epochs_up)
+# epochs_up.drop(art_idx)
+# epochs_up.drop_bad(reject = reject_criteria) 
+# # epochs_up.average(method='mean').plot()
+# epochs_up.plot_image()     
+
+# #%%
+# def old_test(data=data, fs=sf, ch_names=ch_names):
+#     mne.set_log_level("CRITICAL")
+#     epochs, epochs_csd = [], []
+#     info = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types='eeg')
+#     info_csd = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types='csd')
+#     info_csd.set_montage(mne.channels.make_standard_montage('standard_1005'))
+#     #crit_reconstruct = [0]; crit_reconstruct_up = [0]
+#     #time_reconstruct = [0]; time_reconstruct_up = [0]
+#     fs = 512
+#     #ix = 2*fs
+#     b,a = signal.butter(2, 4, fs = fs)
+#     #while ix <= 512*60*120:
+#     for ep in neg_peak_idx:
+#         #ix0 = ix - 2*fs
+#         #pick 2s window
+#         #data_wind = data[int(ix0):int(ix),:]
+#         data_wind = data[ep,:]
+#         data_wind = signal.filtfilt(b,a,data_wind, axis=0)
+#         data_wind -= np.median(data_wind, 0)
+#         #data_wind = scipy.signal.detrend(data_wind, axis=-1, type='constant')
+#         data_wind = re_reference(data_wind, ch_names, reference='mastoids')
+#         data_wind_csd = re_reference(data=data_wind/1e3, ch_names=ch_names, 
+#                                      trans_csd=trans_csd, sf=512, reference='csd').T
         
-        # # recompute every 250 ms, the last 2 seconds
-        # ix += int(.5*fs)          
+#         # determine 20th percentile of values for threshold of lowest values
+#         # FLIP BASED ON CONDITION
+#         percentiles = np.percentile(data_wind_csd[int(sf*-.04):,:].mean(0), 20)
+        
+#         ## Ground truth analysis should probably contain interpolated data
+#         epoch = mne.EpochsArray(np.expand_dims(data_wind.T, 0)/1e6, 
+#                                 info, tmin = -1.98, baseline=None)
+#         epoch.set_montage(mne.channels.make_standard_montage('standard_1005'))
+#         epoch = detect_bad_interpolate(epoch, method='NK')
+
+#         # csd epoch
+#         epoch_csd = mne.preprocessing.compute_current_source_density(epoch, lambda2=1e-03, 
+#                                                                      verbose=0)
+        
+#         ##
+#         d = data_wind[:, ch_names.index('C3')]
+#         #plt.plot(d, 'k')       
+#         d_csd = data_wind_csd[:, ch_names.index('C3')]        
+#         #plt.plot(d_csd, 'm')
+#         #corr = np.corrcoef([d[int(-.5*sf):], d_csd[int(-.5*sf):]]).min()
+#         #print(f'Correlation between C3 signals in last 500 ms: {corr.round(3)}')
+        
+#         ## Append data
+#         if d_csd[int(sf*-.04):].mean() < percentiles:
+#             epochs.append(epoch)
+#             epochs_csd.append(epoch_csd)
+    
+#     # grand averages (where C3 is in the 80th percentile or higher) 
+#     gav = mne.grand_average([epochs[i].average() for i in range(len(epochs)-1)])
+#     gav_csd = mne.grand_average([epochs_csd[i].average() for i in range(len(epochs_csd)-1)])
+#     gav.plot()
+#     gav_csd.plot()
+        
+#     # SSD fun
+#     for name, inst in zip(['lm', 'csd'], [data_wind, data_wind_csd]):
+#         print(name)
+#         filters, patterns = compute_ssd(inst.T, signal_bp=(0.3, 2), use_mne=False,
+#                                         noise_bp=(0.1, 30), noise_bs=(0.1, 30), sf=fs)
+#         epochs_ssd = apply_filters(inst.T, filters)
+        
+#         # narrowband filter 
+#         #filtparams = signal.butter(2, 4, fs = sf)        
+#         #epochs_ssd = signal.filtfilt(*filtparams, epochs_ssd, axis=-1)
+#         epochs_ssd = signal.filtfilt(b,a, epochs_ssd, axis=-1)
+    
+#         # compute amplitude corrected spatial pattern coefficients
+#         std_comp = np.std(epochs_ssd, axis=-1)
+#         weighted_patterns = std_comp * patterns
+    
+#         # spatial complexity
+#         metric = compute_sensor_complexity(weighted_patterns, 
+#                                            np.min(weighted_patterns.shape)) #10
+        
+#         # plot spatial complexity
+#         yasa.topoplot(pd.Series(metric, ch_names), cmap='Spectral_r')
+#         # plot voltage in last 20 ms
+#         yasa.topoplot(pd.Series(np.mean(data_wind[int(-0.02*sf):,:],0), ch_names), cmap='Spectral_r')
+#         # plot spatial patterns
+#         yasa.topoplot(pd.Series(weighted_patterns[:,0], ch_names), cmap='Spectral_r')
+#         # correlation between voltage maps and spatial pattern maps
+#         print(f'Correlation between maps is: {np.corrcoef(weighted_patterns[:,0], np.median(data_wind[int(-0.02*sf):,:],0)).min().round(3)}')
+        
+        
+#         # # minamp 
+#         # minamp = min(np.percentile((d[-2* int(sf):]), 10), -35)
+#         # crit = min(d[int(-0.02*sf):])
+        
+#         # minamp_csd = min(np.percentile((d_csd[-2* int(sf):]), 10), -35)
+#         # crit_csd = min(d_csd[int(-0.02*sf):])
+
+#         # if (min(d[-2:]) < -35) and (new_times[ix] - time_reconstruct[-1] > 3):
+#         #if crit < minamp and crit_csd < minamp_csd and (new_times[ix] - time_reconstruct[-1] > 3): 
+#         # if crit_csd < minamp_csd and np.ptp(d_csd) < 500 and (new_times[ix] - time_reconstruct[-1] > 3): 
+#         #     time_reconstruct.append(new_times[ix])
+#         #     crit_reconstruct.append(crit)
+#         #     #ts_up = new_times[ix] + .475
+#         #     #time_reconstruct_up.append(ts_up)
+#         #     #crit_reconstruct_up.append(d[int(ts_up)])
+#         #     #plt.figure()
+#         #     plt.plot(d)
+#         #     #yasa.topoplot(pd.Series(metric, ch_names), cmap='Spectral_r')
+#         #     #yasa.topoplot(pd.Series(np.mean(data_wind[int(-0.02*sf):,:],0), ch_names), cmap='Spectral_r')
+#         #     #yasa.topoplot(pd.Series(weighted_patterns[:,0], ch_names), cmap='Spectral_r', vmax=20)
+#         #     # print(f'Correlation between maps is: {np.corrcoef(weighted_patterns[:,0], np.median(data_wind[int(-0.02*sf):,:],0)).min().round(3)}')
+            
+#         #     if len(time_reconstruct) == 25:
+#         #         break
+        
+#         # # recompute every 250 ms, the last 2 seconds
+#         # ix += int(.5*fs)          
 
 
 

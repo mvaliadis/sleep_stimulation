@@ -32,22 +32,36 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from statsmodels.tools.sm_exceptions import ConvergenceWarning
 import warnings
+from tqdm import tqdm
 from pymer4.utils import get_resource_path
 from pymer4.models import Lmer
 from functools import reduce
+import psutil
+# Import the FOOOF object
+from fooof.objs.utils import combine_fooofs
+from fooof import FOOOF, FOOOFGroup, fit_fooof_3d
+from fooof.plts.spectra import plot_spectrum
+from fooof.plts.annotate import plot_annotated_peak_search
 epo_example_obj = mne.read_epochs('/media/administrator/data/Study_1_data/ex_epo.fif')
-   
+#%matplotlib 
+good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', '886MCPKG', 'A4VCLD2I', 
+             'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 'KEQB5AWM', 
+             'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 'YIOYSRPX', 'EQDORXF6']#, 'IBYYXKMB']
+
 #%%
 ## Step 1 -- Preprocess resting state datasets and save into data structure with epochs for eyes open/eyes closed  
 path = '/media/administrator/data/Study_1_data/Pre_post_data/'
 files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files if 'resting_state' in i])
-for i, files in enumerate(files_list):
+for i, files in enumerate(tqdm(files_list)):
     subj_cond = files.split("/")[-2] + "_" + files.split("/")[-1].split("_")[1] + "_" + files.split("/")[-1].split("_")[-2]
     save_path = '/media/administrator/data/Study_1_data/Pre-processed_data_resting_state/' + subj_cond + '_rs_preprocessed.p'
     print(i, files.split('/')[-2] + '_' + files.split('/')[-1])
     if not os.path.exists(save_path):
-        _pre_process_rs_data(files = files, csd = True, prep_pipeline = False, art_method = 'covar', save = True)
-            
+        if psutil.virtual_memory().percent < 85:
+            _pre_process_rs_data(files = files, csd = True, prep_pipeline = False, art_method = 'covar', save = True)
+        else:
+            break
+        
 #%%
 ## Step 2 -- Load in epoched data and compute connectivity/power analysis/etc.
 path = '/media/administrator/data/Study_1_data/Pre-processed_data_resting_state/'
@@ -101,7 +115,7 @@ def resting_state_power_analysis(path):
             # pre_psd = channel_epoch_psd(epochs_eyes_open_pre, foi=(1, 40), tmin=0, tmax=2,
             #                             session='prepost')
             
-            from mne.time_frequency import psd_multitaper
+            # from mne.time_frequency import psd_multitaper -> deprecated
             bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),(8, 13, 'Alpha'), 
                    (13, 30, 'Beta'), (30, 40, 'Gamma')]
             # Create dataframe 
@@ -109,17 +123,65 @@ def resting_state_power_analysis(path):
                                                         [epochs_eyes_open_pre, epochs_eyes_close_pre],
                                                         ['Open','Close'])):
                 print(idx, pre, post, eyes)
-                spectra_post, freqs_post = psd_multitaper(post, fmin=1, fmax=40,
-                                                          tmin=0, tmax=2)
+                spectra_post, freqs_post = post.compute_psd(method="multitaper", fmin=1, fmax=40,
+                                                            tmin=0, tmax=2).get_data(return_freqs=True)
                 bp_post = yasa.bandpower_from_psd(spectra_post.mean(0), freqs_post, 
                                                   ch_names = post.ch_names[0:64],
                                                   bands=bands, relative=True)
-                spectra_pre, freqs_pre = psd_multitaper(pre, fmin=1, fmax=40,
-                                                        tmin=0, tmax=2)
+                bp_post2 = yasa.bandpower_from_psd(spectra_post.mean(0), freqs_post, 
+                                                   ch_names = post.ch_names[0:64],
+                                                   bands=bands, relative=False)
+                
+                # fooof it!
+                fg = FOOOFGroup(peak_width_limits=[1, 8], min_peak_height=0.1, 
+                                max_n_peaks=6, peak_threshold=1.5)
+                fgs = fit_fooof_3d(fg, freqs_post, spectra_post.mean(0, keepdims=True))[0]
+                peak_fits = []
+                chs = []
+                for idx, f in enumerate(zip(fgs, post.ch_names[0:64])):
+                    #print(idx, f[1])
+                    fooofy = fgs.get_fooof(ind=idx, regenerate=True)
+                    peak_fit = fooofy._peak_fit
+                    peak_fits.append(peak_fit.reshape(1,-1))
+                    chs.append(f[1])
+                    # init_flat_spec = fm.power_spectrum - fm._ap_fit
+                    # plts.plot_spectrum(fm.freqs, fm._peak_fit, color='green', label='Final Periodic Fit')
+                    
+                bp_post3 = yasa.bandpower_from_psd(np.concatenate(peak_fits, 0), 
+                                                   freqs_post, ch_names=chs,
+                                                   bands=bands, relative=True)
+     
+                
+                spectra_pre, freqs_pre = pre.compute_psd(method="multitaper", fmin=1, fmax=40,
+                                                         tmin=0, tmax=2).get_data(return_freqs=True)
                 bp_pre = yasa.bandpower_from_psd(spectra_pre.mean(0), freqs_pre, 
                                                  ch_names = post.ch_names[0:64],
                                                  bands=bands, relative=True)
+                bp_pre2 = yasa.bandpower_from_psd(spectra_pre.mean(0), freqs_pre, 
+                                                  ch_names = post.ch_names[0:64],
+                                                  bands=bands, relative=False)
                 
+                # fooof it!
+                fg = FOOOFGroup(peak_width_limits=[1, 8], min_peak_height=0.1, 
+                                max_n_peaks=6, peak_threshold=1.5)
+                fgs = fit_fooof_3d(fg, freqs_pre, spectra_pre.mean(0, keepdims=True))[0]
+                peak_fits = []
+                chs = []
+                for idx, f in enumerate(zip(fgs, pre.ch_names[0:64])):
+                    #print(idx, f[1])
+                    fooofy = fgs.get_fooof(ind=idx, regenerate=True)
+                    peak_fit = fooofy._peak_fit
+                    peak_fits.append(peak_fit.reshape(1,-1))
+                    chs.append(f[1])
+                    # init_flat_spec = fm.power_spectrum - fm._ap_fit
+                    # plts.plot_spectrum(fm.freqs, fm._peak_fit, color='green', label='Final Periodic Fit')
+                    # report 
+                    
+                bp_pre3 = yasa.bandpower_from_psd(np.concatenate(peak_fits, 0), 
+                                                  freqs_post, ch_names=chs,
+                                                  bands=bands, relative=True)
+                
+                # append results
                 psd_results["Subject"].extend([subjname.split(' ')[0]]*len(bp_pre))
                 psd_results["Night"].extend([night]*len(bp_pre))
                 psd_results["Condition"].extend([cond]*len(bp_pre))
@@ -127,24 +189,34 @@ def resting_state_power_analysis(path):
                 psd_results["Session"].extend([eyes]*len(bp_pre))
                 psd_results["Delta"].extend(bp_post.Delta.to_numpy() - 
                                             bp_pre.Delta.to_numpy())
-                psd_results["Delta_log"].extend(np.log10(bp_post.Delta.to_numpy()) -
-                                                np.log10(bp_pre.Delta.to_numpy()))
+                psd_results["Delta_log"].extend(np.log10(bp_post2.Delta.to_numpy()) -
+                                                np.log10(bp_pre2.Delta.to_numpy()))
+                psd_results["Delta_fooof"].extend(bp_post3.Delta.to_numpy() -
+                                                  bp_pre3.Delta.to_numpy())
                 psd_results["Theta"].extend(bp_post.Theta.to_numpy() - 
                                             bp_pre.Theta.to_numpy())
-                psd_results["Theta_log"].extend(np.log10(bp_post.Theta.to_numpy()) -
-                                                np.log10(bp_pre.Theta.to_numpy()))
+                psd_results["Theta_log"].extend(np.log10(bp_post2.Theta.to_numpy()) -
+                                                np.log10(bp_pre2.Theta.to_numpy()))
+                psd_results["Theta_fooof"].extend(bp_post3.Theta.to_numpy() -
+                                                  bp_pre3.Theta.to_numpy())
                 psd_results["Alpha"].extend(bp_post.Alpha.to_numpy() - 
                                             bp_pre.Alpha.to_numpy())
-                psd_results["Alpha_log"].extend(np.log10(bp_post.Alpha.to_numpy()) -
-                                                np.log10(bp_pre.Alpha.to_numpy()))
+                psd_results["Alpha_log"].extend(np.log10(bp_post2.Alpha.to_numpy()) -
+                                                np.log10(bp_pre2.Alpha.to_numpy()))
+                psd_results["Alpha_fooof"].extend(bp_post3.Alpha.to_numpy() -
+                                                  bp_pre3.Alpha.to_numpy())
                 psd_results["Beta"].extend(bp_post.Beta.to_numpy() - 
                                            bp_pre.Beta.to_numpy())
-                psd_results["Beta_log"].extend(np.log10(bp_post.Beta.to_numpy()) -
-                                               np.log10(bp_pre.Beta.to_numpy()))
+                psd_results["Beta_log"].extend(np.log10(bp_post2.Beta.to_numpy()) -
+                                               np.log10(bp_pre2.Beta.to_numpy()))
+                psd_results["Beta_fooof"].extend(bp_post3.Beta.to_numpy() -
+                                                  bp_pre3.Beta.to_numpy())
                 psd_results["Gamma"].extend(bp_post.Gamma.to_numpy() - 
                                             bp_pre.Gamma.to_numpy())
-                psd_results["Gamma_log"].extend(np.log10(bp_post.Gamma.to_numpy()) -
-                                                np.log10(bp_pre.Gamma.to_numpy()))
+                psd_results["Gamma_log"].extend(np.log10(bp_post2.Gamma.to_numpy()) -
+                                                np.log10(bp_pre2.Gamma.to_numpy()))
+                psd_results["Gamma_fooof"].extend(bp_post3.Gamma.to_numpy() -
+                                                  bp_pre3.Gamma.to_numpy())
 
             
                 # if j == 0 and idx == 0:
@@ -208,8 +280,9 @@ if run == 'yes':
     #df_psd = remove_subs(df_psd)
     df_psd.to_csv(save_path + 'rs_results_psd.csv')
 else:
-    df_psd2 = pd.read_csv(save_path + 'rs_results_psd.csv', index_col=0)
-
+    df_psd = pd.read_csv(save_path + 'rs_results_psd.csv', index_col=0)
+    df_psd = df_psd.loc[df_psd['Subject'].isin(good_subs)]
+    
 #%%
 
 def plot_psd_diff(df_psd):
@@ -232,8 +305,9 @@ def plot_psd_diff(df_psd):
             bp_contrast = bp_contrast.reindex(list(df_psd.Channel.unique()))
                    
             # Create a topomap for the current oscillation band
-            im, cn = mne.viz.plot_topomap(bp_contrast, epo_example_obj.info, cmap='Spectral_r', contours=0,
-                                          axes=axes[idx, ind], show=False, names=df_psd.Channel.unique());
+            im, cn = mne.viz.plot_topomap(bp_contrast, epo_example_obj.info, cmap='Spectral_r', 
+                                          contours=0, axes=axes[idx, ind], 
+                                          show=False, names=None); #df_psd.Channel.unique());
            
             # add color bar
             mne.viz.topomap._add_colorbar(axes[idx, ind], im, cmap = 'Spectral_r', side='right', pad=0.05, 
@@ -246,7 +320,7 @@ def plot_psd_diff(df_psd):
             plt.tight_layout()
             
     # save fig
-    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/Topo_PSD.jpg')
+    plt.savefig('f/media/administrator/data/Study_1_data/Statistics/Resting_state/Topo_PSD.jpg')
   
 
 #%%
@@ -260,84 +334,109 @@ def rs_topo_stats(df_topo, adjacency=None, plot=True,
     mne.set_log_level("CRITICAL")
     info.drop_channels(['EDC_L','ECR_L','FCR_L','FDS_L','ECG',
                         'EDC_R','ECR_R','FCR_R','FDS_R'])
+    for sess in list(df_topo.Session.unique()):        
+        for band in ['Delta','Delta_fooof','Delta_log','Theta','Theta_fooof','Theta_log',
+                     'Alpha','Alpha_fooof','Alpha_log', 'Beta','Beta_fooof', 'Beta_log',
+                     'Gamma', 'Gamma_fooof', 'Gamma_log']:
+            # parse dataframe by condition 
             
-    for band in ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']:
-        # parse dataframe by condition 
+            ### Take only common subjects and convert to numpy accordingly
+            common_subj = reduce(np.intersect1d, [df_topo[df_topo.Condition=='sham'].Subject, 
+                                                  df_topo[df_topo.Condition=='up'].Subject, 
+                                                  df_topo[df_topo.Condition=='down'].Subject])
         
-        ### Take only common subjects and convert to numpy accordingly
-        common_subj = reduce(np.intersect1d, [df_topo[df_topo.Condition=='sham'].Subject, 
-                                              df_topo[df_topo.Condition=='up'].Subject, 
-                                              df_topo[df_topo.Condition=='down'].Subject])
+            common_df = df_topo.loc[df_topo['Subject'].isin(common_subj)]
+            common_df.sort_values(['Condition','Subject'], inplace=True) #Chan too?
+            
+            # parse conditions
+            sham = common_df[np.logical_and(common_df.Condition=='sham', common_df.Session==sess)].fillna(0)
+            up = common_df[np.logical_and(common_df.Condition=='up', common_df.Session==sess)].fillna(0)
+            down = common_df[np.logical_and(common_df.Condition=='down', common_df.Session==sess)].fillna(0)
     
-        common_df = df_topo.loc[df_topo['Subject'].isin(common_subj)]
-        common_df.sort_values(['Condition','Subject'], inplace=True) #Chan too?
+            # create contrast
+            reshape_factor = len(common_df[common_df.Condition=='sham'].Subject.unique()), 1, 64
+            up = up[f'{band}'].to_numpy().reshape(reshape_factor)
+            down = down[f'{band}'].to_numpy().reshape(reshape_factor)
+            sham = sham[f'{band}'].to_numpy().reshape(reshape_factor)
+            contrast = np.concatenate([sham, up, down], 1)
+            
+            def stat_fun(*args):
+                return mne.stats.f_mway_rm(np.swapaxes(args, 0, 0), factor_levels=[3],
+                                           effects='all', return_pvals=False)[0]
         
-        # parse conditions
-        sham = common_df[common_df.Condition=='sham']
-        up = common_df[common_df.Condition=='up']
-        down = common_df[common_df.Condition=='down']
-
-        # create contrast
-        reshape_factor = len(common_df[common_df.Condition=='sham'].Subject.unique()), 1, 64
-        up = up[f'{band}'].to_numpy().reshape(reshape_factor)
-        down = down[f'{band}'].to_numpy().reshape(reshape_factor)
-        sham = sham[f'{band}'].to_numpy().reshape(reshape_factor)
-        contrast = np.concatenate([sham, up, down], 1)
+            adjacency, ch_names = mne.channels.find_ch_adjacency(info.info, None)
+            
+            clus_kwargs = {'n_permutations' : 1024,  # 1000 is the minimum
+                           'threshold' : dict(start=0, step=0.2), # None
+                           'tail' : 1,               # two-tailed test (1 or -1 for one-tailed)
+                           'n_jobs' : -1,            # increase value to speed up computations
+                           'buffer_size' : None,
+                           'out_type' : 'mask',      # returns a mask map instead of indices of sig. points
+                           'seed' : 1503}
+            
+            F_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_test(
+                contrast, stat_fun=None, adjacency=adjacency, **clus_kwargs)
+            
+            good_clusters = np.where(cluster_p_values < .05)[0]
+            mask = cluster_p_values < .05
+            pmin = np.min(cluster_p_values)
+            if len(good_clusters) > 0:
+                sig_chan = np.asarray(ch_names)[good_clusters]
+            else:
+                sig_chan = 'None'
+            
+            print('Min p-val: {}\nSignificant Chans: {}'.format(pmin, sig_chan))
         
-        def stat_fun(*args):
-            return mne.stats.f_mway_rm(np.swapaxes(args, 0, 0), factor_levels=[3],
-                                       effects='all', return_pvals=False)[0]
-    
-        adjacency, ch_names = mne.channels.find_ch_adjacency(info.info, None)
-        
-        clus_kwargs = {'n_permutations' : 1024,  # 1000 is the minimum
-                       'threshold' : dict(start=0, step=0.2), # None
-                       'tail' : 1,               # two-tailed test (1 or -1 for one-tailed)
-                       'n_jobs' : -1,            # increase value to speed up computations
-                       'buffer_size' : None,
-                       'out_type' : 'mask',      # returns a mask map instead of indices of sig. points
-                       'seed' : 1503}
-        
-        F_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_test(
-            contrast, stat_fun=stat_fun, adjacency=adjacency, **clus_kwargs)
-        
-        good_clusters = np.where(cluster_p_values < .05)[0]
-        mask = cluster_p_values < .05
-        pmin = np.min(cluster_p_values)
-        if len(good_clusters) > 0:
-            sig_chan = ch_names[good_clusters]
-        else:
-            sig_chan = 'None'
-        
-        print('Min p-val: {}\nSignificant Chans: {}'.format(pmin, sig_chan))
-    
-        # plot t-contrast with significance mask
-        if plot:
-            fig, ax = plt.subplots(figsize=(6,4))
-            im, _ = mne.viz.plot_topomap(F_obs.squeeze(), pos=info.info, 
-                                         mask=mask, axes=ax, show=0, 
-                                         cmap='Spectral_r', names=ch_names, 
-                                         show_names=False, contours = 0,
-                                         mask_params=dict(markersize=10, markerfacecolor='y'))
-            cbar = fig.colorbar(im, ax=ax)   
-            cbar.ax.set_ylabel('f-stat',rotation=270)
-            ax.set_title(f'Resting State Power - {band} Power')
-            plt.tight_layout()
-            plt.show()
+            # plot t-contrast with significance mask
+            if plot:
+                # fig, ax = plt.subplots(figsize=(6,4))
+                # im, _ = mne.viz.plot_topomap(F_obs.squeeze(), pos=info.info, 
+                #                              mask=mask, axes=ax, show=0, cmap='RdBu_r',
+                #                              names=ch_names, show_names=False, contours = 0,
+                #                              mask_params=dict(markersize=8, markerfacecolor='y'))
+                # cbar = fig.colorbar(im, ax=ax)   
+                # cbar.ax.set_ylabel('f-stat',rotation=270)
+                # ax.set_title(f'Resting State Power - {band} Power')
+                # plt.tight_layout()
+                # plt.show()
+                
+                fig, axs = plt.subplots(1, 4, figsize=(15, 6))
+                for j, (ax, label) in enumerate(zip(axs,['sham', 'up','down'])):
+                    if j < 3:
+                        im1, _ = mne.viz.plot_topomap(contrast[:,j,:].mean(0), 
+                                                      pos=info.info,
+                                                      axes=ax, show=0, cmap='RdBu_r',
+                                                      names=None, show_names=False)
+                        ax.set_title(label)
+                        cbar1 = fig.colorbar(im1, fraction=0.05, ax=ax)   
+                        cbar1.ax.set_ylabel('uV', rotation=270)
+                        plt.tight_layout()
+                    
+                im2, _ = mne.viz.plot_topomap(F_obs.squeeze(), 
+                                              pos=info.info, mask=mask,
+                                              axes=axs[-1], show=0, cmap='RdBu_r',
+                                              names=None, show_names=False, 
+                                              mask_params=dict(markersize=6, markerfacecolor='y'))
+                axs[-1].set_title('Spatial Cluster Test')
+                cbar2 = fig.colorbar(im2, fraction=0.05, ax=axs[-1])   
+                cbar2.ax.set_ylabel('f-stat', rotation=270)
+                
+                plt.suptitle(f'Eyes {sess} {band} stats')
+                plt.tight_layout()
             
 #%%
 sns.set_theme(color_codes=True)
 # df_psd.dropna(inplace=True) 
-for i, band in enumerate(['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma']): 
+for i, band in enumerate(['Delta_fooof', 'Theta_fooof', 'Alpha_fooof', 'Beta_fooof', 'Gamma_fooof']): 
     print(f'Running LMM for frequency band: {band}')
     
-    model = Lmer(f"{band} ~ Condition*Channel + (1|Subject)", 
+    model = Lmer(f"{band} ~ Condition*Channel + (Condition+1|Subject)", 
                  data=df_psd)
     
     # Using dummy-coding; suppress summary output
     model.fit(factors={"Condition": ["sham", "up", "down"],
                        "Channel" : list(df_psd.Channel.unique())},
-              ordered=True, summarize=True)
+              ordered=True, summarize=False)
     
     # Get ANOVA table, but force orthogonality for valid SS III inferences
     # In this case the data is unbalaced, otherwise nothing changes

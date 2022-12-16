@@ -525,7 +525,7 @@ if __name__ == '__main__':
     subject_pre_post_rev = subject_pre_post.groupby(['Subject','Condition','Session','Protocol']).mean().reset_index()
     axs = sns.catplot(data = subject_pre_post_rev, x='Protocol', y='logVpp', 
                       hue='Session', col='Condition', kind='point', join=False, 
-                      estimator=trim_mean, ci=95, hue_order = ['pre','post'])
+                      ci=95, hue_order = ['pre','post']) #estimator=trim_mean, 
     
     down_y_points_post = np.mean([axs.axes_dict['down'].get_lines()[i].get_ydata() for i in range(6)], axis=1)
     down_y_points_pre = np.mean([axs.axes_dict['down'].get_lines()[i].get_ydata() for i in range(6,12)], axis=1)

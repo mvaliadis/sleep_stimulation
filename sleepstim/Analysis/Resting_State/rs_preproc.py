@@ -30,6 +30,7 @@ import statsmodels
 # import easyEEG.structure as eeg_stats
 # from PCIst.PCIst import pci_st
 from meegkit.detrend import detrend
+import neurokit2 as nk
 import pyprep
 from mne.preprocessing import ICA
 from pyriemann.estimation import Covariances, Shrinkage
@@ -119,38 +120,39 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
     # 4. maximum gradient
     # 5. Zero-Crossing Rate 
     # 6. Kurtosis 
-    EEG_qi = bad_channel_detection.qc_calcEQI(data_filt[:, eeg_index].T, sf)
+    # EEG_qi = bad_channel_detection.qc_calcEQI(data_filt[:, eeg_index].T, sf)
     
-    # # plot metrics 
-    # plt.hist(EEG_qi[0,:,:],histtype="stepfilled", bins=25, alpha=0.8)
-    # plt.legend(ch_names[0:64],ncol=3, fontsize='x-small', bbox_to_anchor=(0.75, 0.5),loc='center left')
+    # # # plot metrics 
+    # # plt.hist(EEG_qi.mean(-1),histtype="stepfilled", bins=25, alpha=0.8)
+    # # plt.legend(ch_names[0:64],ncol=3, fontsize='x-small', bbox_to_anchor=(0.75, 0.5),loc='center left')
     
-    # create dataframe for EQI results 
-    eqi_lab = ['avgspec_1-48','line_noise','root_mean_sq','max_gradient','zero-crossing_rate','kurtosis']
-    df_comb = [pd.DataFrame(data = EEG_qi[:,:,i].T, columns = eqi_lab, index = ch_names[0:64]) for i in 
-               range(EEG_qi.shape[-1])]
-    for i in range(EEG_qi.shape[-1]): df_comb[i]['Epoch'] = i
-    df_comb2 = pd.concat(df_comb)
-    ilf = IsolationForest(contamination='auto', max_samples='auto',
-                          verbose=0, random_state=42)
-    good = ilf.fit_predict(df_comb2.drop(['Epoch'], axis=1))
-    good[good == -1] = 0
-    df_comb2['Isolation forest score'] = good
+    # # create dataframe for EQI results 
+    # eqi_lab = ['avgspec_1-48','line_noise','root_mean_sq','max_gradient','zero-crossing_rate','kurtosis']
+    # df_comb = [pd.DataFrame(data = EEG_qi[:,:,i].T, columns = eqi_lab, index = ch_names[0:64]) for i in 
+    #            range(EEG_qi.shape[-1])]
+    # for i in range(EEG_qi.shape[-1]): df_comb[i]['Epoch'] = i
+    # df_comb2 = pd.concat(df_comb)
+    # ilf = IsolationForest(contamination='auto', max_samples='auto',
+    #                       verbose=0, random_state=42)
+    # good = ilf.fit_predict(df_comb2.drop(['Epoch'], axis=1))
+    # good[good == -1] = 0
+    # df_comb2['Isolation forest score'] = good
     
-    # isolation forest scores by channel
-    df_if_scores = pd.DataFrame([df_comb2.loc[(ch_names[i])]['Isolation forest score'].value_counts(normalize=True) 
-                                 for i in range(len(ch_names[0:64]))])
-    df_if_scores['Channel'] = ch_names[0:64]
-    ch_to_interp = df_if_scores['Channel'][df_if_scores[0] > 0.25].to_list()
+    # # isolation forest scores by channel
+    # df_if_scores = pd.DataFrame([df_comb2.loc[(ch_names[i])]['Isolation forest score'].value_counts(normalize=True) 
+    #                              for i in range(len(ch_names[0:64]))])
+    # df_if_scores['Channel'] = ch_names[0:64]
+    # ch_to_interp = df_if_scores['Channel'][df_if_scores[0] > 0.25].to_list()
     
-    # log bad channels
-    out.write(f'The dataset: {subj_cond} has the following bad channels: {ch_to_interp}' + '\n')
-        
     ## bad channel detection and interpolation
     mne_info = mne.create_info(ch_names=ch_names, sfreq=sf, ch_types=ch_types)
     raw = mne.io.RawArray(data_filt.T/1e6, mne_info) 
     raw = raw.set_montage(mne.channels.make_standard_montage('standard_1005')) 
-    raw.info['bads'] = ch_to_interp
+    bads, _ = nk.eeg_badchannels(raw, 
+                                 distance_threshold=0.95, show=False)
+    # log bad channels
+    out.write(f'The dataset: {subj_cond} has the following bad channels: {bads}' + '\n')
+    raw.info['bads'] = bads
     raw = raw.interpolate_bads()
     
     ## PREP pipeline bad channel detection, interpolation and subsequent robust rereferencing 
@@ -161,10 +163,14 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
     
         raw_ref = pyprep.reference.Reference(raw, prep_params, ransac=False)
         raw_ref.perform_reference()
+    else:
+        raw.set_eeg_reference()
        
     ## Perform ICA to remove eye blinks/muscle artifacts
     # Calculate ICA with faster picard method which converges faster than fastICA or infomax methods
-    ica = ICA(n_components=15, method='picard', random_state=42, fit_params = dict(ortho=True, extended=True))
+    ica = ICA(n_components=32, method='picard', random_state=42,
+              fit_params=dict(ortho=False, extended=True)) #Infomax
+              #fit_params = dict(ortho=True, extended=True)) #FastICA
     print('\n***** Performing ICA ...\n')
     ica.fit(raw, picks='eeg')
     
@@ -182,18 +188,18 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
     #ica.detect_artifacts(raw) -> now deprecated in mne 
      
     # Plot sources separated by ICA
-    ic_source_plot = ica.plot_sources(raw, show_scrollbars=True, title='EEG sources estimated by ICA')
-    ic_source_plot.savefig(fig_path + subj_cond + '_ic_component_source.png')
+    #ic_source_plot = ica.plot_sources(raw, show_scrollbars=True, title='EEG sources estimated by ICA')
+    #ic_source_plot.savefig(fig_path + subj_cond + '_ic_component_source.png')
 
     # Plot topographic maps of sources separated by ICA
-    ic_comp_plot = ica.plot_components(title='Topographic maps of EEG sources estimated by ICA')
-    ic_comp_plot[0].savefig(fig_path + subj_cond + '_ic_topo_plot.png')
+    #ic_comp_plot = ica.plot_components(title='Topographic maps of EEG sources estimated by ICA')
+    #ic_comp_plot[0].savefig(fig_path + subj_cond + '_ic_topo_plot.png')
     
     # components to exclude 
     ica.exclude = exclude_idx + ecg_idx
      
     # save ICA object
-    ica.save(ica_path + subj_cond + '_ica_obj.fif')
+    ica.save(ica_path + subj_cond + '_ica.fif', overwrite=True)
     
     # log excluded ICA components
     out.write(f'The dataset: {subj_cond} had the following components removed: {ica.exclude}' + '\n')
@@ -207,6 +213,7 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
     
     # Apply ICA
     fit_ica = ica.apply(raw)
+    del ica, raw, stream_dict, data_filt, data, data_eeg, data_emg1, data_emg2, data_ecg
     
     ##  Extract data and compute Surface Laplacian transform to reduce affect of volume conduction
     if csd:
@@ -268,10 +275,10 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
     fit_ica_annot = fit_ica.copy().set_annotations(annot)
     
     # plot to confirm 
-    bad_epochs_plot = fit_ica_annot.plot(duration=max(fit_ica.get_data().shape), start=0, color={'eeg': 'steelblue'},
+    bad_epochs_plot = fit_ica_annot.plot(duration=max(fit_ica.get_data().shape), start=0, color={'csd': 'steelblue'},
                                          n_channels = 64, title='Cleaned Signal with Artifacted Epochs labelled', 
                                          show_scalebars=True, show = False)
-    bad_epochs_plot.savefig(fig_path + subj_cond + '_cleaned_signal.png')
+    bad_epochs_plot.grab().save(fig_path + subj_cond + '_cleaned_signal.png')
     
     # extract 
     if csd:
@@ -336,7 +343,7 @@ def _pre_process_rs_data(files, csd = True, prep_pipeline = False, art_method = 
         
     # create data objects
     RS_data_struct = Resting_State_Data_Struct(data_eyes_open, data_eyes_close, breath_data, breath_times,
-                                               sf, eego_times, ch_names, ch_types, ch_to_interp, 
+                                               sf, eego_times, ch_names, ch_types, bads, 
                                                eeg_index, emg_index, ecg_idx, fit_ica_annot.info)
       
     # close log file
@@ -369,6 +376,8 @@ def subject_cond_parser(file, study_phase='resting state'):
         sc = file.split('/')[-1].split('_')[0] + '_' + str(int(file.split('/')[-1].split('_')[1]) - 1)
     elif study_phase=='tms':
         sc = file.split('/')[-2] + '_' + str(int(file.split('/')[-1].split('_')[1]))
+    elif study_phase=='classifier':
+        sc = file.split('_')[0] + '_' + str(int(file.split('_')[1])-1)
     index_name = list(subj_cond[:,0]).index(sc.split('_')[0])
     cond = int(subj_cond[index_name,1::][int(sc[-1])])
     # true condition night name

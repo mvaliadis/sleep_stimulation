@@ -1335,6 +1335,10 @@ def group_so_sp_analysis():
 # load_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/TFR.p'
 # tfr_df = pickle.load(open(load_path, "rb"))
 
+good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', '886MCPKG', 'A4VCLD2I', 
+             'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 'KEQB5AWM', 
+             'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 'YIOYSRPX', 'EQDORXF6']
+    
 def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
     double_contrast_df = pd.DataFrame(columns=list(tfr_df.columns)[1:])
     for contrast in zip(['up', 'down'], ['sham', 'sham down']):
@@ -1344,12 +1348,13 @@ def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
         for sub in df.Subject.unique():
             count = len(df[df.Subject==sub])
             stimuli = [df[df.Subject==sub].reset_index()['Evoked'][i].nave for i in range(len(df[df.Subject==sub]))]
-            t_stimuli = [i for i in stimuli if i >= 30]
+            t_stimuli = [i for i in stimuli if i >= 25]
             temp_data = (df[df.Subject==sub].reset_index()\
                          ['Evoked'][0].copy().pick('eeg').data*1e6).squeeze()
             if count == 2 and len(t_stimuli) == 2: # and np.ptp(temp_data) > 30:
                 good_subs.append(sub)
                 common_df = df.loc[df['Subject'].isin(good_subs)]
+                #print(f'Included Subjects: {sub}')
             else:
                 print(f'Excluded Subjects: {sub}')
                 
@@ -1376,8 +1381,8 @@ def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
         vmin=-.1; vmax=.6
         # vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
         # norm = Normalize(vmin=vmin, vmax=vmax)
-        CM = axs[0].pcolormesh(times, tfr_stim.freqs, Sxx_.data.mean(0).squeeze(), shading='gouraud', 
-                               cmap='Spectral_r', rasterized = True, #norm = norm, 
+        CM = axs[0].pcolormesh(times, tfr_stim.freqs, Sxx_.data.mean(0).squeeze(), 
+                               shading='gouraud', cmap='Spectral_r', rasterized = True, #norm = norm, 
                                vmin=vmin, vmax=vmax, antialiased=True)
         axs[0].set_ylabel('Frequency (Hz)')
         axs[1].set_title("\u0394" + f' Average Evoked Response (uV)')

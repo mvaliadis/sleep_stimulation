@@ -52,15 +52,24 @@ def classifier_validation(session='adaption'):
         data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption_classifier_validation'
         hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Adaption/'
         new_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/Adaption/'
+        hypno_path2 = list()
     elif session == 'experimental':
         data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation'
         hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/'
         new_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/Experimental/'
+        hypno_path2 = '/media/administrator/data/Study_1_data/Pre-processed_data/EDFs/Auto_hypnograms/'
     accArrays = [] 
-    exist_exp_files, exist_hyp_files = check_match_data_hypno_elements(data_path, hypno_path)
+    exist_exp_files, exist_hyp_files = check_match_data_hypno_elements(data_path, hypno_path, hypno_path2)
     for idx, (fname, hypno_files) in enumerate(zip(exist_exp_files, exist_hyp_files)):
         print(idx, fname, hypno_files)
         Data = load_preprocessed_data(data_path + '/' + fname)[0]
+        # parse items for later
+        subj = fname.split('_')[0]
+        from sleepstim.Analysis.Resting_State.rs_preproc import subject_cond_parser
+        if fname.split('_')[1] != 'adaption':            
+            cond = subject_cond_parser(fname, study_phase='classifier')
+        else:
+            cond = 'adaption'
         # epoch data first
         index = np.r_[Data.chans.index('C3'), Data.chans.index('Cz'), Data.chans.index('C4'), 
                       Data.chans.index('EOG_L'), Data.chans.index('EOG_R'), Data.chans.index('EMG_L'), 
@@ -70,8 +79,11 @@ def classifier_validation(session='adaption'):
         _, epochs = yasa.sliding_window(data.T, sf=Data.sfreq, window=30)
         
         # 30s per stage hypnogram
-        hypnogram = unravel_hypnogram_visbrain(hypno_path + hypno_files, epochs)
-         
+        try:
+            hypnogram = unravel_hypnogram_visbrain(hypno_path + hypno_files, epochs)
+        except:
+            hypnogram = np.load(hypno_path2 + hypno_files)
+            
         # unsampled hypnogram to data
         #hypnogram = Data.hypno[::Data.sfreq*30][:epochs.shape[0]]
         
@@ -104,98 +116,102 @@ def classifier_validation(session='adaption'):
                                 
         # predict based on online classification selection
         y_pred1 = rf1.predict(x1)
-        y_pred1_mf = scipy.ndimage.median_filter(y_pred1, size=10)
-        y_score1 = rf1.predict_proba(x1) 
-        y_pred2 = rf2.predict(x2)
-        y_pred2_mf = scipy.ndimage.median_filter(y_pred2, size=10)
-        y_score2 = rf2.predict_proba(x2) 
-        y_pred3 = rf3.predict(x3)
-        y_pred3_mf = scipy.ndimage.median_filter(y_pred3, size=10)
-        y_score3 = rf3.predict_proba(x3) 
-        y_pred4 = rf4.predict(x4)
-        y_pred4_mf = scipy.ndimage.median_filter(y_pred4, size=10)
-        y_score4 = rf4.predict_proba(x4) 
-        y_pred5 = rf5.predict(x5)
-        y_pred5_mf = scipy.ndimage.median_filter(y_pred5, size=10)
-        y_score5 = rf5.predict_proba(x5) 
-        y_pred6 = rf6.predict(x6)
-        y_pred6_mf = scipy.ndimage.median_filter(y_pred6, size=10)
-        y_score6 = rf6.predict_proba(x6) 
-        
-        
-        # yasa classification
-        info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)
-        raw = mne.io.RawArray(Data.data.T/1e6, info)
-        # raw = mne.set_bipolar_reference(raw, 'EOG_L', 'EOG_R')
-        # raw = mne.set_bipolar_reference(raw, 'EMG_L', 'EMG_R')
-        sls = yasa.SleepStaging(raw, eeg_name="Cz", eog_name="EOG_L", emg_name="EMG_L")
-        y_pred_yasa = yasa.hypno_str_to_int(sls.predict())
-        yasa_score = sls.predict_proba().to_numpy().round(2)
-        yasa_pred_mf = scipy.ndimage.median_filter(y_pred_yasa, size=10)
-        
-        # Sleep stage names
-        event_id ={'Wake':0,
-                   'Stage 1':1,
-                   'Stage 2':2,
-                   'Stage 3':3,
-                   'REM':4}
-        target_names=event_id.keys()
-        
-        # Prediction model key
-        model_id ={'y_pred1':'2 EEG, 1 EOG, 1 EMG',
-                   'y_pred1 med':'2 EEG, 1 EOG, 1 EMG',
-                   'y_pred2':'1 EEG, 1 EOG, 1 EMG',
-                   'y_pred2 med':'1 EEG, 1 EOG, 1 EMG',
-                   'y_pred3':'2 EEG, 1 EOG',
-                   'y_pred3 med':'2 EEG, 1 EOG',
-                   'y_pred4':'2 EEG, 1 EMG',
-                   'y_pred4 med':'2 EEG, 1 EMG',
-                   'y_pred5':'2 EEG',
-                   'y_pred5 med':'1 EEG',
-                   'y_pred6':'1 EEG',
-                   'y_pred6 med':'1 EEG',
-                   'y_pred_yasa': '1 EEG, 1 EMG, 1 EOG',
-                   'y_pred_yasa med': '1 EEG, 1 EMG, 1 EOG'}
-        model_names=model_id.keys()
-        
-        # Current hypnogram becomes test
-        y_test = hypnogram
-        
-        # accuracy report, confusion matrix, classification reports
-        y_preds = (y_pred1, y_pred1_mf, y_pred2, y_pred2_mf, y_pred3, y_pred3_mf, y_pred4, y_pred4_mf, 
-                   y_pred5, y_pred5_mf, y_pred6, y_pred6_mf, y_pred_yasa, yasa_pred_mf)
-        y_scores = (y_score1, y_score1, y_score2, y_score2, y_score3, y_score3, y_score4, y_score4, 
-                    y_score5, y_score5, y_score6, y_score6, yasa_score, yasa_score)
-        for idx, (y_pred, y_score) in enumerate(zip(y_preds, y_scores)):
-            acc = accuracy_score(y_test, y_pred)
-            print("Accuracy score: {}".format(acc))
-            confusion = confusion_matrix(y_test, y_pred)
-            # print(confusion_matrix(y_test, y_pred))
-            if len(np.unique(y_pred)) == 5:
-                report = classification_report(y_test, y_pred, target_names=event_id.keys())
-                print(classification_report(y_test, y_pred, target_names=event_id.keys()))
-            else:
-                pass
+        if len(y_pred1) == len(hypnogram):
+            y_pred1_mf = scipy.ndimage.median_filter(y_pred1, size=10)
+            y_score1 = rf1.predict_proba(x1) 
+            y_pred2 = rf2.predict(x2)
+            y_pred2_mf = scipy.ndimage.median_filter(y_pred2, size=10)
+            y_score2 = rf2.predict_proba(x2) 
+            y_pred3 = rf3.predict(x3)
+            y_pred3_mf = scipy.ndimage.median_filter(y_pred3, size=10)
+            y_score3 = rf3.predict_proba(x3) 
+            y_pred4 = rf4.predict(x4)
+            y_pred4_mf = scipy.ndimage.median_filter(y_pred4, size=10)
+            y_score4 = rf4.predict_proba(x4) 
+            y_pred5 = rf5.predict(x5)
+            y_pred5_mf = scipy.ndimage.median_filter(y_pred5, size=10)
+            y_score5 = rf5.predict_proba(x5) 
+            y_pred6 = rf6.predict(x6)
+            y_pred6_mf = scipy.ndimage.median_filter(y_pred6, size=10)
+            y_score6 = rf6.predict_proba(x6) 
             
-            cm = confusion_matrix(y_test, y_pred, normalize='true')
-            np.set_printoptions(precision=2)
-            print(f'Confusion matrix: \n {cm}' + '\n')
             
-            # Compute interrater reliability
-            inter_agreement = cohen_kappa_score(y_test, y_pred).round(2)
-            print(f'The inter-rate agreement is K = {inter_agreement}' + '\n')
-              
-            accArrays.append([y_test, y_pred, y_score, inter_agreement, idx])
+            # yasa classification
+            info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)
+            raw = mne.io.RawArray(Data.data.T/1e6, info)
+            # raw = mne.set_bipolar_reference(raw, 'EOG_L', 'EOG_R')
+            # raw = mne.set_bipolar_reference(raw, 'EMG_L', 'EMG_R')
+            sls = yasa.SleepStaging(raw, eeg_name="Cz", eog_name="EOG_L", emg_name="EMG_L")
+            y_pred_yasa = yasa.hypno_str_to_int(sls.predict())
+            yasa_score = sls.predict_proba().to_numpy().round(2)
+            yasa_pred_mf = scipy.ndimage.median_filter(y_pred_yasa, size=10)
             
-            # plt.figure()
-            # plot_confusion_matrix(path = new_path, cm=cm, target_names=target_names, title=f'Confusion matrix - {"_".join(fname.split("_")[0:2])} - {list(model_id.values())[idx]}', save=True, save_name = list(model_id)[idx] + "_".join(fname.split("_")[0:2])
-            # plot_multiclass_ROC(level = 'subject', path = new_path, y_test_all = y_test, y_score_all = y_score, save_name = list(model_id)[idx] + "_".join(fname.split("_")[0:2]))
-            # plt.close()
-            # sns.heatmap(cm, cmap=plt.cm.Blues,square=True, annot=True, cbar=True)
-            # plt.xlabel('predicted value')
-            # plt.ylabel('true value');
+            # Sleep stage names
+            event_id ={'Wake':0,
+                       'Stage 1':1,
+                       'Stage 2':2,
+                       'Stage 3':3,
+                       'REM':4}
+            target_names=event_id.keys()
+            
+            # Prediction model key
+            model_id ={'y_pred1':'2 EEG, 1 EOG, 1 EMG',
+                       'y_pred1 med':'2 EEG, 1 EOG, 1 EMG',
+                       'y_pred2':'1 EEG, 1 EOG, 1 EMG',
+                       'y_pred2 med':'1 EEG, 1 EOG, 1 EMG',
+                       'y_pred3':'2 EEG, 1 EOG',
+                       'y_pred3 med':'2 EEG, 1 EOG',
+                       'y_pred4':'2 EEG, 1 EMG',
+                       'y_pred4 med':'2 EEG, 1 EMG',
+                       'y_pred5':'2 EEG',
+                       'y_pred5 med':'1 EEG',
+                       'y_pred6':'1 EEG',
+                       'y_pred6 med':'1 EEG',
+                       'y_pred_yasa': '1 EEG, 1 EMG, 1 EOG',
+                       'y_pred_yasa med': '1 EEG, 1 EMG, 1 EOG'}
+            model_names=model_id.keys()
+            
+            # Current hypnogram becomes test
+            y_test = hypnogram
+            
+            # accuracy report, confusion matrix, classification reports
+            y_preds = (y_pred1, y_pred1_mf, y_pred2, y_pred2_mf, y_pred3, y_pred3_mf, y_pred4, y_pred4_mf, 
+                       y_pred5, y_pred5_mf, y_pred6, y_pred6_mf, y_pred_yasa, yasa_pred_mf)
+            y_scores = (y_score1, y_score1, y_score2, y_score2, y_score3, y_score3, y_score4, y_score4, 
+                        y_score5, y_score5, y_score6, y_score6, yasa_score, yasa_score)
+            for idx, (y_pred, y_score) in enumerate(zip(y_preds, y_scores)):
+                acc = accuracy_score(y_test, y_pred)
+                print("Accuracy score: {}".format(acc))
+                confusion = confusion_matrix(y_test, y_pred)
+                # print(confusion_matrix(y_test, y_pred))
+                if len(np.unique(y_pred)) == 5:
+                    report = classification_report(y_test, y_pred, target_names=event_id.keys())
+                    print(classification_report(y_test, y_pred, target_names=event_id.keys()))
+                else:
+                    pass
+                
+                cm = confusion_matrix(y_test, y_pred, normalize='true')
+                np.set_printoptions(precision=2)
+                print(f'Confusion matrix: \n {cm}' + '\n')
+                
+                # Compute interrater reliability
+                inter_agreement = cohen_kappa_score(y_test, y_pred).round(2)
+                print(f'The inter-rate agreement is K = {inter_agreement}' + '\n')
+                  
+                accArrays.append([subj, cond, y_test, y_pred, 
+                                  y_score, inter_agreement, idx])
+                
+                # plt.figure()
+                # plot_confusion_matrix(path = new_path, cm=cm, target_names=target_names, title=f'Confusion matrix - {"_".join(fname.split("_")[0:2])} - {list(model_id.values())[idx]}', save=True, 
+                #                       save_name = list(model_id)[idx] + "_".join(fname.split("_")[0:2]))
+                # plot_multiclass_ROC(level = 'subject', path = new_path, y_test_all = y_test, y_score_all = y_score, save_name = list(model_id)[idx] + "_".join(fname.split("_")[0:2]))
+                # plt.close()
+                # sns.heatmap(cm, cmap=plt.cm.Blues,square=True, annot=True, cbar=True)
+                # plt.xlabel('predicted value')
+                # plt.ylabel('true value');
             
     return accArrays
+
 
 # Prediction model key
 model_id ={'y_pred1':'2 EEG, 1 EOG, 1 EMG',
@@ -214,20 +230,24 @@ model_id ={'y_pred1':'2 EEG, 1 EOG, 1 EMG',
            'y_pred_yasa med': '1 EEG, 1 EMG, 1 EOG'}
 
 event_id ={'Wake':0,
-    'Stage 1':1,
-    'Stage 2':2,
-    'Stage 3':3,
-    'REM':4}
+           'Stage 1':1,
+           'Stage 2':2,
+           'Stage 3':3,
+           'REM':4}
 target_names=event_id.keys()
         
 #%% 
 
 run = input('Do you wish to restart the classifier validation analysis? ')
 if run == 'yes':
-    df_adaption = pd.DataFrame(classifier_validation(session='adaption'), columns=['Test hypnograms','Pred hypnograms','Pred probabilities','Cohens Kappa','model idx'])
-    df_experimental = pd.DataFrame(classifier_validation(session='experimental'), columns=['Test hypnograms','Pred hypnograms','Pred probabilities','Cohens Kappa','model idx'])
+    df_adaption = pd.DataFrame(classifier_validation(session='adaption'), 
+                               columns=['Subject','Condition','Test hypnograms','Pred hypnograms',
+                                         'Pred probabilities','Cohens Kappa','model idx'])
+    df_experimental = pd.DataFrame(classifier_validation(session='experimental'), 
+                                   columns=['Subject','Condition','Test hypnograms','Pred hypnograms',
+                                            'Pred probabilities','Cohens Kappa','model idx'])
     df = pd.concat([df_adaption, df_experimental])
-    save_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results.p'
+    save_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_.p'
     pickle.dump(df, open(save_path, "wb"))  
 else:
     df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results.p', 'rb'))
@@ -256,6 +276,7 @@ def group_classification_validation(df, model_id, event_id, target_names):
        
     
     for idx, (y_pred_all, y_test_all, y_score_all, y_cohen_k_all) in enumerate(zip(y_preds_all, y_tests_all, y_scores_all, y_cohen_ks_all)):    
+        print("Model: {}".format(model_id[list(model_id)[idx]]))
         acc = accuracy_score(y_test_all, y_pred_all)
         print("Accuracy score: {}".format(acc))
         confusion = confusion_matrix(y_test_all, y_pred_all)
@@ -267,7 +288,7 @@ def group_classification_validation(df, model_id, event_id, target_names):
         print(f'Confusion matrix: \n {cm}' + '\n')
         
         ############## - compute over [] - #############
-        # import scikits.bootstraps as bootstraps
+        # import scikits.bootstrap as bootstrap
         # CI = bootstrap.ci
         #inter_agreement = df.groupby('Cohens Kappa').apply(lambda x:bootstrap.ci(data=x, statfunction=scipy.mean)).round(2)
         inter_agreement = np.nanmean(y_cohen_k_all)
@@ -284,18 +305,20 @@ def group_classification_validation(df, model_id, event_id, target_names):
         plt.ylabel('True label')
         plt.xticks(rotation=45)
         plt.yticks(rotation=360)
-        plt.tight_layout()
         plt.title(f'Confusion matrix - All Subjects - {list(model_id.values())[idx]}')
+        plt.tight_layout()
         plt.savefig(new_path + f"confusion_matrix_{list(model_id)[idx] + '_all_subj'}")
         
-        
-        sns.violinplot(x = 'model idx', y = 'Cohens Kappa', data = df, cut=1)
-        plt.title('Inter-rater reliability of RF models')
-        sns.despine()
-        plt.savefig(new_path + 'cohens_kappa_all_models.png')
-        
-        plt.close('all')
+    plt.close('all')
+    
+    sns.violinplot(x = 'model idx', y = 'Cohens Kappa', data = df, cut=1)
+    plt.title('Inter-rater reliability of RF models')
+    sns.despine()
+    plt.savefig(new_path + 'cohens_kappa_all_models.png')
+    
+    plt.close('all')
         
 
 #%%
-group_classification_validation(df, model_id, event_id, target_names)
+exp_df = df[df.Condition != 'adaption'].reset_index(drop=True)
+group_classification_validation(exp_df, model_id, event_id, target_names)

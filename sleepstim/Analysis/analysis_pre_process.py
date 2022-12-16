@@ -614,9 +614,12 @@ def check_file_exists(target_file_path):
         return True
 
 #%%
-def check_match_data_hypno_elements(data_path, hypno_path):
+def check_match_data_hypno_elements(data_path, hypno_path, hypno_path2):
     data_elem = sorted(os.listdir(data_path))
-    hypno_elem = sorted(os.listdir(hypno_path))
+    try:
+        hypno_elem = sorted(os.listdir(hypno_path)) + sorted(os.listdir(hypno_path2))
+    except:
+        hypno_elem = sorted(os.listdir(hypno_path))
     all_elem = np.asarray([(x,y) for x in data_elem for y in hypno_elem])
     ################### -- WORKS! -- ###################  
     exist = [elem[0].split('_')[0] + '_' + elem[0].split('_')[1] + '_' + elem[0].split('_')[-1].split('.')[0] == 
