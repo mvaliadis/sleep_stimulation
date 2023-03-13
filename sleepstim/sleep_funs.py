@@ -55,9 +55,14 @@ def process_raw_EDF_cfs(file):
     raw_train.set_eeg_reference(ref_channels=['M1','M2'])
      
     # bipolarize eog and emg data 
-    raw_train = mne.set_bipolar_reference(raw_train, 'LOC', 'ROC')
-    raw_train = mne.set_bipolar_reference(raw_train, 'EMG2', 'EMG3')
-
+    try:
+        raw_train = mne.set_bipolar_reference(raw_train, 'LOC', 'ROC')
+        raw_train = mne.set_bipolar_reference(raw_train, 'EMG2', 'EMG3')
+    except:
+        if not isinstance(raw_train, mne.io.Raw):
+            ref_inst = mne.io.RawArray(raw_train.get_data(), raw_train.info)
+            raw_train = mne.set_bipolar_reference(ref_inst, 'LOC', 'ROC')
+            raw_train = mne.set_bipolar_reference(raw_train, 'EMG2', 'EMG3')
     
     # extract data, time, sampling rate information
     EEG = raw_train.get_data(picks='eeg', return_times=False)*1e6
@@ -88,7 +93,7 @@ def process_raw_EDF_cfs(file):
     epoched_data = np.swapaxes(np.concatenate(epoched_data, axis=1), 2, 0)
     
     # import hypnogram
-    stages, stagelens = read_xml(file + '.xml')
+    stages, stagelens = read_xml(file + '-nsrr.xml')
             
     # unravel hypnogram
     hypnogram = unravel_hypnogram(stages, stagelens)

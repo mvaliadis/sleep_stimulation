@@ -51,14 +51,14 @@ for idx, fname in enumerate(files):
 ## NSRR Cleveland Sleep Study
 #cd('/users/neuro/cfs/polysomnography')
 
-#files = list(set([f.split('.')[0] for f in sorted(listdir()) if f.endswith('.xml') or f.endswith('.edf')]))
+files = list(set([f.split('.')[0] for f in sorted(listdir()) if f.endswith('.xml') or f.endswith('.edf')]))
 files = list(set([f.split('.')[0] for f in sorted(listdir()) if f.endswith('.edf')]))
 
 allArrays = []
 stageArrays = []
 
 for idx, fname in enumerate(files): 
-    print(idx)
+    print(f'Processing dataset: {fname}')
     datArray, stageArray = process_raw_EDF_cfs(fname)
      
     ## compute PSD with welch's method + yasa absolute/relative power extraction 

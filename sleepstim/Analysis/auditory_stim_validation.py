@@ -54,6 +54,11 @@ from sleepstim.Analysis.transitional_probabilities import (transition_matrix,
 # sns.set_theme(color_codes=True) 
 mne.set_log_level("CRITICAL")
 
+good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', 'A4VCLD2I', 
+             'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 
+             'KEQB5AWM', 'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 
+             'YIOYSRPX', 'EQDORXF6'] #'886MCPKG', 'IBYYXKMB']
+
 #%%
 def subject_night_parser(subject, cond, study_phase='sleep'):
     # data sheet with true subject condition nights
@@ -291,7 +296,22 @@ def SO_spindle_analysis(epoch, reference, subject, condition, fig_path):
                 #print(i)
                 coupling_summaries.append(SO_spindle_coupling(sws[i], data_broad = epoch.get_data(picks='eeg')*1e6, 
                                                               idx=i, sf=128, target='stim_onset'))
+   
+        # Identify spindles in data   
+        sp = []
+        for i in range(len(epoch)):
+            try:
+                spin = yasa.spindles_detect(data = epoch.get_data(picks='eeg')[i,:,:]*1e6, sf=128,
+                                            ch_names=epoch.info.ch_names[0:23], freq_sp=(11, 16),
+                                            freq_broad=(1, 30), duration=(0.5, 3), min_distance=500, 
+                                            thresh={'rel_pow': None, 'corr': None, 'rms': 1.5},
+                                            multi_only=False, verbose='CRITICAL')
+                sws.find_cooccurring_spindles(spin, lookaround=1.2)
+                sp.append(spin)
+            except:
+                ValueError
         
+        # leave only epochs with slow waves
         sw_summaries, sws_idx = [], []
         for i in range(len(sws)):
             if sws[i] != None:
@@ -301,20 +321,7 @@ def SO_spindle_analysis(epoch, reference, subject, condition, fig_path):
             else:
                 sws_idx.append(0)
                     
-        sws_idx = np.asarray(sws_idx)  
-    
-    
-        # Identify spindles in data   
-        sp = []
-        for i in range(len(epoch)):
-            try:
-                sp.append(yasa.spindles_detect(data = epoch.get_data(picks='eeg')[i,:,:]*1e6, sf=128,
-                                               ch_names=epoch.info.ch_names[0:23], freq_sp=(11, 16),
-                                               freq_broad=(1, 30), duration=(0.5, 3), min_distance=500, 
-                                               thresh={'rel_pow': None, 'corr': None, 'rms': 1.5},
-                                               multi_only=False, verbose='CRITICAL'))
-            except:
-                ValueError
+        sws_idx = np.asarray(sws_idx)
         
         # leave only epochs with spindles
         sp_summaries = []
@@ -611,9 +618,14 @@ def sw_spindle_detection_half_night(plot=True):
                 sws = yasa.sw_detect(data = epochs.pick('eeg'), coupling = False, 
                                      remove_outliers = True, hypno = hypno_with_art) 
             # spindle detection
-            sp = yasa.spindles_detect(data = epochs.pick('eeg'), freq_sp=(12, 16), remove_outliers = True,
-                                      duration=(0.5, 3), thresh={'rel_pow': None, 'corr': None, 'rms': 1.5},
-                                      hypno = hypno_with_art)
+            try:
+                sp = yasa.spindles_detect(data = epochs.pick('eeg'), freq_sp=(12, 16), remove_outliers = True,
+                                          duration=(0.5, 3), thresh={'rel_pow': None, 'corr': None, 'rms': 1.5},
+                                          hypno = hypno_with_art)
+            except:
+                sp = yasa.spindles_detect(data = epochs.pick('eeg'), freq_sp=(12, 16), remove_outliers = True,
+                                          duration=(0.5, 3), hypno = hypno_with_art)
+                
             # coupling fun
             sws.find_cooccurring_spindles(sp.summary(), lookaround=1.2)
         
@@ -1056,7 +1068,7 @@ def group_phase_targeting_plot(phase_df, phase_b_df):
                 print(f'The circular mean for {con.upper()} - {meth} is {phi.round(4)}, with a stand deviation of {circ_std.round(4)}, and a resultant vector length of : {rv.round(4)}')
             plt.show()      
   
-def foo_power():
+def foo_power(epoch, df):
     # blah blah        
     for idx, ep in enumerate(tqdm(df['Data'])):
         reference, subject, condition = df.Reference[idx], df.Subject[idx], df.Condition[idx]
@@ -1095,7 +1107,7 @@ def tfr_sleep_analysis(picks='eeg'):
     # configure paths
     path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
-    report_path = '/media/administrator/data/Study_1_data/Statistics/'
+    #report_path = '/media/administrator/data/Study_1_data/Statistics/'
     fig_path = '/media/administrator/data/Study_1_data/Figures/Pinknoise_epochs/'
     # initialize dictionary for results
     results_ip = defaultdict(lambda: [])
@@ -1115,9 +1127,10 @@ def tfr_sleep_analysis(picks='eeg'):
             epoch = mne.read_epochs(file, preload=True).apply_baseline((-4, -1.5)).resample(128)
             
             # Instantaneous power
-            for bands, freqs in zip(['Delta', 'Spindle'], [(0.5, 4), (9, 16)]):
+            for bands, freqs in zip(['Delta','Spindle','Slow_Spindles','Fast_Spindles'],
+                                    [(0.5, 4), (9, 16), (9, 12), (12, 16)]):
                 _, _, amp = analytical_transform(epoch, picks='eeg', 
-                                                 freqs=freqs, method='imf_hilbert')
+                                                 freqs=freqs, method='hilbert')
                 time_window1 = epoch.time_as_index([0, 1.075])
                 time_window2 = epoch.time_as_index([1.075, 2.150])
                 time_window3 = epoch.time_as_index([-3, 0])
@@ -1149,7 +1162,7 @@ def tfr_sleep_analysis(picks='eeg'):
          
             # TF analysis 
             _, Sxx = tfr_analysis(Data=epoch, l_freq=5, h_freq=25, steps=0.25, 
-                                  method = 'wavelet', baseline=(-3, 3), chan = 'all', 
+                                  method = 'wavelet', chan = 'all', baseline=(-3,-2),
                                   itc_calculation=None, plot=True, length=[-3,3], 
                                   cmap = 'Spectral_r', save_path=fig_path + subject + '_' + cond,
                                   inst_power=True)
@@ -1159,6 +1172,7 @@ def tfr_sleep_analysis(picks='eeg'):
             results_tfr['Evoked'].append(epoch.average())
             
             plt.close('all')
+            del Sxx
 
     return pd.DataFrame(results_tfr), pd.DataFrame(results_ip)
 
@@ -1187,17 +1201,281 @@ def group_pac_plot(df, chan='C3', bins=12):
         plt.show()
    
 def group_so_sp_stim_analysis():
-    couple = pd.read_csv('/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/stim_coupling_summary.csv', index_col=0)
+    #couple = pd.read_csv('/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/stim_coupling_summary.csv', index_col=0)
+    couple = pd.read_csv('/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/sws_full.csv', index_col=0)
+
+    # keep only good subjects and remove mastoids
+    couple = couple.loc[couple['Subject'].isin(good_subs)]
+    couple = couple[couple['Stage'] == 3]
+    couple = couple[np.logical_and(couple['Channel'] != 'M1',
+                                   couple['Channel'] != 'M2')]
+    
+    # create condition means
     d = couple.groupby(['Condition','Channel']).mean().loc['down']['ndPAC']
     u = couple.groupby(['Condition','Channel']).mean().loc['up']['ndPAC']
     s = couple.groupby(['Condition','Channel']).mean().loc['sham']['ndPAC']
-    s_d = couple.groupby(['Condition','Channel']).mean().loc['sham down']['ndPAC']
-    yasa.topoplot
+    #s_d = couple.groupby(['Condition','Channel']).mean().loc['sham down']['ndPAC']
+    
+    # load slalom df
+    df = pd.read_csv(r'/media/administrator/data/Study_1_data/Statistics/Slalom/Slalom_results.csv', index_col=0)
+    df_mean = df.groupby(['Subject', 'Night', 'Condition']).mean().reset_index()
+    
+    # Merge the two dataframes on the shared variable
+    merged_df = pd.merge(couple, df_mean, on=['Subject', 'Condition'])
+    # Group the merged dataframe by Subject, Session, Condition, and Channel
+    grouped_df = merged_df.groupby(['Subject', 'Condition', 'Channel'], sort=False).mean()
+    
+    # Define a function to calculate the correlation and fill missing values with the group mean 
+    def corr_with_fillna(group):
+        x = group['ndPAC']
+        y = group['RMSE_difference_ratio']
+        res = pg.corr(x.values, y.values, method='spearman')
+        return res['r'].values[0]
+    def circle_ln_corr_with_fillna(group):
+        # Extract the PhaseAtSigmaPeak and RMSE_difference_ratio columns from the group
+        x = group['PhaseAtSigmaPeak']
+        y = group['RMSE_difference_ratio']
+        # Calculate the circular-linear correlation using circ_corrcl from pingouin
+        corr, pval = pg.circ_corrcl(x.values, y.values)
+        return corr
+
+    # transform values in the data frame to obtain correlations
+    correlations = grouped_df.groupby(['Condition','Channel']).apply(corr_with_fillna)
+    cl_correlations = grouped_df.groupby(['Condition','Channel']).apply(circle_ln_corr_with_fillna)
+
+    # cluster-corrected cluster stats preparation
+    l_corrs, cl_corrs = [], []
+    l_pvalues, cl_pvalues = [], []
+    ress = []
+    for idx, df in enumerate(zip(grouped_df.groupby(['Condition','Channel']))):
+        v = df[0][1][['PhaseAtSigmaPeak','ndPAC','RMSE_difference_ratio']]
+        #print(v.reset_index().Channel.unique()[0], 
+        #      v.reset_index().Condition.unique()[0])
+        # if df[0][1].reset_index().Channel.unique()[0] == 'C3' and df[0][1].reset_index().Condition.unique()[0] == 'up':
+        #     break
+        x = v['PhaseAtSigmaPeak']
+        y = v['RMSE_difference_ratio']
+        corr, pval = pg.circ_corrcl(x.values, y.values)
+        #sns.lmplot(data=df[0][1], x='PhaseAtSigmaPeak', y='RMSE_difference_ratio')
+        #print(idx, corr.round(4))
+        cl_corrs.append(corr)
+        cl_pvalues.append(pval)
+        
+        x2 = v['ndPAC']
+        y = v['RMSE_difference_ratio']
+        res = pg.corr(x2.values, y.values, method='spearman')
+        res['condition'] = v.reset_index().Condition.unique()[0]
+        res['channel'] = v.reset_index().Channel.unique()[0]
+        ress.append(res)
+        #sns.lmplot(data=v, x='ndPAC', y='RMSE_difference_ratio')
+        #print(res) 
+        l_corrs.append(res['r'].values[0])
+        l_pvalues.append(res['p-val'].values[0])
+    
+    #  Plot C3
+    sns.set_theme(color_codes=True)
+    t = grouped_df.groupby(['Condition','Subject','Channel']).mean().reset_index()
+    a = sns.lmplot(data=t[t.Channel=='C3'], x='ndPAC', y='RMSE_difference_ratio', 
+                   hue='Condition', col='Condition', ci=95, col_wrap=1, scatter_kws={"s": 50}) 
+    a.set_ylabels("\u0394 Root Mean Square Error Ratio")
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_RMSE_C3_vertical.jpg')
+   
+    # extract results
+    results = pd.concat(ress).reset_index()    
+    reject, pvals_corr = pg.multicomp(results['p-val'], method='fdr_bh')
+    results['p-val-corr'] = pvals_corr
+    results['circ_linear_r'] = cl_corrs
+    results['p-val-cl'] = cl_pvalues
+    _, pvals_corrC3 = pg.multicomp(results[results.channel=='C3']['p-val'], method='fdr_bh')
+    
+    # set the degrees of freedom
+    df = results['n'].min() - 2   # n is the sample size          
+    # calculate the t-value
+    results['t_val'] = results['r'] * np.sqrt(n - 2) / np.sqrt(1 - results['r']**2)
+    
+    ## Plot result
+    pmin = min(results['p-val-corr'])
+    mask = results['p-val-corr'] < 0.05
+    sig_chan = np.asarray(results.channel.unique())[mask]
+    print('Min p-val: {}\nSignificant Chans: {}'.format(pmin, sig_chan))
+
+    # plot t-contrast with significance mask
+    fig, ax = plt.subplots(figsize=(10,5), dpi=100)
+    im, _ = mne.viz.plot_topomap(t_obs.squeeze(), pos=info, 
+                                 mask=mask, axes=ax, show=0, #cmap='RdBu_r', 
+                                 names=None, show_names=False, contours = 0,
+                                 vlim=(np.percentile(t_obs.squeeze(), 10),
+                                       np.percentile(t_obs.squeeze(), 90)), 
+                                 mask_params=dict(markersize=15, markerfacecolor='y'))
+    cbar = fig.colorbar(im, ax=ax)   
+    cbar.ax.set_ylabel('T Statistic', rotation=270)
+    ax.set_title(f'{band}')
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/Instantaneous_power/{timepoint}_{inst}_{band}.jpg')
+    plt.close('all')
+        
+    ##
+    corrs = np.asarray(l_corrs).reshape(len(grouped_df.reset_index().Condition.unique()), 
+                                        len(grouped_df.reset_index().Channel.unique()))
+    cl_corrs = np.asarray(cl_corrs).reshape(len(grouped_df.reset_index().Condition.unique()), 
+                                            len(grouped_df.reset_index().Channel.unique()))
+    from pymer4.models import Lmer
+    # for c in ch_names:
+    t = grouped_df.reset_index()#[grouped_df.reset_index().Channel==c].reset_index()
+    for colum in ['PTP','Slope','Frequency','PhaseAtSigmaPeak','ndPAC',
+                  'CooccurringSpindle', 'DistanceSpindleToSW']:
+        model = Lmer(f"{colum} ~ Condition*Channel + (1|Subject)", 
+                     data=t)
+    
+        # Using dummy-coding; suppress summary output
+        model.fit(factors={"Condition": ["sham", "up", "down"],
+                           "Channel": list(grouped_df.reset_index().Channel.unique()),
+                           }, 
+                  ordered=True, summarize=False)
+    
+        # Get ANOVA table, but this time force orthogonality for valid SS III inferences
+        # In this case the data are balanced so nothing changes
+        print(model.anova(force_orthogonal=True))
+    
+        ## Post-hoc tests 
+        marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
+                                                         marginal_vars='Condition',
+                                                         grouping_vars=None)
+    
+        print(marginal_estimates);
+        print(comparisons);
+
+
+    # prepare data for permutation cluster test
+    subject_vals = grouped_df.reset_index()['Subject'].unique()
+    condition_vals = grouped_df.reset_index()['Condition'].unique()
+    chan_vals = grouped_df.reset_index()['Channel'].unique()
+    num_subjects = len(subject_vals)
+    num_conditions = len(condition_vals)
+    num_channels = len(chan_vals)
+
+    met = 'ndPAC'#, 'PTP','Slope','Frequency'
+    merged_array = np.zeros((num_subjects, num_conditions, num_channels))
+    for i, subject in enumerate(subject_vals):
+        for j, condition in enumerate(condition_vals):
+            for c, channel in enumerate(chan_vals):
+                mask = (grouped_df.reset_index()['Subject'] == subject) & \
+                        (grouped_df.reset_index()['Condition'] == condition) & \
+                        (grouped_df.reset_index()['Channel'] == channel)
+                corr_values = grouped_df.reset_index().loc[mask, met]
+                if len(corr_values) == 0:
+                    merged_array[i, j, c] = np.nan
+                else:
+                    merged_array[i, j, c] = corr_values.values[0]
+
+    merged_arrayf = np.delete(merged_array, np.unique(np.where(np.isnan(merged_array))[0])[0],
+                              axis=0)
+    
+    from sklearn.impute import SimpleImputer   
+    # Impute missing values using mean imputation
+    imp = SimpleImputer(strategy='mean')
+    for i_trial in range(merged_arrayf.shape[2]):
+        for i_chan in range(merged_arrayf.shape[1]):
+            merged_arrayf[:, i_chan, i_trial] = imp.fit_transform(merged_arrayf[:, i_chan, i_trial].reshape(-1, 1)).flatten()
+
+    ## Cluster test 
+    # add rm anova stat function
+    def stat_fun(*args):
+        return mne.stats.f_mway_rm(np.swapaxes(args, 0, 0), factor_levels=[3],
+                                   effects='all', return_pvals=False)[0]
+       
+    # adjacency 
+    info = mne.create_info(ch_names=list(correlations.reset_index().Channel.unique()),
+                           sfreq=512, ch_types=len(correlations.reset_index().Channel.unique())*['eeg'])
+       
+    # Add channel positions to the info object
+    info.set_montage(mne.channels.make_standard_montage('standard_1005'))
+    adjacency, ch_names = mne.channels.find_ch_adjacency(info, 'eeg')
+       
+    # threshold
+    pthresh = 0.05 
+    n_observations = merged_arrayf.shape[0]
+    f_thresh = mne.stats.f_threshold_mway_rm(n_observations, factor_levels=[3], effects='all',
+                                             pvalue = pthresh)
+       
+    F_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_test(
+        merged_arrayf,                      # numpy array for contrast [n_subjects, n_voltage, n_channels]
+        n_permutations=1024,                # 1000 is the minimum
+        threshold=dict(start=0, step=0.2), # TFCE, starting at 0, in 0.2 steps (in t-values)
+        #threshold=f_thresh,
+        tail=0,                             # two-tailed test (1 or -1 for one-tailed)
+        n_jobs=-1,                          # increase value to speed up computations
+        adjacency=adjacency,                # sparse matrix for channel adjacency as computed above
+        buffer_size=None,
+        out_type='mask',                    # returns a mask map instead of indices of sig. points
+        seed=1503,
+        stat_fun=stat_fun,
+        )      
+
+    ## do stats
+    contrast_up = np.expand_dims(merged_arrayf[:,2,:] - merged_arrayf[:,1,:], 1)
+    contrast_down = np.expand_dims(merged_arrayf[:,0,:] - merged_arrayf[:,1,:], 1)
+    t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+        contrast_down,
+        n_permutations=1024,                                             
+        threshold=dict(start=0, step=0.2), # => performs tfce
+        tail=0,                            # two-tailed
+        n_jobs=-1,
+        adjacency=adjacency,
+        buffer_size=None,                                             
+        out_type='mask',
+        seed=1503) 
+    
+    ## Plot stats
+    fig, ax = plt.subplots(figsize=(10,5), dpi=100)
+    im, _ = mne.viz.plot_topomap(F_obs.squeeze(), pos=info, 
+                                 mask=cluster_p_values < 0.05, axes=ax, show=0, #cmap='RdBu_r', 
+                                 names=None, show_names=False, contours = 0,
+                                 vlim=(np.percentile(F_obs.squeeze(), 10),
+                                       np.percentile(F_obs.squeeze(), 90)), 
+                                 mask_params=dict(markersize=15, markerfacecolor='y'))
+    cbar = fig.colorbar(im, ax=ax)   
+    cbar.ax.set_ylabel('F Statistic', rotation=270)
+    ax.set_title(f'ndPAC')
+    plt.tight_layout()
+    plt.show()
+
+    # plot topoplots
+    yasa.topoplot(correlations.groupby(['Condition','Channel']).mean().loc['down'])
+    yasa.topoplot(correlations.groupby(['Condition','Channel']).mean().loc['up'])
+    yasa.topoplot(correlations.groupby(['Condition','Channel']).mean().loc['sham'])
+    
+    # plot topoplots
     yasa.topoplot(u)
     yasa.topoplot(s)
     yasa.topoplot(d)
-    yasa.topoplot(s_d)    
-     
+    #yasa.topoplot(s_d)    
+    
+    # plot topoplots
+    yasa.topoplot(data=t.groupby(['Condition','Channel'], sort=False).mean().loc['up']['ndPAC'], 
+                  cmap='Reds', names=list(t.Channel.unique()), dpi=100, show_names=True,
+                  sensors="ko") #contours=0
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_up.jpg')
+    plt.close('all')
+    yasa.topoplot(data=t.groupby(['Condition','Channel'], sort=False).mean().loc['down']['ndPAC'], 
+                  cmap='Reds', names=list(t.Channel.unique()), dpi=100, show_names=True,
+                  sensors="ko") #contours=0
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_down.jpg')
+    plt.close('all')
+    yasa.topoplot(data=t.groupby(['Condition','Channel'], sort=False).mean().loc['sham']['ndPAC'], 
+                  cmap='Reds', names=list(t.Channel.unique()), dpi=100, show_names=True,
+                  sensors="ko") #contours=0
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_sham.jpg')
+    plt.close('all')
+    # plot stat
+    F = pd.Series(F_obs.squeeze(), list(t.Channel.unique()))
+    yasa.topoplot(data=F, cbar_title='F-Stat',
+                  cmap='Reds', names=list(t.Channel.unique()), dpi=100, show_names=True,
+                  sensors="ko") #contours=0
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_F_stat.jpg')
+    plt.close('all')
+    
 def group_so_sp_analysis():
     log_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(log_path) for i in files])
@@ -1326,19 +1604,262 @@ def group_so_sp_analysis():
     mdf = md.fit()
     print(mdf.summary())          
 
+def playing_around(couple):
+    # change df
+    C3 = couple.groupby(['Channel','Condition','Subject']).mean().reset_index()
+    
+    # Merge the two dataframes on the shared variable
+    merged_df1 = C3.loc[C3['Condition'].isin(['up', 'sham'])]
+    merged_df2 = C3.loc[C3['Condition'].isin(['down', 'sham'])]
+
+    # Group the merged dataframe by Subject
+    grouped_df1 = merged_df1.groupby(['Subject','Channel'], sort=False)
+    grouped_df2 = merged_df2.groupby(['Subject','Channel'], sort=False)
+
+    # Define a function to subtract values for two conditions
+    def subtract_conditions1(group):
+        if 'up' in group['Condition'].values and 'sham' in group['Condition'].values:
+            x_values = group.loc[group.Condition=='up', 'CooccurringSpindle'].sum() - group.loc[group.Condition=='sham', 'CooccurringSpindle'].sum()
+            return x_values
+        else:
+            return np.nan
+            
+    def subtract_conditions2(group):
+        if 'down' in group['Condition'].values and 'sham' in group['Condition'].values:
+            x_values = group.loc[group.Condition=='down', 'CooccurringSpindle'].sum() - group.loc[group.Condition=='sham', 'CooccurringSpindle'].sum()
+            return x_values
+        else:
+            return np.nan
+
+    # Apply the function to the groupby object
+    result1 = grouped_df1.apply(subtract_conditions1).reset_index()
+    result1['Condition'] = ['Up'] * len(result1)
+    result1 = result1.rename(columns={0: '\u0394 Cooccurring-Spindle'})
+
+    result2 = grouped_df2.apply(subtract_conditions2).reset_index()
+    result2['Condition'] = ['Down'] * len(result2)
+    result2 = result2.rename(columns={0: '\u0394 Cooccurring-Spindle'})
+
+    # recombined dataframes
+    remerge = pd.concat([result1, result2]).reset_index(drop=True)
+    
+    # prepare data for permutation cluster test
+    subject_vals = remerge.reset_index()['Subject'].unique()
+    condition_vals = remerge.reset_index()['Condition'].unique()
+    chan_vals = remerge.reset_index()['Channel'].unique()
+    num_subjects = len(subject_vals)
+    num_conditions = len(condition_vals)
+    num_channels = len(chan_vals)
+
+    merged_array = np.zeros((num_subjects, num_conditions, num_channels))
+    for i, subject in enumerate(subject_vals):
+        for j, condition in enumerate(condition_vals):
+            for c, channel in enumerate(chan_vals):
+                mask = (remerge.reset_index()['Subject'] == subject) & \
+                        (remerge.reset_index()['Condition'] == condition) & \
+                        (remerge.reset_index()['Channel'] == channel)
+                corr_values = remerge.reset_index().loc[mask, '\u0394 Cooccurring-Spindle']
+                if len(corr_values) == 0:
+                    merged_array[i, j, c] = np.nan
+                else:
+                    merged_array[i, j, c] = corr_values.values[0]
+
+    # merged_arrayf = np.delete(merged_array, np.unique(np.where(np.isnan(merged_array))[0]),
+    #                           axis=0)
+    
+    merged_arrayf = merged_array.copy()
+    from sklearn.impute import SimpleImputer   
+    # Impute missing values using mean imputation
+    imp = SimpleImputer(strategy='mean')
+    for i_trial in range(merged_array.shape[2]):
+        for i_chan in range(merged_array.shape[1]):
+            merged_arrayf[:, i_chan, i_trial] = imp.fit_transform(merged_array[:, i_chan, i_trial].reshape(-1, 1)).flatten()
+
+    ## Cluster test       
+    # adjacency 
+    info = mne.create_info(ch_names=list(remerge.Channel.unique()),
+                           sfreq=512, ch_types=len(remerge.Channel.unique())*['eeg'])
+       
+    # Add channel positions to the info object
+    info.set_montage(mne.channels.make_standard_montage('standard_1005'))
+    adjacency, ch_names = mne.channels.find_ch_adjacency(info, 'eeg')
+       
+       
+    ## do stats
+    contrast = np.expand_dims(merged_arrayf[:,0,:] - merged_arrayf[:,1,:], 1)
+    #contrast = merged_arrayf
+    t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+        contrast,
+        n_permutations=1024,                                             
+        threshold=dict(start=0, step=0.2), # => performs tfce
+        tail=0,                            # two-tailed
+        n_jobs=-1,
+        adjacency=adjacency,
+        buffer_size=None,                                             
+        out_type='mask',
+        seed=1503) 
+    
+    ## Plot stats
+    # fig, ax = plt.subplots(figsize=(10,5), dpi=100)
+    # im, _ = mne.viz.plot_topomap(t_obs.squeeze(), pos=info, 
+    #                              mask=cluster_p_values < 0.05, axes=ax, show=0, #cmap='RdBu_r', 
+    #                              names=None, show_names=False, contours = 0,
+    #                              vlim=(np.percentile(t_obs.squeeze(), 5),
+    #                                    np.percentile(t_obs.squeeze(), 95)), 
+    #                              mask_params=dict(markersize=15, markerfacecolor='y'))
+    # cbar = fig.colorbar(im, ax=ax)   
+    # cbar.ax.set_ylabel('T-Statistic')
+    # ax.set_title(f'Probability of Co-Occuring Spindle')
+    # plt.tight_layout()
+    # plt.show()
+
+    yasa.topoplot(data=t.groupby(['Condition','Channel'], sort=False).mean().loc['sham']['ndPAC'], 
+                  cmap='Reds', names=list(t.Channel.unique()), dpi=100, show_names=True,
+                  sensors="ko") #contours=0
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_sham.jpg')
+    plt.close('all')
+    
+    # plot stat
+    F = pd.Series(t_obs.squeeze(), list(remerge.Channel.unique()))
+    yasa.topoplot(data=F, cbar_title='T-Stat',
+                  cmap='Reds', names=list(remerge.Channel.unique()), dpi=100, show_names=True,
+                  sensors="ko") #contours=0
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/CooccuringSpinde_T_stat.jpg')
+    plt.close('all')
+    
+def density(stat_path = '/media/administrator/data/Study_1_data/Statistics/SW_spindle_summary/'):
+    sws_density = pd.read_csv(stat_path + 'sws_density.csv', index_col=0)
+    sp_density = pd.read_csv(stat_path + 'sp_density.csv', index_col=0)
+    
+    sws_density = sws_density[sws_density.Stage==3]
+    sp_density = sp_density[sp_density.Stage==3]
+    
+    sws_density = sws_density.loc[sws_density['Subject'].isin(good_subs)]
+    sp_density = sp_density.loc[sp_density['Subject'].isin(good_subs)]
+    
+    sws_density = sws_density[np.logical_and(sws_density['Channel'] != 'M1',
+                                             sws_density['Channel'] != 'M2')]
+    sp_density = sp_density[np.logical_and(sp_density['Channel'] != 'M1',
+                                           sp_density['Channel'] != 'M2')]
+    
+    for grouped_df in (sws_density, sp_density):
+        print(grouped_df.head(10))
+        subject_vals = grouped_df.reset_index()['Subject'].unique()
+        condition_vals = grouped_df.reset_index()['Condition'].unique()
+        chan_vals = grouped_df.reset_index()['Channel'].unique()
+        num_subjects = len(subject_vals)
+        num_conditions = len(condition_vals)
+        num_channels = len(chan_vals)
+    
+        met = 'Density'
+        merged_array = np.zeros((num_subjects, num_conditions, num_channels))
+        for i, subject in enumerate(subject_vals):
+            for j, condition in enumerate(condition_vals):
+                for c, channel in enumerate(chan_vals):
+                    mask = (grouped_df.reset_index()['Subject'] == subject) & \
+                            (grouped_df.reset_index()['Condition'] == condition) & \
+                            (grouped_df.reset_index()['Channel'] == channel)
+                    corr_values = grouped_df.reset_index().loc[mask, met]
+                    if len(corr_values) == 0:
+                        merged_array[i, j, c] = np.nan
+                    else:
+                        merged_array[i, j, c] = corr_values.values[0]
+        
+        # merged_arrayf = np.delete(merged_array, np.unique(np.where(np.isnan(merged_array))[0])[0],
+        #                           axis=0)
+        
+        merged_arrayf = merged_array.copy()
+        from sklearn.impute import SimpleImputer   
+        # Impute missing values using mean imputation
+        imp = SimpleImputer(strategy='mean')
+        for i_trial in range(merged_arrayf.shape[2]):
+            for i_chan in range(merged_arrayf.shape[1]):
+                merged_arrayf[:, i_chan, i_trial] = imp.fit_transform(merged_arrayf[:, i_chan, i_trial].reshape(-1, 1)).flatten()
+        
+        ## Cluster test 
+        # add rm anova stat function
+        def stat_fun(*args):
+            return mne.stats.f_mway_rm(np.swapaxes(args, 0, 0), factor_levels=[3],
+                                       effects='all', return_pvals=False)[0]
+           
+        # adjacency 
+        info = mne.create_info(ch_names=list(grouped_df.Channel.unique()),
+                               sfreq=512, ch_types=len(grouped_df.Channel.unique())*['eeg'])
+           
+        # Add channel positions to the info object
+        info.set_montage(mne.channels.make_standard_montage('standard_1005'))
+        adjacency, ch_names = mne.channels.find_ch_adjacency(info, 'eeg')
+           
+        # threshold
+        pthresh = 0.05 
+        n_observations = merged_arrayf.shape[0]
+        f_thresh = mne.stats.f_threshold_mway_rm(n_observations, factor_levels=[3], effects='all',
+                                                 pvalue = pthresh)
+           
+        F_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_test(
+            merged_arrayf,                      # numpy array for contrast [n_subjects, n_voltage, n_channels]
+            n_permutations=1024,                # 1000 is the minimum
+            threshold=dict(start=0, step=0.2), # TFCE, starting at 0, in 0.2 steps (in t-values)
+            #threshold=f_thresh,
+            tail=0,                             # two-tailed test (1 or -1 for one-tailed)
+            n_jobs=-1,                          # increase value to speed up computations
+            adjacency=adjacency,                # sparse matrix for channel adjacency as computed above
+            buffer_size=None,
+            out_type='mask',                    # returns a mask map instead of indices of sig. points
+            seed=1503,
+            stat_fun=stat_fun,
+            )      
+        
+        
+        # ## Plot stats
+        # fig, ax = plt.subplots(figsize=(10,5), dpi=100)
+        # im, _ = mne.viz.plot_topomap(F_obs.squeeze(), pos=info, 
+        #                              mask=cluster_p_values < 0.05, axes=ax, show=0, #cmap='RdBu_r', 
+        #                              names=None, show_names=False, contours = 0,
+        #                              vlim=(np.percentile(F_obs.squeeze(), 10),
+        #                                    np.percentile(F_obs.squeeze(), 90)), 
+        #                              mask_params=dict(markersize=15, markerfacecolor='y'))
+        # cbar = fig.colorbar(im, ax=ax)   
+        # cbar.ax.set_ylabel('F Statistic', rotation=270)
+        # ax.set_title(f'{metric}')
+        # plt.tight_layout()
+        # plt.show()
+        
+        
+    
+        # Second example: here the values represent correlation coefficients
+        F = pd.DataFrame({
+            "Channel":  list(grouped_df.Channel.unique()),
+            "F-Stat": F_obs.squeeze(),
+            "pval": cluster_p_values})
+        
+        F = F.set_index("Channel")
+        F['Sig'] = (F['pval'] > 0.05)
+        yasa.topoplot(data=F['F-Stat'], cbar_title='F-Stat', mask=F['Sig'],
+                      cmap='Reds', names=list(grouped_df.Channel.unique()), 
+                      dpi=100, show_names=True, sensors="ko") #contours=0
+        plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/S_Density_F_stat.jpg')
+        plt.close('all')    
+    
 #%%
-# tfr_df, ip_df = tfr_sleep_analysis()
+# tfr_df, ip_df = tfr_sleep_analysis() 
 # save_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/'
 # pickle.dump(tfr_df, open(save_path + 'TFR.p', "wb"))
 # pickle.dump(ip_df,  open(save_path + 'Inst_power.p', "wb"))
 
-# load_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/TFR.p'
-# tfr_df = pickle.load(open(load_path, "rb"))
+load_path = '/media/administrator/data/Study_1_data/Statistics/Sleep/TFR.p'
+tfr_df = pickle.load(open(load_path, "rb"))
+# baseline already applied
+#tfr_df['TFR_avg'] = [tfr_df['TFR_avg'][i].apply_baseline((-3,-2)) for i in range(len(tfr_df))]
 
-good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', '886MCPKG', 'A4VCLD2I', 
-             'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 'KEQB5AWM', 
-             'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 'YIOYSRPX', 'EQDORXF6']
-    
+# good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', '886MCPKG', 'A4VCLD2I', 
+#              'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 'KEQB5AWM', 
+#              'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 'YIOYSRPX', 'EQDORXF6']
+good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', 'A4VCLD2I', 'CWESJCNJ', 
+             'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 'KEQB5AWM', 
+             'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 'YIOYSRPX', 'EQDORXF6'] #'886MCPKG', 'IBYYXKMB'] 
+tfr_df = tfr_df.loc[tfr_df['Subject'].isin(good_subs)]
+
 def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
     double_contrast_df = pd.DataFrame(columns=list(tfr_df.columns)[1:])
     for contrast in zip(['up', 'down'], ['sham', 'sham down']):
@@ -1379,11 +1900,12 @@ def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
         fig, axs = plt.subplots(2, figsize=(10, 8))
         axs[0].set_title("\u0394" + f' Average TFR Plot - {contrast[0].capitalize()}')
         vmin=-.1; vmax=.6
-        # vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
+        #vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
         # norm = Normalize(vmin=vmin, vmax=vmax)
         CM = axs[0].pcolormesh(times, tfr_stim.freqs, Sxx_.data.mean(0).squeeze(), 
                                shading='gouraud', cmap='Spectral_r', rasterized = True, #norm = norm, 
-                               vmin=vmin, vmax=vmax, antialiased=True)
+                               #vmin=vmin, vmax=vmax, 
+                               antialiased=True)
         axs[0].set_ylabel('Frequency (Hz)')
         axs[1].set_title("\u0394" + f' Average Evoked Response (uV)')
         axs[1].plot(gav_.times, gav_.data.T*1e6)
@@ -1406,8 +1928,8 @@ def plot_tfr_contrast(tfr_df, length=[-3.05, 3.05]):
     
     fig, axs = plt.subplots(2, figsize=(10, 8))
     axs[0].set_title("\u0394" + ' Average TFR Plot - Double Contrast')
-    vmin=-.1; vmax=.6
-    # vmin, vmax = np.percentile(Sxx_, [0 + 0.1, 100 - 0.1])
+    #vmin=-.1; vmax=.6
+    vmin, vmax = np.percentile(Sxx.mean(0), [0 + 0.1, 100 - 0.1])
     # norm = Normalize(vmin=vmin, vmax=vmax)
     CM = axs[0].pcolormesh(times, tfr_stim.freqs, Sxx.mean(0), shading='gouraud', 
                            cmap='Spectral_r', rasterized = True, #norm = norm, 
@@ -1449,18 +1971,20 @@ def plot_tfr_erp(tfr_df):
         axs[1].set_ylabel('Amplitude')
         plt.xlabel('Time (s)')
         plt.tight_layout()
-        
+
+
+
 #%%
 
 def tfr_stats(tfr_df, length=[-3.05, 3.05], pick='eeg'):   
-    common_subs = []
-    for cond_df in tfr_df.groupby('Condition')['Subject']:
-        common_subs.append(list(cond_df[1]))
-    to_del = reduce(np.setxor1d, [common_subs[0], common_subs[1],
-                                  common_subs[2], common_subs[3]])
-    to_del[-1] = ('P289L2RH')
-    [tfr_df.drop(tfr_df.loc[tfr_df['Subject']==to_del[i]].index,
-                 inplace=True) for i in range(len(to_del))]
+    # common_subs = []
+    # for cond_df in tfr_df.groupby('Condition')['Subject']:
+    #     common_subs.append(list(cond_df[1]))
+    # to_del = reduce(np.setxor1d, [common_subs[0], common_subs[1],
+    #                               common_subs[2], common_subs[3]])
+    # to_del[-1] = ('P289L2RH')
+    # [tfr_df.drop(tfr_df.loc[tfr_df['Subject']==to_del[i]].index,
+    #               inplace=True) for i in range(len(to_del))]
     contrast_ = [] 
     for contrast in zip(['up', 'down'], ['sham', 'sham down']):
         print(contrast)
@@ -1503,6 +2027,7 @@ def tfr_stats(tfr_df, length=[-3.05, 3.05], pick='eeg'):
         
     # adjust contrast  
     contrast_ = (contrast_[0] - contrast_[1])
+    #contrast_ = contrast_[0]
     
     # prepare adjacency matrix
     adjacency, ch_names = mne.channels.find_ch_adjacency(df['Evoked'][0].copy().drop_channels(['M1','M2']).info, 
@@ -1517,19 +2042,20 @@ def tfr_stats(tfr_df, length=[-3.05, 3.05], pick='eeg'):
          
     # do stats 
     t_obs, clusters, cluster_p_values, h0 = spatio_temporal_cluster_1samp_test(
-        contrast_,                          # numpy array for contrast [n_subjects, n_voltage, n_channels]
+        contrast_.squeeze(),                # numpy array for contrast [n_subjects, n_voltage, n_channels]
         n_permutations=1024,                # 1000 is the minimum
         threshold=thresh,                   # TFCE, starting at 0, in 0.2 steps (in t-values)
+        #threshold=dict(start=0, step=0.2),
         tail=0,                             # two-tailed test (1 or -1 for one-tailed)
         n_jobs=-1,                          # increase value to speed up computations
-        adjacency=None, #adj4D              # sparse matrix for channel adjacency as computed above
+        adjacency=adj4D,                    # sparse matrix for channel adjacency as computed above
         buffer_size=None,
         out_type='mask',                    # returns a mask map instead of indices of sig. points
         seed= 1503
         ) 
     
     # return mask
-    mask = cluster_p_values <= 0.05
+    mask = cluster_p_values < 0.05
     
     # get vars
     freqs = inst_stim['TFR_avg'][0].freqs
@@ -1539,9 +2065,11 @@ def tfr_stats(tfr_df, length=[-3.05, 3.05], pick='eeg'):
     if np.mean(mask) == 0:
         sns.set_theme(style="darkgrid")
         fig, ax = plt.subplots(1, figsize=(10, 8))
-        CM = ax.pcolormesh(times, freqs, t_obs.mean(-1), 
+        CM = ax.pcolormesh(times, freqs, t_obs[:,:,ch_names.index('C3')],#t_obs.mean(-1), 
                            shading='gouraud', cmap='Spectral_r', rasterized = True, 
-                           antialiased=True, vmin=-4, vmax=4)
+                           antialiased=True, 
+                           vmin=-1, vmax=4
+                           )
         cbar = plt.colorbar(CM, ax=ax)
         cbar.set_label('T-Values', rotation=270)
         ax.set_ylabel('Frequency (Hz)')
@@ -1550,18 +2078,22 @@ def tfr_stats(tfr_df, length=[-3.05, 3.05], pick='eeg'):
     
     # 
     else:
+        try:
+            n2 = mask.reshape(cluster_p_values.shape[0]//times.shape[0],
+                              cluster_p_values.shape[0]//freqs.shape[0])
+        except:
+            n2 = clusters[cluster_p_values.argmin()].squeeze()[:,:,ch_names.index('C3')]#.mean(-1)
         fig, ax = plt.subplots(1, figsize=(10, 8))
-        CM = ax.pcolormesh(times, freqs, t_obs.mean(-1), 
+        CM = ax.pcolormesh(times, freqs, t_obs[:,:,ch_names.index('C3')], #t_obs.mean(-1), 
                            shading='gouraud', cmap='Spectral_r', rasterized = True, 
-                           antialiased=True, vmin=-4, vmax=4, alpha=1)
+                           antialiased=True, vmin=-1, vmax=6, alpha=1)
         ax.set_ylabel('Frequency (Hz)')
         ax.set_xlabel('Time (s)')
         cbar = plt.colorbar(CM, ax=ax)
         cbar.set_label('T-Values', rotation=270)
-        CM2 = ax.pcolormesh(times, freqs, np.ma.masked_where(clusters[np.argmax(mask)].squeeze(),
-                                                             clusters[np.argmax(mask)].squeeze()),
-                             shading='gouraud', cmap='Spectral_r', rasterized = True,
-                             antialiased=True, vmin=-4, vmax=4, alpha=0.25)
+        CM2 = ax.pcolormesh(times, freqs, np.ma.masked_where(n2, n2),
+                            shading='gouraud', cmap='Spectral_r', rasterized = True,
+                            antialiased=True, vmin=-1, vmax=6, alpha=0.25)
         plt.tight_layout()
 
     

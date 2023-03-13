@@ -94,11 +94,12 @@ def CMC(signal1, signal2, sf, foi=(2,40), plot=True, method='welch'):
     
     elif method=='multitaper_conn':
         _, x = yasa.sliding_window(np.vstack([signal1, signal2]), window=2, sf=1000)
-        indices = (np.array([0]), np.array([1]))   
-        coh = spectral_connectivity(x, names=None, method='coh', indices=indices,
-                                    sfreq=sf, mode='multitaper', fmin=foi[0], fmax=foi[1],
-                                    fskip=1, faverage=False, block_size=1000,
-                                    verbose=0)
+        indices = (np.array([0]), np.array([1])) 
+        import mne_connectivity
+        coh = mne_connectivity.EpochSpectralConnectivity(x, names=None, method='coh', indices=indices,
+                                                         sfreq=sf, mode='multitaper', fmin=foi[0], fmax=foi[1],
+                                                         fskip=1, faverage=False, block_size=1000,
+                                                         verbose=0)
         
         return coh.freqs, coh._data.squeeze()
 

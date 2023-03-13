@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 import emd
 import scipy.stats as stats
+from scipy.fftpack import next_fast_len
+from scipy import signal 
 
 #%%
 
@@ -73,15 +75,16 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
     # compute tfr via wavelet method - multitaper noqa
     if method == 'wavelet':    
         try:
-            Sxx = mne.time_frequency.tfr_morlet(Data[0], freqs, n_cycles=n_cyc, picks = chan,
-                                            zero_mean=True, use_fft=True, decim=5, 
-                                            output='power', n_jobs=16, verbose=None,
-                                            average=False, return_itc=False)
-        except:
             Sxx = mne.time_frequency.tfr_morlet(Data, freqs, n_cycles=n_cyc, picks = chan,
                                             zero_mean=True, use_fft=True, decim=5, 
                                             output='power', n_jobs=16, verbose=None,
                                             average=False, return_itc=False)
+        except:
+            Sxx = mne.time_frequency.tfr_morlet(Data[0], freqs, n_cycles=n_cyc, picks = chan,
+                                            zero_mean=True, use_fft=True, decim=5, 
+                                            output='power', n_jobs=16, verbose=None,
+                                            average=False, return_itc=False)
+
     elif method == 'multitaper':
         Sxx = mne.time_frequency.tfr_multitaper(Data[0], freqs, n_cycles=n_cyc, use_fft=True,
                                                 decim=5, picks = chan, return_itc=False,
@@ -92,7 +95,7 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
     # apply baseline correction
     Sxx.apply_baseline(baseline, mode=mode)
     # average TFR data, remove edge, and alter timepoints accordingly 
-    Sxx_ = Sxx.copy().pick('C3').crop(tmin=length[0],tmax=length[1]).average().data.mean(0) #mean over channels
+    Sxx_ = Sxx.copy().pick(chan).crop(tmin=length[0],tmax=length[1]).average().data.mean(0) #mean over channels
     times = Sxx.copy().crop(tmin=length[0],tmax=length[1]).times
     
     # Plot TFR
@@ -100,8 +103,8 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
         if inst_power:
             band_corr = {'Delta': [0.5, 4],
                          'Theta': [4, 8],
-                         'Slow sigma': [8, 12],
-                         'Fast sigma': [12, 16],
+                         'Slow_Spindle': [8, 12],
+                         'Fast_Spindle': [12, 16],
                          'Spindle': [9, 16],
                          'Beta': [16, 30]}
             fig, axs = plt.subplots(2, figsize=(10, 8))
@@ -119,10 +122,10 @@ def tfr_analysis(Data, l_freq = 0.5, h_freq = 30, steps = 0.25, method = 'wavele
             axs[1].set_title(f'Instantaneous Power')
             t_min = (np.abs(Data.times - length[0])).argmin()
             t_max = (np.abs(Data.times - length[1])).argmin()
-            for bands in ['Delta', 'Spindle']:
+            for bands in ['Delta', 'Spindle', 'Slow_Spindle', 'Fast_Spindle']:
                 pha, freq, amp = analytical_transform(Data, picks='C3', 
                                                       freqs=band_corr[bands], 
-                                                      method = 'imf_hilbert')
+                                                      method = 'hilbert')
                 axs[1].plot(Data.times[t_min:t_max+1], 
                             amp.mean(0).mean(0)[t_min:t_max+1],
                             #stats.zscore(amp, axis=-1).mean(0).mean(0)[t_min:t_max+1],
@@ -199,4 +202,14 @@ def analytical_transform(epoch, picks='C3', freqs=(9, 16), method = 'imf_hilbert
         
         return pha, [], amp
       
+    if method == 'ndsp':
+        from neurodsp.timefrequency import amp_by_time, freq_by_time, phase_by_time
+        pha = [np.expand_dims(phase_by_time(narrow_data[:,i,:].squeeze(), epoch.info['sfreq'],
+                              freqs),1) for i in range(min(narrow_data.shape))]
+        freq = [np.expand_dims(freq_by_time(narrow_data[:,i,:].squeeze(), epoch.info['sfreq'],
+                              freqs),1) for i in range(min(narrow_data.shape))]
+        amp = [np.expand_dims(amp_by_time(narrow_data[:,i,:].squeeze(), epoch.info['sfreq'],
+                              freqs),1) for i in range(min(narrow_data.shape))]
+        
+        return np.concatenate(pha,1), np.concatenate(freq,1), np.concatenate(amp,1)
 

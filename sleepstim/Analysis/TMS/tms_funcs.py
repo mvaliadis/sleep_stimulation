@@ -68,6 +68,9 @@ def process_rawXDF(file, paired=False):
     TMStimes = [marker.time_stamps[i] for i,v in enumerate(marker.time_series) if \
                 'cse_' in v[0] or 'icf_' in v[0] or 'sici_' in v[0]][1::]
     
+    if paired == True:
+        print(np.diff(TMStimes))
+        
     ## checks here for data length and if intensity % given for pulse
     stim = len(TMStimes)
     if paired:
@@ -171,8 +174,12 @@ def process_rawXDF(file, paired=False):
     
     return edcepochs, Vpp, sf, cmc, intensity, bool_mep, tkeo_vals 
        
-def function_sigmoid(intensity, mep_max, s50, k):
-    y_mep = ((mep_max/(1 + np.exp(k*(s50-intensity)))))
+# def function_sigmoid(intensity, mep_max, s50, k):
+#     y_mep = ((mep_max/(1 + np.exp(k*(s50-intensity)))))
+#     return (y_mep)
+
+def function_sigmoid(intensity, mep_max, s50, k, b):
+    y_mep = ((mep_max/(1 + np.exp(k*(s50-intensity)))))+b
     return (y_mep)
 
 def trim_mean(x):
@@ -421,6 +428,8 @@ def TMS_results(maindir):
 
     return final_res, subject_pre_post, subject_pre_post_pulse_df
 
+# min(np.diff(results["Times"])[np.logical_and(np.diff(results["Times"])<10, np.diff(results["Times"])>2)])
+
 #%%
 # maindir = '/media/administrator/data/Study_1_data/Pre_post_data/'
 if __name__ == '__main__':
@@ -565,16 +574,23 @@ if __name__ == '__main__':
     # TO-DO: REMOVE SUBJECTS WITH 2 OR LESS SESSIONS, DEAL WITH MISSING I/O PROTOCOL (~150 FOR SOME)
     # =============================================================================
     
+    def function_sigmoid(intensity, mep_max, s50, k, b):
+        y_mep = ((mep_max/(1 + np.exp(k*(s50-intensity)))))+b
+        return (y_mep)
+    
     param = []
     param_2_post = []
     param_2_pre = []
     subject = list(dict.fromkeys(list(subject_pre_post.Subject)))
     for sub in subject:
+        # if sub == '0RCB4IRJ':
+        #     break
         sub_res = subject_pre_post[subject_pre_post.Subject == sub]
-        # plt.figure()
+        
         axs = sns.catplot(x='Protocol', y='logVpp', hue='Session', 
-                          col='Condition', kind = 'point', join=False, 
-                          ci=95, hue_order = ['pre','post'], data=sub_res) #estimator=trim_mean
+                          col='Condition', kind = 'point', join=False,
+                          errorbar=('ci', 95), #estimator=np.median, #trim_mean,
+                          hue_order = ['pre','post'], data=sub_res) 
         #sub_res[sub_res.Condition.isin(['sham'])]
         
         if len(axs.axes_dict) < 3:
@@ -591,50 +607,65 @@ if __name__ == '__main__':
                 post_s2 = prepost[prepost.Session=='post']
                 # sessions = [pre_s, post_s, item]
                 if all(~np.isnan([pre_s, post_s]).ravel()):
-                    p0 = [max(pre_s), trim_mean(x_points), 1]
+                    p0 = [max(pre_s), np.mean(x_points), 1, min(pre_s)]
                     popt0, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p0,
-                                         ydata=pre_s, maxfev=200000, method='lm')
-                                         # bounds=(0, [3., 1., 0.5])))
-                    p1 = [max(post_s), trim_mean(x_points), 1] 
+                                         ydata=pre_s, maxfev=200000, method='trf',
+                                         bounds=([0, 0, 0, -np.inf], 
+                                                 [np.inf, np.inf, np.inf, np.inf]))
+                    p1 = [max(post_s), np.mean(x_points), 1, min(post_s)] 
                     popt1, _ = curve_fit(function_sigmoid, xdata=x_points, p0=p1,
-                                         ydata=post_s, maxfev=200000, method='lm')
-                                         #bounds=(0, [3., 1., 0.5])))
+                                         ydata=post_s, maxfev=200000, method='trf', 
+                                         bounds=([0, 0, 0, -np.inf], 
+                                                 [np.inf, np.inf, np.inf, np.inf]))
                 
                     ## get line points 
                     y_points_pre = function_sigmoid(x_data_ext, *popt0)
                     y_points_post = function_sigmoid(x_data_ext, *popt1)
                     
                     ## plot curves
-                    axs.axes_dict[item].plot(x_data_ext,y_points_pre, linestyle='--')
+                    #axs.axes_dict[item].hlines(max(y_points_pre)/2 + pre_s[0] , xmin=0, xmax=5)
+                    #axs.axes_dict[item].hlines(max(y_points_post)/2 + post_s[0], xmin=0, xmax=5)
+                    axs.axes_dict[item].plot(x_data_ext,y_points_pre,  linestyle='--')
                     axs.axes_dict[item].plot(x_data_ext,y_points_post, linestyle='--')
                     
+                    ## adjusted s50
+                    s50_idx_post = np.argmin(np.abs((max(y_points_post - y_points_post[0])/2)-x_data_ext))
+                    s50_adj_post = int(x_data_ext[s50_idx_post] * 10 + 100)
+                    s50_idx_pre = np.argmin(np.abs((max(y_points_pre - y_points_pre[0])/2)-x_data_ext))
+                    s50_adj_pre = int(x_data_ext[s50_idx_pre] * 10 + 100)
+                    
                     ## AUC calculation - compute difference post - pre x condition
-                    #AUC_pre = trapz(x = x_data_ext, y = y_points_pre, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
-                    #AUC_post = trapz(x = x_data_ext, y = y_points_post, dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
+                    AUC_pre = trapz(x = x_data_ext, y = y_points_pre, 
+                                    dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
+                    AUC_post = trapz(x = x_data_ext, y = y_points_post, 
+                                     dx=x_data_ext[1] - x_data_ext[0]) / (len(x_data_ext) - 1)
         
-                    AUC_pre = trapz(x = pre_s2.Protocol.to_numpy(), 
-                                    y = pre_s2.logVpp.to_numpy())
-                    AUC_post = trapz(x = post_s2.Protocol.to_numpy(), 
-                                     y = post_s2.logVpp.to_numpy())
+                    # AUC_pre = trapz(x = pre_s2.Protocol.to_numpy(), 
+                    #                 y = pre_s2.logVpp.to_numpy())
+                    # AUC_post = trapz(x = post_s2.Protocol.to_numpy(), 
+                    #                  y = post_s2.logVpp.to_numpy())
                     
                     # AUC based faciliation index
                     param.append([sub, item, AUC_post / AUC_pre,
                                   popt1[0] - popt0[0],
                                   popt1[1] - popt0[1],
-                                  popt1[2] - popt0[2]])
+                                  popt1[2] - popt0[2],
+                                  pre_s[0] - post_s[0],
+                                  (popt1[0] + post_s[0]) - (popt0[0] + pre_s[0]),
+                                  s50_adj_post - s50_adj_pre])
                     
                     # params without AUC
-                    param_2_post.append([sub, item, 'post', popt1[0], 
-                                         popt1[1], popt1[2]])
-                    param_2_pre.append([sub, item, 'pre', popt0[0], 
-                                        popt0[1], popt0[2]])
+                    param_2_post.append([sub, item, 'post', AUC_post, popt1[0], 
+                                         popt1[1], popt1[2], post_s[0], s50_adj_post])
+                    param_2_pre.append([sub, item, 'pre', AUC_pre, popt0[0], 
+                                        popt0[1], popt0[2], pre_s[0], s50_adj_pre])
                 else:
                     param.append([sub, item, np.nan,
                                   np.nan, np.nan, np.nan]) 
-                    param_2_post.append([sub, item, 'post',
-                                         np.nan, np.nan, np.nan])
-                    param_2_pre.append([sub, item, 'pre', 
-                                        np.nan, np.nan, np.nan]) 
+                    param_2_post.append([sub, item, 'post', np.nan,
+                                         np.nan, np.nan, np.nan, np.nan, np.nan])
+                    param_2_pre.append([sub, item, 'pre', np.nan, 
+                                        np.nan, np.nan, np.nan, np.nan, np.nan]) 
         
         plt.tight_layout()
         #plt.close('all')
@@ -642,13 +673,15 @@ if __name__ == '__main__':
         plt.close('all')
 
     param_df = pd.DataFrame(param, columns=['Subject','Condition','FacIdx',
-                                            'MEP_max', 's50', 'Slope'])
+                                            'MEP_max', 's50', 'Slope', 'Bias',
+                                            'MEP_max_bias', 's50_adjusted'])
     
-    param_df2 = pd.DataFrame(param_2_post, columns=['Subject','Condition','Session',
-                                                    'MEP_max', 's50', 'Slope'])
-    param_df3 = pd.DataFrame(param_2_pre, columns=['Subject','Condition','Session',
-                                                    'MEP_max', 's50', 'Slope'])
+    param_df2 = pd.DataFrame(param_2_post, columns=['Subject','Condition','Session','AUC',
+                                                    'MEP_max', 's50', 'Slope', 'Bias', 's50_adjusted'])
+    param_df3 = pd.DataFrame(param_2_pre, columns=['Subject','Condition','Session','AUC',
+                                                    'MEP_max', 's50', 'Slope', 'Bias','s50_adjusted'])
     param_df_session = pd.concat([param_df2, param_df3])
+    param_df_session['MEP_max_bias'] = param_df_session['MEP_max'] + param_df_session['Bias']
     
     param_df.to_csv('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_params.csv')
     param_df_session.to_csv('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_params2.csv')
@@ -676,11 +709,11 @@ if __name__ == '__main__':
     plt.tight_layout()
     
     # LMM 
-    model = Lmer(f"Facilitation_Index ~ Condition + (1|Subject)", 
-                 data=fac_idx_df)
+    model = Lmer(f"FacIdx ~ Condition + (1|Subject)", 
+                 data=param_df.dropna())
    
     model.fit(factors={"Condition": ["sham", "up", "down"]}, 
-              ordered=True, summarize=True)
+              ordered=True, summarize=False)
     
     # Get ANOVA table
     print(model.anova(force_orthogonal=True))
@@ -695,13 +728,13 @@ if __name__ == '__main__':
     print(comparisons)
      
     ## rmANOVA
-    rmanova = pg.rm_anova(dv='Facilitation_Index', within='Condition', subject='Subject', 
-                          detailed = True, data=fac_idx_df[fac_idx_df.Facilitation_Index>0.001])
+    rmanova = pg.rm_anova(dv='FacIdx', within='Condition', subject='Subject', 
+                          detailed = True, data=param_df)
     # Pretty printing of ANOVA summary
     pg.print_table(rmanova)
     # Post hoc analysis
-    posthocs = pg.pairwise_ttests(dv='Facilitation_Index', within='Condition',
-                                  subject='Subject', data=fac_idx_df[fac_idx_df.Facilitation_Index>0.001])
+    posthocs = pg.pairwise_tests(dv='FacIdx', within='Condition',
+                                  subject='Subject', data=param_df)
     pg.print_table(posthocs)
     
 #%%
