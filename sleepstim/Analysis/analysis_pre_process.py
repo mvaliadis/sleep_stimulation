@@ -834,7 +834,7 @@ def Data_SW(path, hypno_path, save=True):
             continue
 
 #%% 
-def plot_ndPAC(df_sw):
+def plot_ndPAC(df_sw, epochs):
     fig, axes = plt.subplots()
     # Create a topomap for ndPAC values
     ndPAC = df_sw.groupby(['IdxChannel']).agg(np.nanmean)['ndPAC'].to_numpy()

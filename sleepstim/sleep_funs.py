@@ -19,6 +19,7 @@ from scipy import signal, special
 import math
 from scipy.signal import butter, filtfilt, welch, resample, resample_poly
 from scipy.integrate import simps
+import scipy.stats as stats
 from sklearn.metrics import roc_auc_score, auc, roc_curve
 import pickle
 import liesl
@@ -28,8 +29,11 @@ import pyxdf
 import xml.etree.ElementTree as ET
 import numpy as np
 import logging
+import antropy as ant
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.metrics import precision_recall_curve
+import neurokit2 as nk 
+import pandas as pd 
 
 #%%
 ## NSRR Cleveland Sleep Dataset Classifier training functions
@@ -45,7 +49,8 @@ def process_raw_EDF_cfs(file):
                'LOC': 'eog',
                'ROC': 'eog',
                'EMG2': 'emg',
-               'EMG3': 'emg'}
+               'EMG3': 'emg',
+               'ECG1': 'ecg'}
     
     # select channels in object and give labels for channel type
     raw_train.pick_channels(ch_names=list(mapping))
@@ -68,6 +73,7 @@ def process_raw_EDF_cfs(file):
     EEG = raw_train.get_data(picks='eeg', return_times=False)*1e6
     EOG = raw_train.get_data(picks='eog', return_times=False)*1e6
     EMG = raw_train.get_data(picks='emg', return_times=False)*1e6
+    ECG = raw_train.get_data(picks='ecg', return_times=False)*1e6
     times = raw_train.times
     fs = raw_train.info['sfreq']
     
@@ -78,9 +84,11 @@ def process_raw_EDF_cfs(file):
     EEG = bfr_butter_filt(EEG, fs, lfreq=0.5, hfreq=35)
     EOG = bfr_butter_filt(EOG, fs, lfreq=0.5, hfreq=35)
     EMG = bfr_butter_filt(EMG, fs, lfreq=10, hfreq=100)
+    ECG = np.expand_dims(nk.ecg_clean(ECG.squeeze(), sampling_rate=fs, 
+                                      method='neurokit', **dict(powerline=60)), 0)
 
     # combine data 
-    data = np.concatenate([EEG, EOG, EMG])
+    data = np.concatenate([EEG, EOG, EMG, ECG])
     
     # epoch data into 30s segments 
     times, epochs = yasa.sliding_window(data, fs, window=30)
@@ -154,6 +162,241 @@ def unravel_hypnogram(stages, stagelens):
         raise ValueError('The length of the scaled hypnogram does not match the amount of total epochs')
     
     return hypnogram 
+
+
+def feature_extraction(epochs, sf, line_noise_freq=(59, 61),
+                       ch_names=['C3', 'C4', 'M1', 'M2', 'EOG', 'EMG']):
+    """
+    
+    **1. Features extraction**
+
+    For each 30-seconds epoch and each channel, the following features are calculated:
+
+    * Standard deviation
+    * Interquartile range
+    * Skewness and kurtosis
+    * Number of zero crossings
+    * Hjorth mobility and complexity
+    * Absolute total power in the 0.4-30 Hz band.
+    * Relative power in the main frequency bands (for EEG and EOG only)
+    * Power ratios (e.g. delta / beta)
+    * Permutation entropy
+    * Higuchi and Petrosian fractal dimension
+
+    In addition, the algorithm also calculates a smoothed and normalized version of these features.
+    Specifically, a 7.5 min centered triangular-weighted rolling average and a 2 min past rolling
+    average are applied. The resulting smoothed features are then normalized using a robust
+    z-score.
+
+    """
+
+    # Extract duration of recording in minutes
+    #duration_minutes = epochs.shape[0]*30 / 60
+    # assert duration_minutes >= 5, "At least 5 minutes of data is required."
+
+    #######################################################################
+    # CALCULATE FEATURES
+    #######################################################################
+    
+    bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
+           (8, 12, 'Alpha'), (12, 16, 'Sigma'), 
+           (16, 30, 'Beta'), (line_noise_freq[0], line_noise_freq[1],
+                              'Line noise')]
+    dfs = []
+    for idx, ch in enumerate(ch_names):     
+        # Calculate standard descriptive statistics
+        hmob, hcomp = ant.hjorth_params(epochs[:,idx,:], axis=-1)
+    
+        feat = {
+            "std": np.std(epochs[:,idx,:], ddof=1, axis=-1),
+            "iqr": stats.iqr(epochs[:,idx,:], rng=(25, 75), axis=-1),
+            "skew": stats.skew(epochs[:,idx,:], axis=-1),
+            "kurt": stats.kurtosis(epochs[:,idx,:], axis=-1),
+            "nzc": ant.num_zerocross(epochs[:,idx,:], axis=-1),
+            "hmob": hmob,
+            "hcomp": hcomp,
+            }
+    
+        # Calculate spectral power features
+        power = bandpower(epochs[:, idx, :], fs=sf, bands=bands, 
+                          relative=True)
+        
+        # append power values to feature space
+        for j, (_, _, b) in enumerate(bands):
+            feat[b] = power[j]
+            
+        # extract and add spectral fit
+        sp_exp = []
+        for i in range(epochs.shape[0]):
+            try:
+                s = yasa.irasa(epochs[i, idx,:], sf=sf, ch_names=ch, band=(1, 30),
+                               return_fit=True, win_sec=2/1, verbose='error')[-1]['Slope'].to_numpy()[0] 
+            except:
+                s = np.nan
+            sp_exp.append(s)
+            
+        sp_exp = np.asarray(sp_exp)
+        feat["Spectral_exp"] = sp_exp
+            
+        # Add power ratios for EEG
+        delta = feat["Delta"]
+        feat["DT_ratio"] = delta / feat["Theta"]
+        feat["DS_ratio"] = delta / feat["Sigma"]
+        feat["DB_ratio"] = delta / feat["Beta"]
+        feat["AT_ratio"] = feat["Alpha"] / feat["Theta"]
+    
+        # Calculate entropy and fractal dimension features
+        feat["Perm"] = np.apply_along_axis(ant.perm_entropy, axis=-1, arr=epochs[:, idx, :],
+                                           normalize=True)
+        feat["Higuchi"] = np.apply_along_axis(ant.higuchi_fd, axis=-1, arr=epochs[:, idx, :])
+        feat["Petrosian"] = ant.petrosian_fd(epochs[:, idx, :], axis=-1)
+
+        # Create a pandas DataFrame from the dictionary
+        df_features = pd.DataFrame.from_dict(feat).reset_index()
+        df_features['chan'] = [ch] * len(df_features)
+        df_features = df_features.rename(columns={'index':'epoch'})
+        
+        # Save all channel features to dataframe
+        dfs.append(df_features)
+        
+    # Concat all channel dfs
+    df = pd.concat(dfs).reset_index(drop=True)
+    
+    #######################################################################
+    # SMOOTHING & NORMALIZATION
+    #######################################################################
+
+    # from sklearn.preprocessing import robust_scale
+    # # Apply centered rolling average (15 epochs = 7 min 30)
+    # # Triang: [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.,
+    # #          0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125]
+    # rollc = df.rolling(window=15, center=True, min_periods=1, win_type="triang").mean()
+    # rollc[rollc.columns] = robust_scale(rollc, quantile_range=(5, 95))
+    # rollc = rollc.add_suffix("_c7min_norm")
+
+    # # Now look at the past 2 minutes
+    # rollp = df.rolling(window=4, min_periods=1).mean()
+    # rollp[rollp.columns] = robust_scale(rollp, quantile_range=(5, 95))
+    # rollp = rollp.add_suffix("_p2min_norm")
+
+    # # Add to current set of features
+    # df = df.join(rollc).join(rollp)
+    
+    #######################################################################
+    # STATISTICAL FEATURES. MARKOV CHAIN MODEL & POISSON PROCESS MODELS
+    #######################################################################
+
+    #yasa.simulate_hypno
+
+    # #######################################################################
+    # # TEMPORAL FEATURES EXPORT
+    # #######################################################################
+
+    # # Add temporal features
+    # df["time_hour"] = times / 3600
+    # df["time_norm"] = times / times[-1]
+
+    # # Sort the column names here (same behavior as lightGBM)
+    # df.sort_index(axis=1, inplace=True)
+    
+    return df
+
+def ecg_feature_extraction(ecg_epochs, sf, stages=None, method='neurokit2'):
+    """
+    
+    **1. ECG/HRV features extraction**
+
+    For each 30-seconds epoch and each channel, the following features are calculated:
+        
+    see: https://neuropsychology.github.io/NeuroKit/functions/hrv.html#
+
+    """
+
+    # Extract duration of recording in minutes
+    #duration_minutes = epochs.shape[0]*30 / 60
+    # assert duration_minutes >= 5, "At least 5 minutes of data is required."
+
+    #######################################################################
+    # CALCULATE FEATURES
+    #######################################################################
+    
+    if method=='neurokit2':
+        
+        cols = ['HRV_MeanNN', 'HRV_SDNN', 'HRV_SDANN1', 'HRV_SDNNI1', 'HRV_SDANN2',
+                'HRV_SDNNI2', 'HRV_SDANN5', 'HRV_SDNNI5', 'HRV_RMSSD', 'HRV_SDSD',
+                'HRV_CVNN', 'HRV_CVSD', 'HRV_MedianNN', 'HRV_MadNN', 'HRV_MCVNN',
+                'HRV_IQRNN', 'HRV_Prc20NN', 'HRV_Prc80NN', 'HRV_pNN50', 'HRV_pNN20',
+                'HRV_MinNN', 'HRV_MaxNN', 'HRV_HTI', 'HRV_TINN', 'HRV_ULF', 'HRV_VLF',
+                'HRV_LF', 'HRV_HF', 'HRV_VHF', 'HRV_LFHF', 'HRV_LFn', 'HRV_HFn',
+                'HRV_LnHF', 'HRV_SD1', 'HRV_SD2', 'HRV_SD1SD2', 'HRV_S', 'HRV_CSI',
+                'HRV_CVI', 'HRV_CSI_Modified', 'HRV_PIP', 'HRV_IALS', 'HRV_PSS',
+                'HRV_PAS', 'HRV_GI', 'HRV_SI', 'HRV_AI', 'HRV_PI', 'HRV_C1d', 'HRV_C1a',
+                'HRV_SD1d', 'HRV_SD1a', 'HRV_C2d', 'HRV_C2a', 'HRV_SD2d', 'HRV_SD2a',
+                'HRV_Cd', 'HRV_Ca', 'HRV_SDNNd', 'HRV_SDNNa', 'HRV_DFA_alpha1',
+                'HRV_MFDFA_alpha1_Width', 'HRV_MFDFA_alpha1_Peak',
+                'HRV_MFDFA_alpha1_Mean', 'HRV_MFDFA_alpha1_Max',
+                'HRV_MFDFA_alpha1_Delta', 'HRV_MFDFA_alpha1_Asymmetry',
+                'HRV_MFDFA_alpha1_Fluctuation', 'HRV_MFDFA_alpha1_Increment',
+                'HRV_ApEn', 'HRV_SampEn', 'HRV_ShanEn', 'HRV_FuzzyEn', 'HRV_MSEn',
+                'HRV_CMSEn', 'HRV_RCMSEn', 'HRV_CD', 'HRV_HFD', 'HRV_KFD', 'HRV_LZC']
+        hrv_dfs = []
+        # Iterate through epoch data
+        for idx, epoch in enumerate(ecg_epochs):
+            try:
+                # extract peaks
+                peaks, _ = nk.ecg_peaks(epoch, sampling_rate=sf)
+                # compute hrv 
+                kwargs = dict(psd_method='lombscargle')
+                try:
+                    hrv = nk.hrv(peaks, sampling_rate=sf, **kwargs) 
+                except:
+                    hrv = pd.DataFrame(np.nan, index=range(1), columns=cols)
+            except:
+                hrv = pd.DataFrame(np.nan, index=range(1), columns=cols)
+            # add epoch # to df
+            hrv['epoch'] = idx
+            # Save all channel features to dataframe
+            hrv_dfs.append(hrv.reset_index(drop=True))           
+                
+        # Concat all channel dfs
+        hrv_df = pd.concat(hrv_dfs).reset_index(drop=True)
+        
+    elif method=='sleepecg':
+        from sleepecg import SleepRecord, extract_features, detect_heartbeats
+        
+        hbeats = []
+        for idx, ep in enumerate(ecg_epochs):
+            hbeat = detect_heartbeats(ep, sf) 
+            hbeat += (idx*len(ep))
+            hbeats.append(hbeat)
+            
+        heartbeat_times = np.concatenate(hbeats)/sf   
+        
+        rec = SleepRecord(
+            sleep_stages=stages,
+            sleep_stage_duration=30,
+            heartbeat_times=heartbeat_times,
+        )
+        
+        features, stages_, feature_ids = extract_features(
+            [rec],
+            lookback=0,
+            lookforward=30)#,
+        #feature_selection=["hrv-time", "LF_norm", "HF_norm", "LF_HF_ratio"])
+        feature_ids.append('stage')
+        hrv_df = pd.DataFrame(np.concatenate([features[0], stages.reshape(-1,1).astype(int)], axis=1), 
+                              columns=feature_ids)
+    
+    ## Apply to all 
+    # drop columns with too many nans 
+    null_counts = hrv_df.isnull().sum()
+    null_percentages = null_counts / len(hrv_df)
+    columns_to_drop = null_percentages[null_percentages > .10].index.tolist()
+
+    # drop the columns
+    hrv_df.drop(columns_to_drop, axis=1, inplace=True)
+        
+    return hrv_df 
 
 #%%
 ## Surface Laplacian
@@ -871,7 +1114,12 @@ def bfr_butter_filt(data, fs, order = 4, lfreq = 0.5, hfreq = 35, btype='pass', 
         if data.dtype != np.float64:
             data == np.asarray(data, dtype=np.float64)
     ## Construct butter filter (scipy)
-    filtparams = butter(order, (lfreq, hfreq), btype=btype, fs = fs)
+    if btype == 'pass':
+        filtparams = butter(order, (lfreq, hfreq), btype=btype, fs = fs)
+    elif btype=='lowpass':
+        filtparams = butter(order, (hfreq), btype=btype, fs = fs)
+    elif btype=='highpass':
+        filtparams = butter(order, (lfreq), btype=btype, fs = fs)
     # run zero phase digitial filter with butterworth parameters, 
     # but first confirm order of dims
     dpnts, chans = data.shape
