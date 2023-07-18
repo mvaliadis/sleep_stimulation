@@ -12,7 +12,7 @@ Created on Tue Aug 11 21:40:50 2020
 
 import lightgbm as lgb 
 import xgboost as xgb
-import treelite
+#import treelite
 from itertools import cycle
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.ensemble import RandomForestClassifier

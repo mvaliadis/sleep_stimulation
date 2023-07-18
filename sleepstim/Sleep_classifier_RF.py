@@ -7,19 +7,23 @@ Created on Thu Feb 27 10:24:59 2020
 """
 
 from sklearn.impute import SimpleImputer, KNNImputer
+from collections import defaultdict
 from sklearn.linear_model import LinearRegression
-from sklearn.metrics import (classification_report, accuracy_score, auc,
+from sklearn.metrics import (classification_report, accuracy_score, matthews_corrcoef, auc,
                              roc_curve, roc_auc_score, confusion_matrix)
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 #from sklearn.multiclass import OneVsRestClassifier
-from sklearn.feature_selection import f_classif
+from sklearn.gaussian_process import GaussianProcessClassifier
+from sklearn.feature_selection import f_classif, RFECV
 from scipy import interp
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle
 import time
+from lightgbm import LGBMClassifier
+import xgboost
 from itertools import cycle
 import pandas as pd
 #import pingouin as pg
@@ -29,6 +33,7 @@ sns.set(font_scale=1.2)
 from os import chdir as cd
 from os import listdir
 from openTSNE import TSNE
+import shap
 # cd('/home/administrator/Documents/Physionet_data')
 cd('/media/administrator/data/cfs/pre_proc')
 
@@ -307,38 +312,64 @@ def plot_tsne(x, y, ax=None, title=None, draw_legend=True, draw_centers=False,
         if legend_kwargs is not None:
             legend_kwargs_.update(legend_kwargs)
         ax.legend(handles=legend_handles, **legend_kwargs_)
-        
 
-#%%
+def classifier_with_rfe(df_eeg, model='lightGBM'):
+    # Step 0: Create new dataframe and impute nans
+    rfe_df = df_eeg.set_index(['chan', 'set', 'subject','epoch','stage']).loc[(['C3', 'C4', 'EOG', 'EMG']),
+                                                                              df_eeg.columns[2:-4]].unstack(level='chan') 
+    rfe_df.columns = list([f"{x[0]}_{x[1]}" for x in rfe_df.columns])
+    
+    # Impute NaN values with mean again....
+    rfe_df = rfe_df.fillna(rfe_df.mean())
 
-def gaussian_process_rfe(X, Y):
-    from sklearn.gaussian_process import GaussianProcessClassifier
-    from sklearn.feature_selection import RFECV
-
-    # Step 1: Create an instance of the Gaussian Process model
-    gp_model = GaussianProcessClassifier()
+    # Step 1: Create an instance of the decision tree model
+    if model == 'Random_forest':
+        clf = RandomForestClassifier(n_estimators=100, oob_score=True, 
+                                     random_state=42)
+    elif model == 'lightGBM':
+        params = dict(
+            boosting_type='gbdt',
+            n_estimators=400,
+            max_depth=5,
+            num_leaves=90,
+            colsample_bytree=0.5,
+            importance_type='gain',
+            )
+        clf = LGBMClassifier(**params)
+    elif model == 'XGBoost':
+        clf = xgboost.XGBClassifier()
     
     # Step 2: Create an instance of the Recursive Feature Elimination with Cross-Validation (RFECV)
-    rfe = RFECV(estimator=gp_model)
-    
-    # Step 3: Apply RFECV to perform feature selection and train the GP model
-    rfe.fit(X, y)
-    
+    rfe = RFECV(estimator=clf,
+                cv=GroupShuffleSplit(n_splits=100, train_size=0.8, random_state=42),
+                scoring="f1_weighted",
+                min_features_to_select=1,
+                n_jobs=-1)
+
+    # Step 3: Apply RFECV to perform feature selection and train the RF model
+    rfe.fit(rfe_df, rfe_df.reset_index()['stage'].to_numpy(), 
+            groups=rfe_df.reset_index()['subject'].to_numpy())    
+      
     # Step 4: Access the selected features
-    selected_features = rfe.support_
-    
+    selected_features = rfe_df.columns[rfe.support_]
+
     # Step 5: Optionally, access the feature ranking
     feature_ranking = rfe.ranking_
-    
-    # Step 6: Train the GP model using the selected features
-    selected_X = X[:, selected_features]
-    gp_model.fit(selected_X, y)
-    
-    # Step 7: Make predictions using the trained GP model
-    selected_X_test = ...  # Your test feature data
-    predictions = gp_model.predict(selected_X_test)
-    
-    return predictions
+
+    return rfe, selected_features, feature_ranking
+
+def plot_rfe(rfe):
+    n_scores = len(rfe.cv_results_["mean_test_score"])
+    plt.figure()
+    plt.xlabel("Number of features selected")
+    plt.ylabel("Weighted F1-scores")
+    plt.errorbar(
+        range(1, n_scores + 1),
+        rfe.cv_results_["mean_test_score"],
+        yerr=rfe.cv_results_["std_test_score"],
+    )
+    plt.title("Recursive Feature Elimination \nwith correlated features")
+    plt.show()
 
 def calculate_vif(df, features):   
     ## Impute data first
@@ -360,6 +391,7 @@ def calculate_vif(df, features):
         X, y = df_imputed[X], df_imputed[feature]
         # extract r-squared from the fit
         r2 = LinearRegression().fit(X, y).score(X, y)                
+        print(r2)
         
         # calculate tolerance
         tolerance[feature] = 1 - r2
@@ -442,15 +474,28 @@ def train_test_feature_split(df, df_ecg=None, kind='pandas', pca=False, use_smot
     elif kind=='numpy':   
         # X_train = df.set_index(['chan','set']).loc[(['C3','C4','EOG'],['training']),:][df.columns[5:-4]].to_numpy()    
         # X_test = df.set_index(['chan','set']).loc[(['C3','C4','EOG'],['testing']),:][df.columns[5:-4]].to_numpy() 
-        X_train = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG', 'EMG'], ['training']), 
-                                                                       df.columns[2:-4]].unstack(level='chan').to_numpy()
-        X_test = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG', 'EMG'], ['testing']), 
-                                                                       df.columns[2:-4]].unstack(level='chan').to_numpy()
-        y_train = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3'], ['training']),
-                                                                       df.columns[-3]].unstack(level='chan').astype(int).to_numpy().squeeze()
-        y_test = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3'], ['testing']), 
-                                                                      df.columns[-3]].unstack(level='chan').astype(int).to_numpy().squeeze()
+        # X_train = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG', 'EMG'], ['training']), 
+        #                                                                df.columns[2:-4]].unstack(level='chan').to_numpy()
+        # X_test = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG', 'EMG'], ['testing']), 
+        #                                                                df.columns[2:-4]].unstack(level='chan').to_numpy()
+        # y_train = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3'], ['training']),
+        #                                                                df.columns[-3]].unstack(level='chan').astype(int).to_numpy().squeeze()
+        # y_test = df.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3'], ['testing']), 
+        #                                                               df.columns[-3]].unstack(level='chan').astype(int).to_numpy().squeeze()
         
+        unique_chans = df.chan.unique()
+        # X_train = df.set_index(['chan','set']).loc[(['C3','C4','EOG'],['training']),:][df.columns[5:-4]].to_numpy()    
+        # X_test = df.set_index(['chan','set']).loc[(['C3','C4','EOG'],['testing']),:][df.columns[5:-4]].to_numpy() 
+        X_train = df.set_index(['chan', 'set', 'subject','epoch']).loc[(unique_chans, ['training']), 
+                                                                       df.columns[2:-4]].unstack(level='chan').to_numpy()
+        X_test = df.set_index(['chan', 'set', 'subject','epoch']).loc[(unique_chans, ['testing']), 
+                                                                       df.columns[2:-4]].unstack(level='chan').to_numpy()
+        y_train = df.set_index(['chan', 'set', 'subject','epoch']).loc[(unique_chans[0], ['training']),
+                                                                       df.columns[-3]].unstack(level='chan').astype(int).to_numpy().squeeze()
+        y_test = df.set_index(['chan', 'set', 'subject','epoch']).loc[(unique_chans[0], ['testing']), 
+                                                                      df.columns[-3]].unstack(level='chan').astype(int).to_numpy().squeeze()
+
+
         if df_ecg is not None:
             X_train = np.concatenate([X_train, ecg_train[ecg_train.columns[0:-4]].to_numpy()], axis=1)
             X_test = np.concatenate([X_test, ecg_test[ecg_test.columns[0:-4]].to_numpy()], axis=1)
@@ -621,6 +666,32 @@ def lightgbm_classification(X_train, y_train, X_test, y_test, class_weight=False
     
     return clf
 
+def xgboost_classification(X_train, y_train, X_test, y_test):
+    # Fit
+    clf = xgboost.XGBClassifier()
+    clf.fit(X_train, y_train)
+    
+    # Metrics
+    event_id = {'Wake': 0,
+                'Stage 1': 1,
+                'Stage 2': 2,
+                'Stage 3': 3,
+                'REM': 4} 
+    
+    # prediction    
+    y_pred = clf.predict(X_test)
+    
+    # accuracy report, confusion matrix, classification reports
+    acc = accuracy_score(y_test, y_pred)
+    print("Accuracy score: {}".format(acc))
+    #confusion = confusion_matrix(y_test, y_pred)
+    print(confusion_matrix(y_test, y_pred))
+    #report = classification_report(y_test, y_pred, target_names=event_id.keys())
+    print(classification_report(y_test, y_pred, target_names=event_id.keys()))
+    
+    return clf
+    
+
 def neural_network_classification(X_train, y_train,  X_test, y_test, standarize=True):
     if standarize:
         from sklearn.preprocessing import StandardScaler  
@@ -689,13 +760,13 @@ ax.legend()
 ax.set_title("Feature mean vs. Fano factor")
 plt.tight_layout()
 
+##
 # normalize/scale features 
-from sklearn.preprocessing import RobustScaler 
+from sklearn.preprocessing import RobustScaler, StandardScaler
 #from sklearn.preprocessing import MaxAbsScaler #for [-1 to 1] if both value ranges
-scaler = RobustScaler()  
+scaler = StandardScaler() #RobustScaler()  
 # Don't cheat - fit only on training data
-scaler.fit(X_train)  
-X_train_scaled = scaler.transform(X_train)  
+X_train_scaled = scaler.fit_transform(X_train)  
 # apply same transformation to test data
 X_test_scaled = scaler.transform(X_test) 
 
@@ -721,13 +792,21 @@ norm_fano = norm_var / norm_mean
 fano_crit = np.where(norm_fano >= 3)[0]
 #feats_fano = X_train[:, fano_crit]
 feats_fano = X_train_scaled[:, fano_crit]
-#pca1 = PCA(n_components=65).fit_transform(feats_fano)
+
+# pca
+pca1 = PCA(n_components=35)
+pca1.fit(X_train_scaled)
+pca1_4tsne = pca1.transform(X_train_scaled)
+pca_thres = np.where(np.cumsum(pca1.explained_variance_)>=50)[0][0]
+
+#
 feats_fano_log = np.log(1e-10 + np.abs(feats_fano))
 #pca2 = PCA(n_components=65).fit_transform(feats_fano_log)
 feats_fano_sqrt = np.sqrt(feats_fano)
 #pca3 = PCA(n_components=65).fit_transform(feats_fano_sqrt)
 
-tsne1 = TSNE(perplexity=100, metric="euclidean", n_jobs=-1).fit(feats_fano).transform(feats_fano)
+# tsne
+tsne1 = TSNE(perplexity=50, metric="euclidean", n_jobs=-1).fit(pca1_4tsne[:,0:pca_thres]).transform(pca1_4tsne[:,0:pca_thres])
 # tsne1 = TSNE(perplexity=100, metric="euclidean", n_jobs=-1).fit(X_train).transform(X_train)
 # tsne1 = TSNE(perplexity=100, metric="euclidean", n_jobs=-1).fit(pca1).transform(pca1)
 
@@ -750,14 +829,13 @@ from sklearn.neighbors import NearestNeighbors, kneighbors_graph
 import leidenalg as la
 
 # Construct kNN graph with k=15
-A = kneighbors_graph(feats_fano, 15)
+A = kneighbors_graph(pca1_4tsne[:,0:5], 30)
 # Transform it into an igraph object
 sources, targets = A.nonzero()
 G = ig.Graph(directed=False)
 G.add_vertices(A.shape[0])
 edges = list(zip(sources, targets))
 G.add_edges(edges)
-
 
 # Run Leiden clustering
 # you can use `la.RBConfigurationVertexPartition` as the partition type
@@ -766,7 +844,7 @@ partition = la.find_partition(
     )
 
 fig, ax = plt.subplots(figsize=(4, 4))
-ax.scatter(tsne1[:, 0], tsne1[:, 1], s=1, c=partition.membership)
+plot_tsne(tsne1, partition.membership, alpha=0.25, ax=ax)
 
 
 # %% Run & save Models/Training/Testing sets
@@ -783,17 +861,212 @@ lgbm = lightgbm_classification(X_train, y_train, X_test, y_test,
                                class_weight=False)
 pickle.dump(lgbm, open("lgbm_model_new_cfs.p", "wb"))
 
+# XGBoost 
+XGBoost = xgboost_classification(X_train, y_train, X_test, y_test)
+pickle.dump(XGBoost, open("xgboost_model_new_cfs.p", "wb"))
+
 # Neural network   
 nn = neural_network_classification(X_train, y_train,  X_test, y_test,
                                    standarize=True)
 pickle.dump(nn, open("nn_model_new_cfs.p", "wb"))
 
 #%%
-c1 = list(df_eeg.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG'], 
+feat_path = '/media/administrator/data/cfs/feature_analysis/'
+## Feature importance with shapely values
+# Create Tree Explainer object that can calculate shap values
+explainer = shap.TreeExplainer(lgbm) #rf
+# train data 
+shap_df_train = df_eeg.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG', 'EMG'], 
+                                                                         ['training']), 
+                                                                        df_eeg.columns[2:-4]].unstack(level='chan')
+shap_df_train.columns = list([f"{x[0]}_{x[1]}" for x in shap_df_train.columns])
+# testing data to explain
+shap_df_test = df_eeg.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG', 'EMG'], 
+                                                                         ['testing']), 
+                                                                        df_eeg.columns[2:-4]].unstack(level='chan')
+shap_values = explainer.shap_values(shap_df_test)
+# f_list = list([f"{x[0]}_{x[1]}" for x in shap_df.columns])
+shap_df_test.columns = list([f"{x[0]}_{x[1]}" for x in shap_df_test.columns])
+shap.summary_plot(shap_values, feature_names=shap_df_test.columns, max_display=30)
+
+# Aggregate SHAP values
+mean_abs_shap_values = np.mean(np.abs(shap_values), axis=1)
+
+# Rank the features for each class
+feature_rank = pd.DataFrame(mean_abs_shap_values.T, 
+                            columns=['Class {}'.format(i) for i in range(5)], 
+                            index=shap_df_test.columns)
+feature_rank['Average Importance'] = feature_rank.mean(axis=1)
+feature_rank = feature_rank.sort_values(by='Average Importance', ascending=False)
+feature_rank.to_csv(feat_path + "shap_rank_lgbm.csv")
+
+#%%
+## Recursive feature elimination with cross validation
+plt.close('all')
+rfe, selected_features, feature_ranking = classifier_with_rfe(df_eeg, model='Random_forest')
+plot_rfe(rfe)
+pickle.dump(rfe, open(feat_path + "rfe_rf.p", "wb"))
+
+#%%
+## Reclassify based on Shaply importances
+from sklearn.metrics import f1_score
+f1_scores = []
+for idx in range(1, len(feature_rank.index)):
+    # CV to resplit each time 
+    df = train_test_feature_split(df_eeg, df_ecg=None, pca=False, 
+                                  kind='pandas', use_smote=False)
+    
+    shap_df_train = df.set_index(['chan', 'set', 'subject','epoch', 'stage']).loc[(['C3', 'C4', 'EOG', 'EMG'], 
+                                                                          ['training']),
+                                                                         df.columns[2:-4]].unstack(level='chan')
+    shap_df_train.columns = list([f"{x[0]}_{x[1]}" for x in shap_df_train.columns])
+    
+    shap_df_test = df.set_index(['chan', 'set', 'subject','epoch','stage']).loc[(['C3', 'C4', 'EOG', 'EMG'], 
+                                                                         ['testing']),
+                                                                        df.columns[2:-4]].unstack(level='chan')
+    shap_df_test.columns = list([f"{x[0]}_{x[1]}" for x in shap_df_test.columns])
+    
+    
+    shap_df_train_shap = shap_df_train[feature_rank.index[0:idx]]
+    shap_df_test_shap = shap_df_test[feature_rank.index[0:idx]]
+    clf = lightgbm_classification(X_train = shap_df_train_shap, 
+                                  y_train = shap_df_train_shap.reset_index()['stage'].to_numpy(), 
+                                  X_test = shap_df_test_shap,
+                                  y_test = shap_df_test_shap.reset_index()['stage'].to_numpy(),
+                                  class_weight=False)
+    
+    # Metrics
+    event_id = {'Wake': 0,
+                'Stage 1': 1,
+                'Stage 2': 2,
+                'Stage 3': 3,
+                'REM': 4} 
+    
+    # prediction    
+    y_pred = clf.predict(shap_df_test_shap)
+    
+    # accuracy report, confusion matrix, classification reports
+    f1_scores.append([idx, f1_score(y_test, y_pred, average='weighted')])
+  
+# extract counts & f1-scores    
+feat_count = [f1_scores[i][0] for i in range(len(f1_scores))]
+f1s = [f1_scores[i][1] for i in range(len(f1_scores))]
+
+# Find the saturation point
+max_f1_score = max(f1s)
+max_f1_score_index = f1s.index(max_f1_score)
+thresholds = np.linspace(0, 1, len(f1_scores))
+saturation_threshold = thresholds[max_f1_score_index]
+
+# # Find the plateau point
+# threshold_diffs = np.diff(thresholds)
+# f1_score_diffs = np.diff(f1s)
+# f1_score_gradients = f1_score_diffs / threshold_diffs
+
+# # Find the index of the plateau point where the gradient is close to zero
+# plateau_indices = np.where(np.isclose(f1_score_gradients, 0))[0]
+# plateau_thresholds = thresholds[plateau_indices]
+
+# # Select the first plateau threshold as the plateau point
+# plateau_threshold = plateau_thresholds[0]
+# plateau_f1_score = f1_scores[plateau_indices[0]]
+
+# Plot curve
+plt.figure()
+plt.plot(feat_count, f1s)
+plt.xlabel('Ranked Feature Count')
+plt.ylabel('Weighted F1-scores')
+plt.vlines(max_f1_score_index, ymin=min(f1s), ymax=max(f1s)+.01,
+           linestyles='dashed', label='Max F1-score')
+plt.grid(True)
+plt.tight_layout()
+plt.legend()
+
+#%%
+## Feature importance with permutation random forest 
+from scipy.stats import spearmanr
+from scipy.cluster import hierarchy
+from scipy.spatial.distance import squareform
+from sklearn.inspection import permutation_importance
+
+result = permutation_importance(rf, X_train, y_train, n_repeats=10, random_state=42)
+perm_sorted_idx = result.importances_mean.argsort()
+
+tree_importance_sorted_idx = np.argsort(rf.feature_importances_)
+tree_indices = np.arange(0, len(rf.feature_importances_)) + 0.5
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 12))
+ax1.barh(tree_indices, rf.feature_importances_[tree_importance_sorted_idx], height=0.7)
+ax1.set_yticks(tree_indices)
+ax1.set_yticklabels(shap_df_test.columns[tree_importance_sorted_idx])
+ax1.set_ylim((0, len(rf.feature_importances_)))
+ax2.boxplot(
+    result.importances[perm_sorted_idx].T,
+    vert=False,
+    labels=shap_df_test.columns[perm_sorted_idx],
+)
+fig.tight_layout()
+plt.show()
+
+## Handling Multicollinear Features
+# When features are collinear, permutating one feature will have little effect 
+# on the models performance because it can get the same information from a correlated 
+# feature. One way to handle multicollinear features is by performing hierarchical 
+# clustering on the Spearman rank-order correlations, picking a threshold, and 
+# keeping a single feature from each cluster. First, we plot a heatmap of the 
+# correlated features:
+# Plot
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8))
+corr = spearmanr(X_test).correlation
+
+# Ensure the correlation matrix is symmetric
+corr = (corr + corr.T) / 2
+np.fill_diagonal(corr, 1)
+
+# We convert the correlation matrix to a distance matrix before performing
+# hierarchical clustering using Ward's linkage.
+distance_matrix = 1 - np.abs(corr)
+dist_linkage = hierarchy.ward(squareform(distance_matrix))
+dendro = hierarchy.dendrogram(
+    dist_linkage, labels=shap_df_test.columns, ax=ax1, leaf_rotation=90
+)
+dendro_idx = np.arange(0, len(dendro["ivl"]))
+
+ax2.imshow(corr[dendro["leaves"], :][:, dendro["leaves"]])
+ax2.set_xticks(dendro_idx)
+ax2.set_yticks(dendro_idx)
+ax2.set_xticklabels(dendro["ivl"], rotation="vertical")
+ax2.set_yticklabels(dendro["ivl"])
+fig.tight_layout()
+plt.grid(False)
+plt.show()
+
+# Next, we manually pick a threshold by visual inspection of the dendrogram to 
+# group our features into clusters and choose a feature from each cluster to keep, 
+# select those features from our dataset, and train a new random forest. The test 
+# accuracy of the new random forest did not change much compared to the random forest
+# trained on the complete dataset
+cluster_ids = hierarchy.fcluster(dist_linkage, .5, criterion="distance")
+cluster_id_to_feature_ids = defaultdict(list)
+for idx, cluster_id in enumerate(cluster_ids):
+    cluster_id_to_feature_ids[cluster_id].append(idx)
+selected_features = [v[0] for v in cluster_id_to_feature_ids.values()]
+
+X_train_sel = X_train[:, selected_features]
+X_test_sel = X_test[:, selected_features]
+
+clf_sel = RandomForestClassifier(n_estimators=100, random_state=42)
+clf_sel.fit(X_train_sel, y_train)
+print(f"Accuracy on test data with features"
+      f"removed: {clf_sel.score(X_test_sel, y_test).round(2)}")
+print(f"Selected features: {list(shap_df_test.columns[selected_features])}")
+
+#%%
+c1 = list(df_eeg.set_index(['chan', 'set', 'subject','epoch']).loc[(['C3', 'C4', 'EOG', 'EMG'], 
                                                                     ['training']), 
-                                                                   df_eeg.columns[5:-4]].unstack(level='chan').columns)
+                                                                   df_eeg.columns[2:-4]].unstack(level='chan').columns)
 c1_ = [f"{x[0]}_{x[1]}" for x in c1]
-c2 = list(ecg_train[ecg_train.columns[0:-4]].columns)
+#c2 = list(ecg_train[ecg_train.columns[0:-4]].columns)
 
 # c_all = c1_ + c2
 
@@ -810,7 +1083,7 @@ plt.tight_layout()
 
 
 plt.figure(figsize=(20, 20))
-sns.barplot(y=c2, x=rf.feature_importances_[len(c1_):len(c1_) + len(c2)], palette='RdYlGn')    
+#sns.barplot(y=c2, x=rf.feature_importances_[len(c1_):len(c1_) + len(c2)], palette='RdYlGn')    
 plt.xlabel('Normalized feature importance')
 plt.xticks(rotation=20)
 # Set font size of y-tick labels
