@@ -10,23 +10,23 @@ Created on Tue Jan 19 17:26:05 2021
 # Analysis Pre-processing script
 # =============================================================================
 
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_pdf import PdfPages
-import pickle 
-import pandas as pd
-import pyxdf
-import yasa 
-import mne
-import pingouin as pg
-from mne.stats import permutation_cluster_test
-import logging
-import time
-import wonambi
-import seaborn as sns
-from os import chdir as cd
-from os import listdir
-import os, shutil
+# import numpy as np
+# import matplotlib.pyplot as plt
+# from matplotlib.backends.backend_pdf import PdfPages
+# import pickle 
+# import pandas as pd
+# import pyxdf
+# import yasa 
+# import mne
+# import pingouin as pg
+# from mne.stats import permutation_cluster_test
+# import logging
+# import time
+# import wonambi
+# import seaborn as sns
+# from os import chdir as cd
+# from os import listdir
+# import os, shutil
 from sleepstim.Analysis.analysis_pre_process import (Data_Struct, preprocess_sleep_data, compare_hypnograms, check_match_data_hypno_elements, 
                                                      label_artifacts, load_preprocessed_data, Data_SW, SW_ERPs)
 
@@ -60,6 +60,11 @@ preprocess_sleep_data(path, save=True, stageing = True, validation='classifier')
 ## Step 1c - Pre-process data (auditory stimulation validation)
 path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/'
 preprocess_sleep_data(path, low_density=True, reference=None, validation='auditory', stageing=False, save=True)
+
+## Step 1d - Pre-process data (aperiodic analysis)
+path = '/media/administrator/data/Study_1_data/Raw_data/Experimental/' 
+preprocess_sleep_data(path, low_density=True, reference='mastoids', validation=None, 
+                      stageing=False, save=True, aperiodic=True)
 
 #%%
 ## Step 2a - Sleep stageing ## 

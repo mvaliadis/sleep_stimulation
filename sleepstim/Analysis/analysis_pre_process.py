@@ -11,6 +11,7 @@ Created on Wed Jul 15 13:35:47 2020
 # =============================================================================
 
 import numpy as np
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.backends.backend_pdf import PdfPages
@@ -25,9 +26,9 @@ from pyriemann.estimation import Covariances, Shrinkage
 from pyriemann.clustering import Potato
 import logging
 import time
-import wonambi
+#import wonambi
 import seaborn as sns
-import Levenshtein as lev
+#import Levenshtein as lev
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import zscore, skewnorm
 from scipy.special import erf
@@ -167,7 +168,9 @@ class Data_Struct:
         
 #%%
          
-def _pre_process_sleep_data(files, low_density = False, reference='mastoids', validation=None, stageing=False, line_noise_removal='spectrum_fit'):
+def _pre_process_sleep_data(files, low_density = False, reference='mastoids', 
+                            validation=None, stageing=False, aperiodic=False, 
+                            line_noise_removal='spectrum_fit'):
     """
 
     Parameters
@@ -265,11 +268,15 @@ def _pre_process_sleep_data(files, low_density = False, reference='mastoids', va
         EEG = EEG
             
     # filter data
-    EEG = mne.filter.filter_data(EEG.T, sfreq=sf, l_freq=0.3, h_freq=35, verbose=0).T
+    if aperiodic:
+        EEG = mne.filter.filter_data(EEG.T, sfreq=sf, l_freq=0.3, h_freq=50, verbose=0).T
+    else:
+        EEG = mne.filter.filter_data(EEG.T, sfreq=sf, l_freq=0.3, h_freq=35, verbose=0).T        
     EOG_L = mne.filter.filter_data(data[:,[ch_names.index('EOG_L')]].astype(np.float64).T, sf, l_freq=0.3, h_freq=35, verbose=0).T
     EOG_R = mne.filter.filter_data(data[:,[ch_names.index('EOG_R')]].astype(np.float64).T, sf, l_freq=0.3, h_freq=35, verbose=0).T
     EMG_L = mne.filter.filter_data(data[:,[ch_names.index('EMG_L')]].astype(np.float64).T, sf, l_freq=10, h_freq=100, verbose=0).T
     EMG_R = mne.filter.filter_data(data[:,[ch_names.index('EMG_R')]].astype(np.float64).T, sf, l_freq=10, h_freq=100, verbose=0).T
+    print('Made it past EEG, EOG, and EMG filtering !')
     
     if 'bipECG' in ch_names:
         ECG = mne.filter.filter_data(data[:,[ch_names.index('bipECG')]].astype(np.float64).T, sf, l_freq=0.3, h_freq=70, verbose=0).T
@@ -289,8 +296,12 @@ def _pre_process_sleep_data(files, low_density = False, reference='mastoids', va
             data = np.concatenate([dss.dss_line(data[:,i], fline=100, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(data)))], axis=-1)
             data = np.concatenate([dss.dss_line(data[:,i], fline=150, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(data)))], axis=-1)
             data = np.concatenate([dss.dss_line(data[:,i], fline=200, sfreq=sf, nfft=4*sf)[0] for i in range(min(np.shape(data)))], axis=-1)
+        elif aperiodic:
+            data = mne.filter.notch_filter(data[:,:].T, Fs=sf,  
+                                           n_jobs=1, freqs=np.arange(50,50*4+1,50)).T
         else:
-            data = mne.filter.notch_filter(data[:,:].T, Fs=sf, method='spectrum_fit', freqs=np.arange(50,50*4+1,50)).T
+            data = mne.filter.notch_filter(data[:,:].T, Fs=sf, method='spectrum_fit', 
+                                           n_jobs=-1, freqs=np.arange(50,50*4+1,50)).T
        
     # edit channel names and types based on new selection
     if low_density==True or stageing==True:
@@ -311,14 +322,22 @@ def save_preprocess_sleep_data(*args, path):
     # save as pickle file
     pickle.dump(var, open(path, "wb"))  
       
-def preprocess_sleep_data(path, low_density = False, save=True, reference='mastoids', validation=None, stageing=False):
+def preprocess_sleep_data(path, low_density = False, save=True, reference='mastoids', 
+                          validation=None, stageing=False, aperiodic=False):
     files_list = [os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files]
-    for i, files in enumerate(files_list):
+    for i, files in tqdm(enumerate(files_list)):
+        print(i, files)
         # select subject ID + cond identifier
         subjID_cond = files.split('/')[-2]
-        number = int(files.split('/')[-1].split('.')[0][-1])
+        try:
+            number = int(files.split('/')[-1].split('.')[0][-1])
+        except:
+            number = int(files.split('/')[-1].split('.')[0].split('_')[1][-1])
         if 'Experimental' in files:
-            save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/'
+            if aperiodic:
+                save_path='/media/administrator/data/Study_1_data/Pre-processed_data/Aperiodic/'
+            else:
+                save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/'
             if validation == 'classifier':
                 if number > 1:
                     new_path='/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation/' + subjID_cond + '_preproc_data_cv_' + str(number) + '.p'
@@ -348,12 +367,14 @@ def preprocess_sleep_data(path, low_density = False, save=True, reference='masto
             # check if a second recording file exists, then combine after preprocessing
             if number == 1:
                 print(f'Pre-processing the dataset for subject, condition, and recording #: {subjID_cond + "_" + str(number)} !')
-                Data = _pre_process_sleep_data(files, low_density=low_density, reference=reference, validation=validation, stageing=stageing)
+                Data = _pre_process_sleep_data(files, low_density=low_density, reference=reference, 
+                                               validation=validation, stageing=stageing, aperiodic=aperiodic)
             elif number > 1:
                 if validation == None:
                     new_path = save_path + subjID_cond + '_preproc_data_' + files.split('/')[-1].split('.')[0][-1] + '.p'
                 print(f'Pre-processing an additional file for the following dataset: {subjID_cond} which will be contained in the following path: {new_path} !')
-                Data = _pre_process_sleep_data(files, low_density=low_density, reference=reference, validation=validation, stageing=stageing)
+                Data = _pre_process_sleep_data(files, low_density=low_density, reference=reference, 
+                                               validation=validation, stageing=stageing, aperiodic=aperiodic)
             if save:
                 save_preprocess_sleep_data(Data, path=new_path)
             else:
@@ -362,6 +383,8 @@ def preprocess_sleep_data(path, low_density = False, save=True, reference='masto
         else:
             logging.warning(f'The requested dataset for subject and condition: {subjID_cond} has already been pre-processed!')
             continue
+        
+        del Data
 
 def load_preprocessed_data(file):
     # load as pickle file

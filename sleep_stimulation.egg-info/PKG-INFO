@@ -1,14 +1,12 @@
-Metadata-Version: 1.1
+Metadata-Version: 2.1
 Name: sleep-stimulation
 Version: 0.0.1
 Summary: Closed-loop sleep stimulation toolbox to process data in real time via LSL stream interface.
 Home-page: https://github.com/neuromti/sleep_stimulation.git
+Download-URL: https://github.com/neuromti/sleep_stimulation.git
 Author: Michael Valiadis
 Author-email: mvaliadis2@gmail.com
 License: MIT
-Download-URL: https://github.com/neuromti/sleep_stimulation.git
-Description: A Python toolbox that allows for online interface with LSL streams. The toolbox also includes a sleep classification framework for training data for online closed-loop gateing. Lastly, the packagae contains functions and pipelines for offline preprocessing and analysis.
-Platform: UNKNOWN
 Classifier: Development Status :: 4 - Beta
 Classifier: Environment :: Console
 Classifier: Intended Audience :: Developers
@@ -23,3 +21,5 @@ Classifier: Programming Language :: Python :: 3
 Classifier: Topic :: Scientific/Engineering :: Human Machine Interfaces
 Classifier: Topic :: Scientific/Engineering :: Medical Science Apps.
 Classifier: Topic :: Software Development :: Libraries
+
+A Python toolbox that allows for online interface with LSL streams. The toolbox also includes a sleep classification framework for training data for online closed-loop gateing. Lastly, the packagae contains functions and pipelines for offline preprocessing and analysis.

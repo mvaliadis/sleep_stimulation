@@ -29,7 +29,7 @@ import mne
 from mne import io
 from mne.datasets import sample
 from mne.viz import plot_topomap
-from mne.time_frequency import psd_multitaper
+#from mne.time_frequency import psd_multitaper
 
 # FOOOF imports
 from fooof import FOOOFGroup

@@ -5,7 +5,7 @@ Created on Mon Feb 17 13:58:01 2020
 @author: neuro
 """
 
-import pyaudio
+#import pyaudio
 import numpy as np
 import pandas as pd
 from itertools import cycle
@@ -22,7 +22,7 @@ from scipy.integrate import simps
 import scipy.stats as stats
 from sklearn.metrics import roc_auc_score, auc, roc_curve
 import pickle
-import liesl
+#import liesl
 import yasa
 import random
 import pyxdf

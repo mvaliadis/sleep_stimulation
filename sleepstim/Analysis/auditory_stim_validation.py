@@ -37,6 +37,9 @@ from sleepstim.Analysis.Resting_State.rs_preproc import (plot_psd, norm_wavelet_
 from sleepstim.Analysis.swa_decay import swa_decay, _decay_func
 import tensorpac.methods as tpm
 from sleepstim.Analysis.foof import oscillatory_plot_psd_map, periodic_fit
+from fooof import FOOOF
+from fooof.objs.utils import average_fg, combine_fooofs, compare_info
+from fooof.bands import Bands
 from fooof.plts.spectra import plot_spectrum
 from sleepstim.Analysis.hilbert_huang import hilbert_huang_spectrum
 from sleepstim.Analysis.utils import (coincidence_matrix, find_nearest, plot_cm, 
@@ -60,6 +63,241 @@ good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', 'A4VCLD2I',
              'YIOYSRPX', 'EQDORXF6'] #'886MCPKG', 'IBYYXKMB']
 
 #%%
+
+def fun():
+    epochs, 
+    epochs.info['sfreq'], 
+    hypno_with_art, 
+    subject, 
+    cond, 
+    band=(30, 45)
+    sf=epochs.info['sfreq']
+    stage_data = epochs.get_data(picks='Fp2', units='uV')[:, hypno_with_art == 4]
+    param = 1
+
+    for param in np.arange(1, 6, 1):
+        # Initialize FOOOF object for each channel-stage combination
+        fg = FOOOF(max_n_peaks=np.inf, aperiodic_mode='fixed', peak_width_limits=(0.5, 12.0), 
+                   min_peak_height=0.0, peak_threshold=2.0)#, verbose=False)
+        
+        # Compute the power spectrum
+        freqs, psd = signal.welch(stage_data[0, :], sf, nperseg=int(2*sf)/param, 
+                                  average='median', window='hamming')
+        # psd, freqs = mne.time_frequency.psd_array_multitaper(stage_data[0, :], sf, n_jobs=-1,
+        #                                                      fmin=band[0], fmax=band[-1])
+        # freqs = freqs[::500]
+        # psd = psd[::500]
+        freqs_foi = freqs[(freqs >= band[0]) & (freqs <= band[1])]
+        psd_foi = psd[(freqs >= band[0]) & (freqs <= band[1])]
+            
+        # Fit the FOOOF model
+        fg.fit(freqs, psd, freq_range=band)
+            
+        # Extract the aperiodic exponent
+        aperiodic_exponent = fg.get_params('aperiodic_params', 'exponent')
+        
+        # Extract the R^2 value
+        r2s = fg.get_params('r_squared')
+        
+        # Extract the intercept
+        intercept = fg.get_params('aperiodic_params', 'offset')
+        
+        fg.plot()
+        fg.report()
+        
+def compute_fooof_aperiodic_exponent(data, sf, hypnogram, subject, condition, band=(1, 30)):
+    
+    aperiodic_exponent_dfs = []
+    fg_dict = {}
+
+    # Compute the power spectrum for each sleep stage
+    for stage in np.unique(hypnogram):
+        if stage >= 0:
+            # Slice the data based on sleep stage
+            stage_data = data.get_data(units='uV')[:, hypnogram == stage]
+            # Slice the data based on channel
+            for idx, ch_name in enumerate(data.ch_names):
+                # Initialize FOOOF object for each channel-stage combination
+                fg = FOOOF(max_n_peaks=np.inf, aperiodic_mode='fixed', peak_width_limits=(0.5, 12.0), 
+                           min_peak_height=0.0, peak_threshold=2.0, verbose=False)
+                
+                # Compute the power spectrum
+                freqs, psd = signal.welch(stage_data[idx, :], sf, nperseg=int(2*sf)/1, 
+                                          average='median', window='hamming')
+                freqs_foi = freqs[(freqs >= band[0]) & (freqs <= band[1])]
+                psd_foi = psd[(freqs >= band[0]) & (freqs <= band[1])]
+                
+                # Fit the FOOOF model
+                fg.fit(freqs, psd, freq_range=band)
+                
+                # Store the FOOOF object to dictionary
+                key = (stage, ch_name, condition, subject)
+                fg_dict[key] = fg
+                
+                # Extract the aperiodic exponent
+                aperiodic_exponent = fg.get_params('aperiodic_params', 'exponent')
+                
+                # Extract the R^2 value
+                r2s = fg.get_params('r_squared')
+                
+                # Extract the intercept
+                intercept = fg.get_params('aperiodic_params', 'offset')
+                
+                # Extract the standard deviation of the oscillatory component
+                std_osc = np.std(fg.power_spectrum - fg._ap_fit, ddof=1, axis=-1)
+                
+                # Store the aperiodic exponent
+                aperiodic_exponent_df = pd.DataFrame({
+                    'Subject': [subject]*len(freqs_foi),
+                    'Condition': [condition]*len(freqs_foi), 
+                    'Stage': [stage]*len(freqs_foi),
+                    'Chan': [ch_name]*len(freqs_foi),
+                    'Slope': [aperiodic_exponent]*len(freqs_foi),
+                    'R^2': [r2s]*len(freqs_foi), 
+                    'Intercept': [intercept]*len(freqs_foi),
+                    'std(osc)': [std_osc]*len(freqs_foi),
+                    'Spectrum': psd_foi,
+                    'Frequency': freqs_foi
+                })
+                aperiodic_exponent_dfs.append(aperiodic_exponent_df)
+
+    # Combine all dataframes
+    aperiodic_exponent_df_all = pd.concat(aperiodic_exponent_dfs, axis=0)
+
+    return fg_dict, aperiodic_exponent_df_all.reset_index(drop=True)
+
+def plot_spectral_components(fm=None, chan=None, stage=None, fit_params=None, 
+                             log_freq=True, save=False, fig_path=None):
+    # Plot FOOOF results
+    fig = plt.figure() 
+    plt.tight_layout()
+    plt.yscale('log')
+    if log_freq:
+        plt.xscale('log')
+    plt.plot(fm.freqs, 10**(fm.power_spectrum), c='k', label="Power spectrum", lw=2)
+    plt.plot(fm.freqs, 10**(fm._ap_fit), c='b',linestyle='--', label="Aperiodic fit", lw=2)
+    plt.plot(fm.freqs, 10**(fm.fooofed_spectrum_), c='r', label="FOOOF model fit", lw=2)
+    fig.suptitle(f'PSD - Stage {stage} {chan}')
+    fig.axes[0].set_xlabel("Frequency (Hz)")
+    fig.axes[0].set_ylabel("PSD log($V^2$/Hz)")
+    fig.axes[0].legend()
+    # set text with fit parameters
+    fig.axes[0].text(0.1, 0.5, f"Slope: {round(fm.aperiodic_params_[1], 2)}", 
+                     transform=fig.axes[0].transAxes)
+    sns.despine()
+
+    if save:
+        plt.savefig(f'{fig_path}.png')
+        plt.close('all')
+
+    return fig
+
+def aperiodic_component_extraction(plot=False, save=False):
+    path = '/media/administrator/data/Study_1_data/Pre-processed_data/Aperiodic/'
+    maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
+    fooof_dfs = []
+    fooof_groups_all = []
+    for i, files in enumerate(tqdm(maindir)):
+        print(i, files.split('/')[-1])
+        # if i == 0:
+        #     break
+        # load data instead of pre-processing data 
+        try:
+            Data = load_preprocessed_data(files)[0]
+        except:
+            Data = load_preprocessed_data(files)    
+        # take first (adjusted) pinknoise bursts as center point
+        burst_range = Data.pinknoise_times_sync[0:-1]
+        if len(burst_range) != 0:
+            # check condition 
+            cond = subject_cond_parser(files, study_phase = 'sleep')
+            subject = files.split("/")[-1].split('_')[0]
+            # load bad channel info before epoching
+            data_sheet = pd.read_csv('/media/administrator/data/Study_1_data/Data_tracking/epoch_reports.csv')
+            mask = np.logical_and(data_sheet['Subject']==subject, 
+                                  data_sheet['Condition']==cond)
+            bad_items = data_sheet[mask]['Bad Channels'].to_numpy()
+            if len(bad_items) > 0:
+                Data.bad_chans = bad_items[0].split("'")[1::2]
+            else:
+                Data.bad_chans = []
+                        
+            ## Data length based
+            # create mne epoch object
+            info = mne.create_info(ch_names=Data.chans, sfreq=Data.sfreq, ch_types=Data.chtypes)  
+            info['bads'] = Data.bad_chans        
+            # create epochs with online reference
+            epochs = mne.io.RawArray(Data.data.T/1e6, info)
+            # set montage
+            epochs.set_montage(mne.channels.make_standard_montage('standard_1005')) 
+            epochs.interpolate_bads()
+            # mastoid referencing
+            epochs.set_eeg_reference(['M1','M2']) 
+            # resample data
+            epochs.resample(256)
+            # select only eeg
+            epochs.pick('eeg')
+            # create sudo hypno for now
+            try:
+                hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/' + subject + '_' + files.split('/')[-1].split('_')[1]
+                hypno_pred_s =  unravel_hypnogram_visbrain(hypno_path + '_hypno.txt')
+                hypno_pred = yasa.hypno_upsample_to_data(hypno_pred_s, sf_hypno = 1/30, 
+                                                         sf_data = epochs.info['sfreq'], 
+                                                         data = epochs)
+                print('Self-Scored Hypnogram Utilized! ')
+            except:
+                hypno_path = '/media/administrator/data/Study_1_data/Pre-processed_data/EDFs/Auto_hypnograms/' + subject + '_' + files.split('/')[-1].split('_')[1]  + '_hypnogram.npy'
+                hypno_pred_s = np.load(hypno_path)
+                hypno_pred = yasa.hypno_upsample_to_data(hypno = hypno_pred_s, data = epochs, 
+                                                         sf_hypno = 1/30, 
+                                                         sf_data = epochs.info['sfreq'])
+                print('U-Sleep Classfier Hypnogram Utilized! ')
+            # artifact detection
+            art_idx, _ = yasa.art_detect(epochs, hypno = hypno_pred, window = 4,
+                                         include = (0,1,2,3,4))
+            # The resolution of art is 4 seconds, so its sampling frequency is 1/4 (= 0.25 Hz)
+            sf_art = 1 / 4
+            art_up = yasa.hypno_upsample_to_data(art_idx, sf_art, epochs)
+            # Add -1 to hypnogram where artifacts were detected
+            hypno_with_art = hypno_pred.copy()
+            hypno_with_art[art_up] = -1            
+            # Proportion of each stage in ``hypno_with_art``
+            pd.Series(hypno_with_art).value_counts(normalize=True).round(4)*100
+            # fooof-ing 
+            fg, fooof_df = compute_fooof_aperiodic_exponent(epochs, epochs.info['sfreq'], 
+                                                            hypno_with_art, 
+                                                            subject, cond, band=(30, 45))
+            fooof_dfs.append(fooof_df)
+            fooof_groups_all.append(fg)
+            
+            if plot:
+                fig_path = '/media/administrator/data/Study_1_data/Figures/Aperiodic/Subject/'
+                # Plot spectral results with IRASA and FOOOF
+                for chan in fooof_df.Chan.unique():
+                    for stage in fooof_df.Stage.unique():                        
+                        save_path = fig_path + f'{subject}_{stage}_{chan}'
+                        try:
+                            fig = plot_spectral_components(fm=fg[(stage, chan, cond, subject)], 
+                                                           log_freq=False, stage=stage, chan=chan,
+                                                           save=True, fig_path=save_path + '_FOOOF')
+                            fig.tight_layout()
+                            plt.close('all')
+                        except:
+                            print(f'No stage {stage} for {chan} for {subject}')
+                            pass
+            
+            del Data, epochs, fg
+    
+        # Combine all dataframes
+        fooof_df_all = pd.concat(fooof_dfs, axis=0)
+        
+        if save: 
+            fooof_df_all.to_csv('/media/administrator/data/Study_1_data/Statistics/aperiodic_sleep.csv', index=False)
+            with open('/media/administrator/data/Study_1_data/Statistics/fooof_groups_dict.pkl', 'wb') as f:
+                pickle.dump(fooof_groups_all, f)
+            
+    return fooof_df_all, fooof_groups_all
+
 def subject_night_parser(subject, cond, study_phase='sleep'):
     # data sheet with true subject condition nights
     sheet = '/media/administrator/data/Study_1_data/Data_tracking/subject_codes.csv'
@@ -123,9 +361,9 @@ def swa_dissipation_plot(sws_decay):
         plt.xlabel("Time (hours)")
         plt.ylabel("Relative SWA (0.5-4 Hz) power")
         #plt.legend(frameon=True, loc="lower right");
-        plt.title(f"{subject} - {cond} - Exponential decline", fontweight="bold")
+        #plt.title(f"{subject} - {cond} - Exponential decline", fontweight="bold")
                         
-def find_cooccurring_rrpeaks(sws, spindles, lookaround=1.2):
+def find_cooccurring_rrpeaks(sws, spindles, info, lookaround=1.2):
     distance_rrpeak_to_sw_peak = []
     cooccurring_rr_peaks = []
 
