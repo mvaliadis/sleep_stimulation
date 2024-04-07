@@ -67,7 +67,7 @@ for idx, fname in enumerate(tqdm(files)):
     ## compute PSD with welch's method + yasa absolute/relative power extraction 
     # compute power spectral density with welch's method
     # data = bandpower(datArray, fs=128, bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'), 
-    #                                           (8, 12, 'Alpha'),(12, 16, 'Sigma'), 
+    #                                           (8, 12, 'Alpha'), (12, 16, 'Sigma'), 
     #                                           (16, 30, 'Beta'), (59, 61, 'Line noise')], 
     #                  relative=True)
        

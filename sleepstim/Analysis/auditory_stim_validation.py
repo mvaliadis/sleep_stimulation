@@ -45,7 +45,7 @@ from sleepstim.Analysis.hilbert_huang import hilbert_huang_spectrum
 from sleepstim.Analysis.utils import (coincidence_matrix, find_nearest, plot_cm, 
                                       get_mask, _coincidence, spectral_sorting_func_mne)
 import neurokit2 as nk
-from PCIst.PCIst import pci_st
+#from PCIst.PCIst import pci_st
 import scipy
 import pickle
 from functools import reduce
@@ -64,21 +64,14 @@ good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', 'A4VCLD2I',
 
 #%%
 
-def fun():
-    epochs, 
-    epochs.info['sfreq'], 
-    hypno_with_art, 
-    subject, 
-    cond, 
-    band=(30, 45)
-    sf=epochs.info['sfreq']
-    stage_data = epochs.get_data(picks='Fp2', units='uV')[:, hypno_with_art == 4]
-    param = 1
+def fun(epochs, hypno_with_art, subject, cond, band=(30, 45),  sf=128,
+    #stage_data = epochs.get_data(picks='Fp2', units='uV')[:, hypno_with_art == 4],
+    param = 1):
 
     for param in np.arange(1, 6, 1):
         # Initialize FOOOF object for each channel-stage combination
         fg = FOOOF(max_n_peaks=np.inf, aperiodic_mode='fixed', peak_width_limits=(0.5, 12.0), 
-                   min_peak_height=0.0, peak_threshold=2.0)#, verbose=False)
+                    min_peak_height=0.0, peak_threshold=2.0)#, verbose=False)
         
         # Compute the power spectrum
         freqs, psd = signal.welch(stage_data[0, :], sf, nperseg=int(2*sf)/param, 
@@ -600,7 +593,7 @@ def auditory_stim_epochs(epoch_time = (-4, 4)):
     path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_auditory_validation/'
     maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     # create log file 
-    log_path = '/media/administrator/data/Study_1_data/Data_tracking/epoch_reports.csv'
+    log_path = '/media/administrator/data/Study_1_data/Data_tracking/epoch_reports_new.csv'
     for i, files in tqdm(enumerate(maindir)):
         print(i, files.split('/')[-1])
         if i == 0:
@@ -705,7 +698,7 @@ def auditory_stim_epochs(epoch_time = (-4, 4)):
             #GFP = np.std(epochs.get_data(picks='eeg'),axis=0)
             
             # dump epochs
-            save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
+            save_path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs_new/'
             if epochs_down != []:
                 epochs_down.save(save_path + f'{subject}_{cond}_down_epo.fif', overwrite=True)
                 epochs_down_mastoids.save(save_path + f'{subject}_{cond}_down_mast_epo.fif', overwrite=True)
@@ -1339,7 +1332,51 @@ def foo_power(epoch, df):
                           inst_power=None) 
 
     return Sxx
-   
+  
+def erp_sleep_analysis():
+    sns.set_theme(color_codes=True) 
+    # configure paths
+    path = '/media/administrator/data/Study_1_data/Pre-processed_data/ERPs/'
+    maindir = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
+    #report_path = '/media/administrator/data/Study_1_data/Statistics/'
+    fig_path = '/media/administrator/data/Study_1_data/Figures/Pinknoise_epochs/'
+    e_up, e_down, e_sham_up, e_sham_down = [],[],[],[]
+    eps = []
+    for i, file in enumerate(tqdm(maindir)):
+        subject = file.split("/")[-1].split("_")[0]
+        if '_mast_' not in file:
+            pass
+        else:
+            if '_sham_down_' in file:
+                cond = 'sham down'
+            else:
+                cond = file.split("/")[-1].split("_")[1]
+            print(i, file.split('/')[-1])
+
+            # load data & create evoked object
+            epoch = mne.read_epochs(file, preload=True).apply_baseline((-4, -1.5)).resample(128)
+            eps.append([subject, cond, epoch])
+            
+            eps_df = pd.DataFrame(eps, columns=['Subject','Condition','Epochs'])
+    
+            if 'up_mast' in file:
+                e_up.append([subject, epoch])
+            elif 'sham_down_mast' in file:
+                e_sham_down.append([subject, epoch])
+            elif 'sham_mast' in file:
+                e_sham_up.append([subject, epoch])
+            elif 'down_mast' in file:
+                e_down.append([subject, epoch])
+
+    epochs_up = mne.grand_average([e_up[i][1].average() for i in range(len(e_up))])
+    epochs_up_subs = [e_up[i][0] for i in range(len(e_up))]
+    epochs_down = mne.grand_average([e_down[i][1].average() for i in range(len(e_down))])
+    epochs_down_subs = [e_down[i][0] for i in range(len(e_down))]
+    epochs_sham_up = mne.grand_average([e_sham_up[i][1].average() for i in range(len(e_sham_up))])
+    epochs_sham_up_subs = [e_sham_up[i][0] for i in range(len(e_sham_up))]
+    epochs_sham_down = mne.grand_average([e_sham_down[i][1].average() for i in range(len(e_sham_down))])
+    epochs_sham_down_subs = [e_sham_down[i][0] for i in range(len(e_sham_down))]
+    
 def tfr_sleep_analysis(picks='eeg'):
     sns.set_theme(color_codes=True) 
     # configure paths
@@ -1514,9 +1551,19 @@ def group_so_sp_stim_analysis():
     sns.set_theme(color_codes=True)
     t = grouped_df.groupby(['Condition','Subject','Channel']).mean().reset_index()
     a = sns.lmplot(data=t[t.Channel=='C3'], x='ndPAC', y='RMSE_difference_ratio', 
-                   hue='Condition', col='Condition', ci=95, col_wrap=1, scatter_kws={"s": 50}) 
-    a.set_ylabels("\u0394 Root Mean Square Error Ratio")
-    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_RMSE_C3_vertical.jpg')
+                   hue='Condition', col='Condition', ci=95, col_wrap=3, 
+                   scatter_kws={"s": 50}, **dict(sharex=False)) 
+    a.set_ylabels("\u0394 Root Mean Square Error Ratio", fontsize=16)
+    a.set_xlabels("ndPAC", fontsize=16)
+    plt.suptitle("SO-Spindle Coupling Behavioral Correlation", fontsize=18)
+
+    # Set the font size for tick labels on both axes
+    a.tick_params(axis='both', which='major', labelsize=16)
+    sns.despine(left=True, bottom=True)
+    plt.tight_layout()
+
+    # Save the high-quality figure
+    plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/ndPAC_RMSE_C3_vertical.jpg', dpi=1000)
    
     # extract results
     results = pd.concat(ress).reset_index()    
@@ -1980,7 +2027,7 @@ def density(stat_path = '/media/administrator/data/Study_1_data/Statistics/SW_sp
     sp_density = sp_density[np.logical_and(sp_density['Channel'] != 'M1',
                                            sp_density['Channel'] != 'M2')]
     
-    for grouped_df in (sws_density, sp_density):
+    for grouped_df in (sp_density, sws_density):
         print(grouped_df.head(10))
         subject_vals = grouped_df.reset_index()['Subject'].unique()
         condition_vals = grouped_df.reset_index()['Condition'].unique()
@@ -2075,7 +2122,20 @@ def density(stat_path = '/media/administrator/data/Study_1_data/Statistics/SW_sp
         F['Sig'] = (F['pval'] > 0.05)
         yasa.topoplot(data=F['F-Stat'], cbar_title='F-Stat', mask=F['Sig'],
                       cmap='Reds', names=list(grouped_df.Channel.unique()), 
-                      dpi=100, show_names=True, sensors="ko") #contours=0
+                      dpi=100, sensors="ko") #contours=0
+        
+        for c in sws_density.Condition.unique():
+            p = sws_density.groupby(['Condition','Channel']).mean()['Density'].loc[c]
+            f = yasa.topoplot(data=p, cbar_title='Density', #mask=F['Sig'],
+                          cmap='Reds', names=list(F.index), 
+                          dpi=100, sensors="ko") #contours=0
+            f.suptitle(c)
+            plt.tight_layout()
+            plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/Density_{c}.jpg')
+            plt.close('all')    
+        
+        
+        
         plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Sleep/S_Density_F_stat.jpg')
         plt.close('all')    
     
@@ -2209,8 +2269,6 @@ def plot_tfr_erp(tfr_df):
         axs[1].set_ylabel('Amplitude')
         plt.xlabel('Time (s)')
         plt.tight_layout()
-
-
 
 #%%
 

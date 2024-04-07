@@ -18,7 +18,7 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score, roc_curve, auc, RocCurveDisplay
 from sklearn.model_selection import cross_val_score, GroupShuffleSplit
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, recall_score, cohen_kappa_score, matthews_corrcoef, f1_score
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, recall_score, cohen_kappa_score, matthews_corrcoef, f1_score, precision_score
 import numpy as np
 import matplotlib.pyplot as plt
 import pickle 
@@ -50,20 +50,20 @@ rf4 = pickle.load(open(rf_path + "rf_model_4_cfs.p","rb"))
 rf5 = pickle.load(open(rf_path + "rf_model_5_cfs.p","rb"))
 rf6 = pickle.load(open(rf_path + "rf_model_6_cfs.p","rb"))
 
-model_path = "/media/administrator/data/cfs/models/"
-for file in glob.glob(model_path + "*.p"):
-    # assign name of loaded model
-    model_name = file.split("/")[-1].split(".")[0]
-    print(model_name)
-    # load model
-    model = pickle.load(open(file, "rb"))
-    # reassign variable name based on model_name
-    exec(model_name + "= model")
+# model_path = "/media/administrator/data/cfs/models/"
+# for file in glob.glob(model_path + "*.p"):
+#     # assign name of loaded model
+#     model_name = file.split("/")[-1].split(".")[0]
+#     print(model_name)
+#     # load model
+#     model = pickle.load(open(file, "rb"))
+#     # reassign variable name based on model_name
+#     exec(model_name + "= model")
     
-# compile list of model names
-model_names = [model_name.split("/")[-1].split(".")[0] for model_name in glob.glob(model_path + "*.p")]
+# # compile list of model names
+# model_names = [model_name.split("/")[-1].split(".")[0] for model_name in glob.glob(model_path + "*.p")]
 
-def classifier_validation(session='adaption', loaded=True):
+def classifier_validation(model_names, session='adaption', loaded=True):
     if session == 'adaption':
         data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption_classifier_validation'
         hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Adaption/'
@@ -270,6 +270,10 @@ def classifier_validation(session='adaption', loaded=True):
             exec("y_score_ = " + model_name + f".predict_proba(x{int(model_name[-1])}_)")
             output_dict_score[f"y_score_{model_name}"] = y_score_
 
+        # change for 1 subject night which has a slighly shortened hypnogram
+        if subj == 'YIOYSRPX' and cond == 'sham':
+            hypnogram = np.pad(hypnogram, (0, 1), 'constant', constant_values=(0,))
+            
         if len(y_pred_) == len(hypnogram):
             y_pred1 = rf1.predict(x1)
             y_score1 = rf1.predict_proba(x1) 
@@ -290,7 +294,7 @@ def classifier_validation(session='adaption', loaded=True):
                        'Stage 2':2,
                        'Stage 3':3,
                        'REM':4}
-            target_names=event_id.keys()
+            # target_names=event_id.keys()
             
             # # Prediction model key
             # model_id ={'y_pred0_rf': '2 EEG, 1 EOG, 1 EMG',
@@ -324,12 +328,8 @@ def classifier_validation(session='adaption', loaded=True):
                 if len(np.unique(y_pred)) == 5:
                     report = classification_report(y_test, y_pred, target_names=event_id.keys())
                     print(report)
-                    N3_recall = recall_score(y_test, y_pred, average=None)[3]
-                else:
-                    N3_recall = np.nan
-                    #break
-                    pass
-                    
+                N3_recall = recall_score(y_test, y_pred, average=None)[3]
+                N3_precision = precision_score(y_test, y_pred, average=None)[3]
                 
                 cm = confusion_matrix(y_test, y_pred, normalize='true')
                 np.set_printoptions(precision=2)
@@ -349,7 +349,8 @@ def classifier_validation(session='adaption', loaded=True):
                 
                 # append all
                 accArrays.append([subj, cond, y_test, y_pred, 
-                                  y_score, inter_agreement, phi, f1, N3_recall, idx])
+                                  y_score, inter_agreement, phi, f1, 
+                                  N3_recall, N3_precision, idx])
                 
                 print('Passed all steps')
                 
@@ -369,22 +370,198 @@ def classifier_validation(session='adaption', loaded=True):
             
     return accArrays
 
-#%% 
+def classifier_validation_rf(session='adaption'):
+    if session == 'adaption':
+        data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Adaption_classifier_validation'
+        hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Adaption/'
+        #new_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/Adaption/'
+        hypno_path2 = list()
+    elif session == 'experimental':
+        data_path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_classifier_validation'
+        hypno_path = '/media/administrator/data/Study_1_data/Hypnograms/Experimental/'
+        #new_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/Experimental/'
+        hypno_path2 = '/media/administrator/data/Study_1_data/Pre-processed_data/EDFs/Auto_hypnograms/'
+    accArrays = [] 
+    exist_exp_files, exist_hyp_files = check_match_data_hypno_elements(data_path, hypno_path, hypno_path2)
+    for idx, (fname, hypno_files) in enumerate(zip(exist_exp_files, exist_hyp_files)):
+        print(idx, fname, hypno_files)
+        # parse items for later
+        subj = fname.split('_')[0]
+        from sleepstim.Analysis.Resting_State.rs_preproc import subject_cond_parser
+        if fname.split('_')[1] != 'adaption':            
+            cond = subject_cond_parser(fname, study_phase='classifier')
+        else:
+            cond = 'adaption'
+        
+        # 30s per stage hypnogram
+        try:
+            hypnogram = unravel_hypnogram_visbrain(hypno_path + hypno_files, data=None)#, epochs)
+        except:
+            hypnogram = np.load(hypno_path2 + hypno_files)
+                    
+        ## extract features
+        # model path
+        feat_path = "/media/administrator/data/Study_1_data/Statistics/Classifier_validation/Features/"   
+        features = pd.read_csv(feat_path + f'features_{subj}_{cond}.csv', index_col=0)
+        features = features.reset_index(drop=True)
+        
+        ## Yasa prediction
+        sls = pickle.load(open(feat_path + f'yasa_{subj}_{cond}.p', "rb")) 
+        y_pred_yasa = yasa.hypno_str_to_int(sls.predict())
+        yasa_score = sls.predict_proba().to_numpy()
+        
+        # combine EEG, EOG, EMG
+        x1 = np.load(file = feat_path + f'features_x1_{subj}_{cond}.npy')
+        x2 = np.load(file = feat_path + f'features_x2_{subj}_{cond}.npy')
+        x3 = np.load(file = feat_path + f'features_x3_{subj}_{cond}.npy')
+        x4 = np.load(file = feat_path + f'features_x4_{subj}_{cond}.npy')
+        x5 = np.load(file = feat_path + f'features_x5_{subj}_{cond}.npy')
+        x6 = np.load(file = feat_path + f'features_x6_{subj}_{cond}.npy')
+        
+        x1_ = features.set_index(['chan','epoch']).loc[['C3', 'C4', 'EOG', 'EMG']].unstack(level='chan')
+        x1_ = x1_.to_numpy()
+        x2_ = features.set_index(['chan','epoch']).loc[['C3', 'EMG', 'EOG']].unstack(level='chan')
+        x2_ = x2_.to_numpy()
+        x3_ = features.set_index(['chan','epoch']).loc[['C3', 'C4', 'EOG']].unstack(level='chan')
+        x3_ = x3_.to_numpy() 
+        x4_ = features.set_index(['chan','epoch']).loc[['C3', 'C4', 'EMG']].unstack(level='chan')
+        x4_ = x4_.to_numpy()
+        x5_ = features.set_index(['chan','epoch']).loc[['C3', 'C4']].unstack(level='chan')  
+        x5_ = x5_.to_numpy() 
+        x6_ = features.set_index(['chan','epoch']).loc[['C3']].unstack(level='chan')
+        x6_ = x6_.to_numpy() 
+    
+        # # Sort the model names
+        # sorted_model_names = natsorted(model_names, key=lambda x: x.split('_')[-1])
+        # # Initialize the output dictionary
+        # output_dict_pred = {}
+        # output_dict_score = {}
+        # # Iterate over the sorted model names
+        # for idx, model_name in enumerate(sorted_model_names):
+        #     #print(model_name, idx)
+        #     # Declare y_pred and y_score variables
+        #     y_pred_ = None
+        #     y_score_ = None
+        #     # predict for each feature vector x
+        #     exec("y_pred_ = " + model_name + f".predict(x{int(model_name[-1])}_)")
+        #     output_dict_pred[f"y_pred_{model_name}"] = y_pred_
+        #     # predict probabilities for each feature vector x
+        #     exec("y_score_ = " + model_name + f".predict_proba(x{int(model_name[-1])}_)")
+        #     output_dict_score[f"y_score_{model_name}"] = y_score_
+
+        # change for 1 subject night which has a slighly shortened hypnogram
+        if subj == 'YIOYSRPX' and cond == 'sham':
+            hypnogram = np.pad(hypnogram, (0, 1), 'constant', constant_values=(0,))
+            
+        if len(y_pred_yasa) == len(hypnogram):
+            y_pred1 = rf1.predict(x1)
+            y_score1 = rf1.predict_proba(x1) 
+            y_pred2 = rf2.predict(x2)
+            y_score2 = rf2.predict_proba(x2) 
+            y_pred3 = rf3.predict(x3)            
+            y_score3 = rf3.predict_proba(x3) 
+            y_pred4 = rf4.predict(x4)            
+            y_score4 = rf4.predict_proba(x4) 
+            y_pred5 = rf5.predict(x5)            
+            y_score5 = rf5.predict_proba(x5) 
+            y_pred6 = rf6.predict(x6)            
+            y_score6 = rf6.predict_proba(x6) 
+                       
+            # Sleep stage names
+            event_id ={'Wake':0,
+                       'Stage 1':1,
+                       'Stage 2':2,
+                       'Stage 3':3,
+                       'REM':4}
+            # target_names=event_id.keys()
+                        
+            # Current hypnogram becomes test
+            y_test = hypnogram
+            
+            if len(np.unique(y_test)) > 3:     
+                # accuracy report, confusion matrix, classification reports
+                y_preds = ([y_pred1, y_pred2, y_pred3, y_pred4, y_pred5, y_pred6, y_pred_yasa])
+                # do same for scores
+                y_scores = ([y_score1, y_score2, y_score3, y_score4, y_score5, y_score6, yasa_score])
+                for idx, (y_pred, y_score) in enumerate(zip(y_preds, y_scores)):
+                    acc = accuracy_score(y_test, y_pred)
+                    print("Accuracy score: {}".format(acc))
+                    #confusion = confusion_matrix(y_test, y_pred)
+                    #print(confusion_matrix(y_test, y_pred))
+                    if len(np.unique(y_pred)) == 5:
+                        report = classification_report(y_test, y_pred, target_names=event_id.keys())
+                        print(report)
+                    N3_recall = recall_score(y_test, y_pred, average=None)[3]
+                    N3_precision = precision_score(y_test, y_pred, average=None)[3]
+                    
+                    cm = confusion_matrix(y_test, y_pred, normalize='true')
+                    np.set_printoptions(precision=2)
+                    print(f'Confusion matrix: \n {cm}' + '\n')
+                    
+                    # Compute interrater reliability
+                    inter_agreement = cohen_kappa_score(y_test, y_pred)
+                    print(f'The inter-rate agreement is K = {inter_agreement}' + '\n')
+                    
+                    # Compute Matthews Correlation Coeffient
+                    phi = matthews_corrcoef(y_test, y_pred)
+                    print(f'The Phi coefficient is {phi}' + '\n')
+                    
+                    # Compute weighted f1 score
+                    f1 = f1_score(y_test, y_pred, average='weighted')
+                    print(f'The F1 score is {f1}' + '\n')          
+                    
+                    # append all
+                    accArrays.append([subj, cond, y_test, y_pred, 
+                                      y_score, acc, inter_agreement, phi, f1, 
+                                      N3_recall, N3_precision, idx])
+                    
+                    print('Passed all steps')
+                    
+                    # plt.figure()
+                    # plot_confusion_matrix(path = new_path, cm=cm, target_names=target_names, title=f'Confusion matrix - {"_".join(fname.split("_")[0:2])} - {model_id[idx]}', save=True, 
+                    #                       save_name = model_id[idx] + "_".join(fname.split("_")[0:2]))
+                    # plot_multiclass_ROC(level = 'subject', path = new_path, y_test_all = y_test, y_score_all = y_score, save_name = model_id[idx] + "_".join(fname.split("_")[0:2]))
+                    # plt.close()
+                    # sns.heatmap(cm, cmap=plt.cm.Blues,square=True, annot=True, cbar=True)
+                    # plt.xlabel('predicted value')
+                    # plt.ylabel('true value');
+                    
+                del y_scores, y_preds
+                
+        else:
+            pass
+            
+    return accArrays    
+
+#%%
 
 run = input('Do you wish to restart the classifier validation analysis? ')
 if run == 'yes':
-    df_adaption = pd.DataFrame(classifier_validation(session='adaption', loaded=True), 
+    # df_adaption = pd.DataFrame(classifier_validation(session='adaption', loaded=True), 
+    #                            columns=['Subject','Condition','Test hypnograms','Pred hypnograms',
+    #                                      'Pred probabilities','Cohens Kappa', 'Phi',
+    #                                      'F1-score','N3_recall','N3_precision','model idx'])
+    # df_adaption['Source'] = 'Adaption'
+    # df_experimental = pd.DataFrame(classifier_validation(session='experimental'), 
+    #                                columns=['Subject','Condition','Test hypnograms','Pred hypnograms',
+    #                                         'Pred probabilities','Cohens Kappa','Phi',
+    #                                         'F1-score','N3_recall','N3_precision','model idx'])
+    # df_experimental['Source'] = 'Experimental'
+    # df = pd.concat([df_adaption, df_experimental], ignore_index=True)
+    # save_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_.p'
+    # pickle.dump(df, open(save_path, "wb"))  
+    df_adaption = pd.DataFrame(classifier_validation_rf(session='adaption'), 
                                columns=['Subject','Condition','Test hypnograms','Pred hypnograms',
-                                         'Pred probabilities','Cohens Kappa', 'Phi',
-                                         'F1-score','N3_recall','model idx'])
+                                         'Pred probabilities','Accuracy','Cohens Kappa', 'Phi',
+                                         'F1-score','N3_recall','N3_precision','model idx'])
     df_adaption['Source'] = 'Adaption'
-    df_experimental = pd.DataFrame(classifier_validation(session='experimental'), 
+    df_experimental = pd.DataFrame(classifier_validation_rf(session='experimental'), 
                                    columns=['Subject','Condition','Test hypnograms','Pred hypnograms',
-                                            'Pred probabilities','Cohens Kappa','Phi',
-                                            'F1-score','N3_recall','model idx'])
+                                            'Pred probabilities','Accuracy','Cohens Kappa','Phi',
+                                            'F1-score','N3_recall','N3_precision','model idx'])
     df_experimental['Source'] = 'Experimental'
     df = pd.concat([df_adaption, df_experimental], ignore_index=True)
-    save_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_.p'
+    save_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_new.p'
     pickle.dump(df, open(save_path, "wb"))  
 else:
     #df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results.p', 'rb'))
@@ -392,6 +569,7 @@ else:
     
     #df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_combined.p', 'rb'))
     df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Classifier_validation/Results.p', 'rb'))
+    #df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_new.p', 'rb'))
     
 #%%
 
@@ -418,33 +596,84 @@ def group_classification_validation(df, model_id, event_id, target_names):
     for idx in range(len(model_id)):
         y_phis_all.append(np.hstack([df[df['model idx']==idx]['Phi'].to_numpy()[i] for i in range(df[df['model idx']==idx]['Phi'].shape[0])]))        
        
-    
-    for idx, (y_pred_all, y_test_all, y_score_all, y_cohen_k_all, y_phi_all) in enumerate(zip(y_preds_all, y_tests_all, y_scores_all, y_cohen_ks_all, y_phis_all)):    
+    y_n3_recalls_all = []
+    for idx in range(len(model_id)):
+        y_n3_recalls_all.append(np.hstack([df[df['model idx']==idx]['N3_recall'].to_numpy()[i] for i in range(df[df['model idx']==idx]['N3_recall'].shape[0])]))        
+     
+    y_n3_precisions_all = []
+    for idx in range(len(model_id)):
+        y_n3_precisions_all.append(np.hstack([df[df['model idx']==idx]['N3_precision'].to_numpy()[i] for i in range(df[df['model idx']==idx]['N3_precision'].shape[0])]))        
+     
+    y_f1s_all = []
+    for idx in range(len(model_id)):
+        y_f1s_all.append(np.hstack([df[df['model idx']==idx]['F1-score'].to_numpy()[i] for i in range(df[df['model idx']==idx]['F1-score'].shape[0])]))        
+           
+    for idx, (y_pred_all, y_test_all, y_score_all, y_cohen_k_all, y_f1_all, 
+              y_phi_all, y_n3_recall_all, y_n3_precision_all) in enumerate(zip(y_preds_all, y_tests_all, y_scores_all, y_cohen_ks_all, y_f1s_all,
+                                                                               y_phis_all, y_n3_recalls_all, y_n3_precisions_all)):    
         print("Model: {}".format(model_id[idx]))
         acc = accuracy_score(y_test_all, y_pred_all)
         print("Accuracy score: {}".format(acc))
-        confusion = confusion_matrix(y_test_all, y_pred_all)
-        print(confusion)
+        #confusion = confusion_matrix(y_test_all, y_pred_all)
+        #print(confusion)
         report = classification_report(y_test_all, y_pred_all, target_names=event_id.keys())
         print(report)
         cm = confusion_matrix(y_test_all, y_pred_all, normalize='true').round(2)
         np.set_printoptions(precision=2)
-        print(f'Confusion matrix: \n {cm}' + '\n')
+        #print(f'Confusion matrix: \n {cm}' + '\n')
         
-        ############## - compute over [] - #############
-        # import scikits.bootstrap as bootstrap
-        # CI = bootstrap.ci
-        #inter_agreement = df.groupby('Cohens Kappa').apply(lambda x:bootstrap.ci(data=x, statfunction=scipy.mean)).round(2)
-        inter_agreement = np.nanmean(y_cohen_k_all)
+        ############## - compute over stacked totals - #############
+                                              
+        # Compute group interrater reliability
+        inter_agreement = cohen_kappa_score(y_test_all, y_pred_all)
+        # inter_agreement = np.nanmean(y_cohen_k_all)
         print(f'The inter-rate agreement is K = {inter_agreement}' + '\n')
+        
+        # Compute group Matthews Correlation Coeffient
+        phi = matthews_corrcoef(y_test_all, y_pred_all)
+        # phi = np.nanmean(y_phi_all)
+        print(f'The Matthews Correlation Coefficient is {phi}' + '\n')
+        
+        # Compute group N3 recall 
+        N3_recall = recall_score(y_test_all, y_pred_all, average=None)[3]
+        # N3_recall = np.nanmean(y_n3_recall_all)
+        print(f'The N3 recall is {N3_recall}' + '\n')
+        
+        # Compute group N3 precision 
+        N3_precision = precision_score(y_test_all, y_pred_all, average=None)[3]
+        # N3_precision = np.nanmean(y_n3_precision_all)
+        print(f'The N3 precision is {N3_precision}' + '\n')
+        
+        # Compute group weighted f1 score
+        f1 = f1_score(y_test_all, y_pred_all, average='weighted')        
+        # f1 = np.nanmean(y_f1_all)
+        print(f'The weighted F1-score is {f1}' + '\n')
         
         # plt.figure()
         # plot_confusion_matrix(path = new_path, cm=cm, target_names=target_names, title=f'Confusion matrix - All Subjects - {model_id[idx]}', 
         #                       save=True, save_name = model_id[idx] + '_all_subj')
         plot_multiclass_ROC(level = 'group level', path = new_path, y_test_all = y_test_all, y_score_all = y_score_all, save_name = model_id[idx] + '_all_subj')
         
+        # title = f'Confusion matrix - All Subjects - {model_id[idx]}'
+        
+        # from sklearn.metrics import ConfusionMatrixDisplay
+        # disp = ConfusionMatrixDisplay.from_predictions(
+        #     y_test_all,
+        #     y_pred_all,
+        #     display_labels=target_names,
+        #     cmap=plt.cm.Blues,
+        #     normalize='true',
+        #     )
+        
+        # disp.ax_.set_title(title)
+        # plt.xticks(rotation=45)
+        # plt.yticks(rotation=360)
+        # print(title)
+    
+        
         plt.figure()
-        sns.heatmap(cm, cmap=plt.cm.Blues,square=True, annot=True, cbar=True, xticklabels=target_names, yticklabels=target_names)
+        sns.heatmap(cm, cmap=plt.cm.Blues,square=True, annot=True, 
+                    cbar=True, xticklabels=target_names, yticklabels=target_names)
         plt.xlabel('Predicted label')
         plt.ylabel('True label')
         plt.xticks(rotation=45)
@@ -462,6 +691,67 @@ def group_classification_validation(df, model_id, event_id, target_names):
     
     plt.close('all')
         
+
+#%%
+## NEW RF old analysis
+df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_new_new.p', 'rb'))
+model_id = ([f'rf_model_{idx}_cfs' for idx in range(1,7)])
+model_id.extend(['yasa_model'])
+
+event_id ={'Wake':0,
+           'Stage 1':1,
+           'Stage 2':2,
+           'Stage 3':3,
+           'REM':4}
+target_names=event_id.keys()
+        
+good_subs = ['0RCB4IRJ', '3LFLTILW', '6QJ3ITMT', '7XVWEVOK', 'A4VCLD2I', 
+             'CWESJCNJ', 'D1BOI2AY', 'FUOPOVNF', 'HTXEYPW6', 'IYPJJ2KE', 
+             'KEQB5AWM', 'RVQL2MRD', 'UDLD86TO', 'W6AX3IMN', 'Y9VJUA9F', 
+             'YIOYSRPX', 'EQDORXF6']
+df = df.loc[df['Subject'].isin(good_subs)]
+df = df[df.Condition != 'adaption'].reset_index(drop=True)
+# df = df[df.Condition != 'experimental'].reset_index(drop=True)
+df = df[df['Test hypnograms'].apply(lambda x: x.shape[0] >= 500)]
+
+
+group_classification_validation(df, model_id, event_id, target_names)
+    
+# print(df.groupby('model idx')['N3_precision'].mean())
+# print(df.groupby('model idx')['N3_recall'].mean())
+# print(df.groupby('model idx')['Cohens Kappa'].mean())
+# print(df.groupby('model idx')['Phi'].mean())
+# print(df.groupby('model idx')['F1-score'].mean())
+
+#%%
+from pymer4.models import Lmer
+df = pickle.load(open('/media/administrator/data/Study_1_data/Statistics/Classifier_validation/RF_results_new_new.p', 'rb'))
+df = df[df['Test hypnograms'].apply(lambda x: x.shape[0] >= 500)]
+df_new = df[['Subject', 'Condition', 'F1-score', 'model idx']]
+df_new.rename(columns={'F1-score': 'F1',
+                       'model idx' : 'Model'}, inplace=True)
+
+model = Lmer("F1 ~ Condition*Model + (1|Subject)", 
+             data=df_new)
+
+# Using dummy-coding; suppress summary output
+model.fit(factors={"Condition": ["adaption","sham", "up", "down"],
+                   "Model": ["0","1","2","3","4","5","6"],
+                   },
+          ordered=True, summarize=False)
+
+# Get ANOVA table, but force orthogonality for valid SS III inferences
+# In this case the data is unbalaced, otherwise nothing changes
+print(model.anova(force_orthogonal=True))
+
+## Post-hoc tests 
+marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr",
+                                                 marginal_vars='Condition',
+                                                 grouping_vars='Model'
+                                                 )
+
+print(marginal_estimates)
+print(comparisons)
 
 #%%
 # model path

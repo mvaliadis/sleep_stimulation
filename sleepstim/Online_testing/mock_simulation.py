@@ -22,7 +22,6 @@ import scipy.stats as stats
 import fooof
 import pandas as pd
 from scipy.linalg import eigh, eig
-import mne
 import itertools
 import os
 import glob
@@ -1107,7 +1106,7 @@ def group_stats_topo_correlations(df, p_path):
                                     'Peak','Reference','Spearman_rho',
                                     'Fishers_ztransformed_rho'])
     for idx, combo in enumerate(zip([combos_csd_neg*2, combos_csd_pos*2,
-                                      combos_lm_neg*2, combos_lm_pos*2])):
+                                     combos_lm_neg*2, combos_lm_pos*2])):
         combos = list(itertools.combinations(combo[0],2))
         within = [combos[i][0] for i in range(len(combos))]
         between = [combos[i][1] for i in range(len(combos))]

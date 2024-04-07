@@ -57,14 +57,13 @@ def slalom_results(path, plot=False, figpath='/media/administrator/data/Study_1_
             
             # from scipy.integrate import trapz
             # error_pre_rms = trapz(x = np.arange(0, stats.zscore(data_pre[0,:]).shape[0], 1), 
-            #                 y = stats.zscore(data_pre[0,:])) - trapz(x = np.arange(0, stats.zscore(data_pre[1,:]).shape[0], 1), 
-            #                                                          y = stats.zscore(data_pre[1,:]))
+            #                       y = stats.zscore(data_pre[0,:])) - trapz(x = np.arange(0, stats.zscore(data_pre[1,:]).shape[0], 1), 
+            #                                                                y = stats.zscore(data_pre[1,:]))
             
-            # error_pre_rms = trapz(x = np.arange(0, stats.zscore(data_post[0,:]).shape[0], 1),
-            #                       y = stats.zscore(data_post[0,:])) - trapz(x = np.arange(0, stats.zscore(data_post[1,:]).shape[0], 1), 
-            #                                                                 y = stats.zscore(data_post[1,:]))
+            # error_post_rms = trapz(x = np.arange(0, stats.zscore(data_post[0,:]).shape[0], 1),
+            #                        y = stats.zscore(data_post[0,:])) - trapz(x = np.arange(0, stats.zscore(data_post[1,:]).shape[0], 1), 
+            #                                                                  y = stats.zscore(data_post[1,:]))
             
-        
             # amplitude_envelope_pre_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_pre[0,:]))), 
             #                                                 y_pred = np.abs(hilbert(stats.zscore(data_pre[1,:]))), squared=False)            
             # amplitude_envelope_post_rms = mean_squared_error(y_true = np.abs(hilbert(stats.zscore(data_post[0,:]))), 
@@ -229,20 +228,6 @@ def violin_plot_comb(df_comb):
 
     
 #%%
-## Bias investigation
-# g = sns.lmplot(x='Absolute RMSE (Pre)', y='Absolute RMSE (Post)', data=df, col='Condition')
-
-# # def annotate(data, **kws):
-# #     r, p = stats.pearsonr(df['Absolute RMSE (Pre)'], df['Absolute RMSE (Post)'])
-# #     ax = plt.gca()
-# #     ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
-# #             transform=ax.transAxes)
-    
-# # g.map_dataframe(annotate)
-# plt.show()
-# plt.tight_layout()
-
-#%%
 path = r'/media/administrator/data/Study_1_data/Pre_post_data'
 if __name__ == '__main__':
     run = input('Do you wish to restart the Slalom analysis? ')
@@ -272,7 +257,33 @@ if __name__ == '__main__':
     # remove bad subs
     df = df.loc[df['Subject'].isin(good_subs)].reset_index(drop=True)
     df2 = df2.loc[df2['Subject'].isin(good_subs)].reset_index(drop=True)
+    
+    #%%
+    
+    plt.figure()
+    ax1 = pg.plot_paired(data=df, dv='RMSE_Pre', within='Block', 
+                         subject='Subject', boxplot=False)
+    
+    plt.figure()
+    ax2 = pg.plot_paired(data=df, dv='RMSE_Post', within='Block', 
+                         subject='Subject', boxplot=False)
 
+    #%%
+    
+    # Bias investigation
+    g = sns.lmplot(x='RMSE_Pre', y='RMSE_Post', data=df)#, col='Condition')
+
+    def annotate(data, **kws):
+        r, p = stats.pearsonr(df['RMSE_Pre'], df['RMSE_Post'])
+        ax = plt.gca()
+        ax.text(.05, .8, 'r={:.2f}, p={:.2g}'.format(r, p),
+                transform=ax.transAxes)
+        
+    g.map_dataframe(annotate)
+    plt.show()
+    plt.tight_layout()
+
+    #%%
     # mean over blocks by subject and condition
     df.groupby(['Condition','Subject']).mean().reset_index(inplace=True)
     

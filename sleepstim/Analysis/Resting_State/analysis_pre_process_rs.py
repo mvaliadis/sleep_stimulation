@@ -141,15 +141,19 @@ def resting_state_power_analysis(path):
                 for idx, f in enumerate(zip(fgs, post.ch_names[0:64])):
                     #print(idx, f[1])
                     fooofy = fgs.get_fooof(ind=idx, regenerate=True)
-                    peak_fit = fooofy._peak_fit
-                    peak_fits.append(peak_fit.reshape(1,-1))
+                    # peak_fit = fooofy._peak_fit
+                    # peak_fits.append(peak_fit.reshape(1,-1))
+                    spectral_slope = fooofy.get_params('aperiodic_params', col='exponent')
+                    peak_fits.append(spectral_slope)
                     chs.append(f[1])
                     # init_flat_spec = fm.power_spectrum - fm._ap_fit
                     # plts.plot_spectrum(fm.freqs, fm._peak_fit, color='green', label='Final Periodic Fit')
                     
-                bp_post3 = yasa.bandpower_from_psd(np.concatenate(peak_fits, 0), 
-                                                   freqs_post, ch_names=chs,
-                                                   bands=bands, relative=True)
+                # bp_post3 = yasa.bandpower_from_psd(np.concatenate(peak_fits, 0), 
+                #                                    freqs_post, ch_names=chs,
+                #                                    bands=bands, relative=True)
+                bp_post3 = pd.DataFrame({'Chan' : chs,
+                                         'Exponent' : np.asarray(peak_fits)})
      
                 
                 spectra_pre, freqs_pre = pre.compute_psd(method="multitaper", fmin=1, fmax=40,
@@ -170,16 +174,20 @@ def resting_state_power_analysis(path):
                 for idx, f in enumerate(zip(fgs, pre.ch_names[0:64])):
                     #print(idx, f[1])
                     fooofy = fgs.get_fooof(ind=idx, regenerate=True)
-                    peak_fit = fooofy._peak_fit
-                    peak_fits.append(peak_fit.reshape(1,-1))
+                    # peak_fit = fooofy._peak_fit
+                    # peak_fits.append(peak_fit.reshape(1,-1))
+                    spectral_slope = fooofy.get_params('aperiodic_params', col='exponent')
+                    peak_fits.append(spectral_slope)
                     chs.append(f[1])
                     # init_flat_spec = fm.power_spectrum - fm._ap_fit
                     # plts.plot_spectrum(fm.freqs, fm._peak_fit, color='green', label='Final Periodic Fit')
                     # report 
                     
-                bp_pre3 = yasa.bandpower_from_psd(np.concatenate(peak_fits, 0), 
-                                                  freqs_post, ch_names=chs,
-                                                  bands=bands, relative=True)
+                # bp_pre3 = yasa.bandpower_from_psd(np.concatenate(peak_fits, 0), 
+                #                                   freqs_post, ch_names=chs,
+                #                                   bands=bands, relative=True)
+                bp_pre3 = pd.DataFrame({'Chan' : chs,
+                                        'Exponent' : np.asarray(peak_fits)})
                 
                 # append results
                 psd_results["Subject"].extend([subjname.split(' ')[0]]*len(bp_pre))
@@ -191,32 +199,34 @@ def resting_state_power_analysis(path):
                                             bp_pre.Delta.to_numpy())
                 psd_results["Delta_log"].extend(np.log10(bp_post2.Delta.to_numpy()) -
                                                 np.log10(bp_pre2.Delta.to_numpy()))
-                psd_results["Delta_fooof"].extend(bp_post3.Delta.to_numpy() -
-                                                  bp_pre3.Delta.to_numpy())
+                # psd_results["Delta_fooof"].extend(bp_post3.Delta.to_numpy() -
+                #                                   bp_pre3.Delta.to_numpy())
                 psd_results["Theta"].extend(bp_post.Theta.to_numpy() - 
                                             bp_pre.Theta.to_numpy())
                 psd_results["Theta_log"].extend(np.log10(bp_post2.Theta.to_numpy()) -
                                                 np.log10(bp_pre2.Theta.to_numpy()))
-                psd_results["Theta_fooof"].extend(bp_post3.Theta.to_numpy() -
-                                                  bp_pre3.Theta.to_numpy())
+                # psd_results["Theta_fooof"].extend(bp_post3.Theta.to_numpy() -
+                #                                   bp_pre3.Theta.to_numpy())
                 psd_results["Alpha"].extend(bp_post.Alpha.to_numpy() - 
                                             bp_pre.Alpha.to_numpy())
                 psd_results["Alpha_log"].extend(np.log10(bp_post2.Alpha.to_numpy()) -
                                                 np.log10(bp_pre2.Alpha.to_numpy()))
-                psd_results["Alpha_fooof"].extend(bp_post3.Alpha.to_numpy() -
-                                                  bp_pre3.Alpha.to_numpy())
+                # psd_results["Alpha_fooof"].extend(bp_post3.Alpha.to_numpy() -
+                #                                   bp_pre3.Alpha.to_numpy())
                 psd_results["Beta"].extend(bp_post.Beta.to_numpy() - 
                                            bp_pre.Beta.to_numpy())
                 psd_results["Beta_log"].extend(np.log10(bp_post2.Beta.to_numpy()) -
                                                np.log10(bp_pre2.Beta.to_numpy()))
-                psd_results["Beta_fooof"].extend(bp_post3.Beta.to_numpy() -
-                                                  bp_pre3.Beta.to_numpy())
+                # psd_results["Beta_fooof"].extend(bp_post3.Beta.to_numpy() -
+                #                                   bp_pre3.Beta.to_numpy())
                 psd_results["Gamma"].extend(bp_post.Gamma.to_numpy() - 
                                             bp_pre.Gamma.to_numpy())
                 psd_results["Gamma_log"].extend(np.log10(bp_post2.Gamma.to_numpy()) -
                                                 np.log10(bp_pre2.Gamma.to_numpy()))
-                psd_results["Gamma_fooof"].extend(bp_post3.Gamma.to_numpy() -
-                                                  bp_pre3.Gamma.to_numpy())
+                # psd_results["Gamma_fooof"].extend(bp_post3.Gamma.to_numpy() -
+                #                                   bp_pre3.Gamma.to_numpy())
+                psd_results['Spectral_exponent'].extend(bp_post3.Exponent.to_numpy() - 
+                                                        bp_pre3.Exponent.to_numpy())
 
             
                 # if j == 0 and idx == 0:
@@ -267,9 +277,9 @@ def resting_state_power_analysis(path):
     
     return psd_results
 
-def remove_subs(df):    
-    for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ']):
-        df.drop(df.loc[df['Subject']==i[0]].index, inplace=True)
+# def remove_subs(df):    
+#     for i in zip(['9PJZ8Z8F','475MQ9BL','5LNKD1MG','CWESJCNJ']):
+#         df.drop(df.loc[df['Subject']==i[0]].index, inplace=True)
         
 #%%
 run = input('Do you wish to restart the resting state power analysis? ')
@@ -323,9 +333,9 @@ def plot_psd_diff(df_psd):
     plt.savefig('f/media/administrator/data/Study_1_data/Statistics/Resting_state/Topo_PSD.jpg')
   
 
-#%%
+#%%           
 def rs_topo_stats(df_topo, adjacency=None, plot=True, 
-                  info=epo_example_obj, tfce=True):
+                  info=epo_example_obj.copy(), tfce=True):
     '''
     H1: Effect of condition on RS network
     df_topo = pd.read_csv(path + 'rs_results_topo.csv', index_col=0)
@@ -334,11 +344,17 @@ def rs_topo_stats(df_topo, adjacency=None, plot=True,
     mne.set_log_level("CRITICAL")
     info.drop_channels(['EDC_L','ECR_L','FCR_L','FDS_L','ECG',
                         'EDC_R','ECR_R','FCR_R','FDS_R'])
+    
+    sess = 'Open'
+    grk = ['\u03B8', '\u03B1', '\u03B2']
+    
     #pairwise_tests = []
     # for sess in list(df_topo.Session.unique()): 
-    for band in ['Delta','Delta_fooof','Delta_log','Theta','Theta_fooof','Theta_log',
-                 'Alpha','Alpha_fooof','Alpha_log', 'Beta','Beta_fooof', 'Beta_log',
-                 'Gamma', 'Gamma_fooof', 'Gamma_log']:
+    # for band in ['Delta','Delta_fooof','Delta_log','Theta','Theta_fooof','Theta_log',
+    #              'Alpha','Alpha_fooof','Alpha_log', 'Beta','Beta_fooof', 'Beta_log',
+    #              'Gamma', 'Gamma_fooof', 'Gamma_log']:
+    for i, band in enumerate(['Theta','Alpha','Beta']):
+        grk_now = grk[i]
         # parse dataframe by condition 
         
         ### Take only common subjects and convert to numpy accordingly
@@ -348,6 +364,7 @@ def rs_topo_stats(df_topo, adjacency=None, plot=True,
     
         common_df = df_topo.loc[df_topo['Subject'].isin(common_subj)]
         #common_df.sort_values(['Condition','Subject'], inplace=True) #Chan too?
+        common_df = common_df[common_df.Session=='Open']
         
         # parse conditions
         sham = common_df[common_df.Condition=='sham'].fillna(0)
@@ -362,9 +379,9 @@ def rs_topo_stats(df_topo, adjacency=None, plot=True,
         contrast = np.concatenate([sham, up, down], 1)
         
         from mne.stats import f_threshold_mway_rm
-        f_thresh = f_threshold_mway_rm(n_subjects=contrast.shape[0],
-                                       factor_levels=[3], effects='A',
-                                       pvalue=0.05)
+        # f_thresh = f_threshold_mway_rm(n_subjects=contrast.shape[0],
+        #                                factor_levels=[3], effects='A',
+        #                                pvalue=0.05)
         
         def stat_fun(*args):
             return mne.stats.f_mway_rm(np.swapaxes(args, 0, 0), factor_levels=[3],
@@ -375,7 +392,7 @@ def rs_topo_stats(df_topo, adjacency=None, plot=True,
         clus_kwargs = {'n_permutations' : 1024,  # 1000 is the minimum
                        'threshold' : dict(start=0, step=0.2), # None
                        #'threshold' : f_thresh, 
-                       'tail' : 0,               # two-tailed test (1 or -1 for one-tailed)
+                       'tail' : 1,               # one-tailed test (0 for two-tailed)
                        'n_jobs' : -1,            # increase value to speed up computations
                        'buffer_size' : None,
                        'out_type' : 'mask',      # returns a mask map instead of indices of sig. points
@@ -418,31 +435,32 @@ def rs_topo_stats(df_topo, adjacency=None, plot=True,
             # plt.show()
             
             fig, axs = plt.subplots(1, 4, figsize=(15, 6))
-            for j, (ax, label) in enumerate(zip(axs,['\u0394 sham', '\u0394 up','\u0394 down'])):
+            for j, (ax, label) in enumerate(zip(axs,['(Sham)', '(Up)','(Down)'])):
                 if j < 3:
                     im1, _ = mne.viz.plot_topomap(contrast[:,j,:].mean(0), 
                                                   pos=info.info,
-                                                  axes=ax, show=0, cmap='RdBu_r',
-                                                  names=None, show_names=False)
-                    ax.set_title(label)
+                                                  axes=ax, show=0, cmap='Spectral_r',
+                                                  names=None)
+                    ax.set_title('\u0394 ' + grk_now + ' ' +label, fontsize=16)
+                    #ax.set_title(label)
                     cbar1 = fig.colorbar(im1, fraction=0.05, ax=ax)   
-                    cbar1.ax.set_ylabel('uV', rotation=270)
+                    cbar1.ax.set_ylabel('\u03BC' + 'V', rotation=270, fontsize=16)
                     plt.tight_layout()
                 
             im2, _ = mne.viz.plot_topomap(F_obs.squeeze(), 
                                           pos=info.info, mask=mask,
-                                          axes=axs[-1], show=0, cmap='RdBu_r',
-                                          names=None, show_names=False, 
+                                          axes=axs[-1], show=0, cmap='Spectral_r',
+                                          names=None,  
                                           mask_params=dict(markersize=6, markerfacecolor='y'))
-            axs[-1].set_title('Spatial Cluster Test')
+            axs[-1].set_title(f'Spatial Cluster Test {grk_now}', fontsize=16)
             cbar2 = fig.colorbar(im2, fraction=0.05, ax=axs[-1])   
-            cbar2.ax.set_ylabel('f-stat', rotation=270)
+            cbar2.ax.set_ylabel('F-stat', rotation=270, fontsize=16)
             
             plt.suptitle(f'Eyes {sess} {band} stats')
             plt.tight_layout()
             import time 
             time.sleep(0.5)
-            plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/{sess.capitalize()}_{band}_stats.jpg')
+            plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/{sess.capitalize()}_{band}_stats_new.jpg')
             plt.close('all')
             
 #%%
@@ -602,6 +620,7 @@ import pandas as pd
 sns.set(style="whitegrid")
 
 test=df_psd.loc[df_psd['Channel'].isin(['Cz','Fz','F3','F4','FCz','Fpz'])].reset_index(drop=True)
+test=test[test.Session=='Open']
 
 for s in test.Session.unique():  
     test_s = test.loc[test.Session==s].dropna()
@@ -642,22 +661,23 @@ for band in ['Delta','Theta','Alpha','Beta','Gamma']:
     #     # (("FCz", "down"), ("FCz", "sham")) 
     #     ]
     
-    #pairs=[(('Fpz','sham'),('FCz','up'))]
-    pairs=[(("Fz", "up"), ("Fz", "sham")),
-            (("Fz", "up"), ("Fz", "down")),
-            (("Fz", "down"), ("Fz", "sham")) ]
+    pairs=[(('Fpz','sham'),('FCz','up'))]
+    # pairs=[(("Fz", "up"), ("Fz", "sham")),
+    #         (("Fz", "up"), ("Fz", "down")),
+    #         (("Fz", "down"), ("Fz", "sham")) ]
     
-    plt.figure()
-    ax = sns.boxplot(data=test, x=x, y=y, order=order, hue=hue, hue_order=hue_order)
-    ax.set_ylabel(f'\u0394 {band} ', weight='bold')
-    ax.set_xlabel('Frontocentral Channels ', weight='bold')
+    # Initialize the figure with a wider aspect ratio
+    fig, ax = plt.subplots(figsize=(10, 6))  # Adjust the size as needed
+    sns.boxplot(data=test, x=x, y=y, order=order, hue=hue, hue_order=hue_order, ax=ax)
+    ax.set_ylabel(f'\u0394 {band} ', weight='bold', fontsize=16)
+    ax.set_xlabel('Frontocentral Channels ', weight='bold', fontsize=16)
     annot = Annotator(ax, pairs, data=test, x=x, y=y, order=order, hue=hue, hue_order=hue_order)
     annot.configure(comparisons_correction="fdr_by", test='t-test_paired', verbose=2)
     annot.apply_test()
     annot.annotate()
     plt.legend(loc='upper left', bbox_to_anchor=(1.03, 1))  
     plt.tight_layout()
-    plt.savefig(path + f'{band}_post-hoc.png', dpi=200, bbox_inches='tight')
+    plt.savefig(save_path + f'{band}_post-hoc.png', dpi=1000, bbox_inches='tight')
     del ax
     
 #%%
@@ -698,7 +718,12 @@ result2['Condition'] = ['down']*len(result2)
 # recombined dataframes
 remerge = pd.concat([result1, result2])
 
-avg_df = merged_df.groupby(['Condition','Subject']).mean().reset_index()
+avg_df = merged_df.loc[merged_df['Channel'].isin(['Cz','Fz','F3','F4','FCz','Fpz'])].reset_index(drop=True)
+avg_df = avg_df.groupby(['Condition','Subject']).mean().reset_index()
+#avg_df = merged_df[merged_df.Channel=='C3'].groupby(['Condition','Subject']).mean().reset_index()
+#avg_df = merged_df.groupby(['Condition','Subject']).mean().reset_index()
+
+
 ## Stat fun
 # for i, metric in enumerate(['Delta_fooof', 'Theta_fooof', 'Alpha_fooof', 
 #                           'Beta_fooof', 'Gamma_fooof']): 
@@ -727,12 +752,12 @@ print(comparisons)
  
 sns.set_theme(style="darkgrid")
 g = sns.lmplot(data=avg_df, x='Density', y='Theta', 
-               col='Condition', hue='Condition')
+               col='Condition', hue='Condition', **dict(sharex=False))
 # Change the labels
-g.set_ylabels('\u0394 ' + 'Relative ' + '\u03B8 ' + 'power')
-g.set_xlabels('\u0394 ' + 'SW Density')
+g.set_ylabels('\u0394 ' + 'Relative ' + '\u03B8 ' + 'power', fontsize=16)
+g.set_xlabels('\u0394 ' + 'SW Density', fontsize=16)
 plt.tight_layout()
-plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/Theta_SW.jpg')
+plt.savefig(f'/media/administrator/data/Study_1_data/Statistics/Resting_state/{metric}_SW.jpg', dpi=1000)
   
 # corr
 #pg.normality(avg_df, method='normaltest')
@@ -749,7 +774,44 @@ mapping = {'sham': 1, 'up': 2, 'down': 3}
 avg_df['Condition'] = avg_df['Condition'].replace(mapping)
 lm = pg.linear_regression(avg_df[['Density', 'Condition']], avg_df['Theta'])
 
+#%%
+# Calculate the frontocentral average for theta activity
+frontocentral_channels = ['Cz', 'Fz', 'F3', 'F4', 'FCz', 'Fpz']
+fc_avg_theta = merged_df[merged_df['Channel'].isin(frontocentral_channels)].groupby(['Condition', 'Subject']).mean().reset_index()
+fc_avg_theta = fc_avg_theta[['Condition', 'Subject', 'Theta']]  # Keep only relevant columns
 
+# Extract SW density for C3
+sw_density_c3 = sws_density[sws_density['Channel'] == 'C3']
+sw_density_c3 = sw_density_c3[['Condition', 'Subject', 'Density']]  # Keep only relevant columns
+
+# Merge the two datasets on Condition and Subject
+avg_df = pd.merge(fc_avg_theta, sw_density_c3, on=['Condition', 'Subject'])
+
+# Perform the LMM analysis
+print('Running LMM for frequency band: Theta with SW density at C3')
+model = Lmer("Theta ~ Condition*Density + (1|Subject)", data=avg_df)
+model.fit(factors={"Condition": ["sham", "up", "down"]}, ordered=True, summarize=True)
+print(model.anova(force_orthogonal=True))
+
+# Post-hoc tests to assess differences due to Condition and SW Density
+marginal_estimates, comparisons = model.post_hoc(p_adjust="fdr", 
+                                                 marginal_vars='Density', 
+                                                 grouping_vars='Condition')
+
+# Print the results
+print("Marginal Estimates:")
+print(marginal_estimates)
+print("\nPairwise Comparisons:")
+print(comparisons)
+
+# Plotting
+sns.set_theme(style="darkgrid")
+g = sns.lmplot(data=avg_df, x='Density', y='Theta', col='Condition', hue='Condition', sharex=False)
+g.set_ylabels('\u0394 Relative Frontocentral \u03B8 Power', fontsize=16)
+g.set_xlabels('\u0394 SW Density at C3', fontsize=16)
+plt.tight_layout()
+plt.savefig('/media/administrator/data/Study_1_data/Statistics/Resting_state/Theta_SW.jpg', dpi=1000)
+  
 #%%
 ## Sleep TMS correlations
 param_df = pd.read_csv('/media/administrator/data/Study_1_data/Statistics/TMS/TMS_results_params.csv', index_col=0)

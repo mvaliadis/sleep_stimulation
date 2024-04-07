@@ -921,10 +921,11 @@ def SW_spindle_PAC(path):
     return 
 
 #%%    
-# path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental_unblinded/'         
+#path = '/media/administrator/data/Study_1_data/Pre-processed_data/Experimental/'         
 def SW_ERPs(path, filter_data=False, downsample=False, inspection=False):
     files_list = sorted([os.path.join(folder,i) for folder, subdirs, files in os.walk(path) for i in files])
     for i, data_files in enumerate(files_list):
+        print(i, data_files.split('/')[-1])
         # load pre-processed data
         Data = load_preprocessed_data(file = data_files) 
 

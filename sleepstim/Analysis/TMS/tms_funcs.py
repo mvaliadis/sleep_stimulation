@@ -221,21 +221,6 @@ def io_curve_dnu(norm_mep, optimize = False, plot = True):
         
     return x, y
 
-def tangent_point():
-    return tangent_pt
-
-def peak_slope():
-    return k
-
-def AUC_io_curve():
-    return AOC
-
-def s50():
-    return s50
-
-def x_intercept_tanget():
-    return x_tan 
-
 #%%
 maindir = '/media/administrator/data/Study_1_data/Pre_post_data/'
 def TMS_results(maindir):  

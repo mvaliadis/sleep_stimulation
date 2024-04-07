@@ -762,7 +762,7 @@ plt.tight_layout()
 
 ##
 # normalize/scale features 
-from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.preprocessing import StandardScaler#, RobustScaler
 #from sklearn.preprocessing import MaxAbsScaler #for [-1 to 1] if both value ranges
 scaler = StandardScaler() #RobustScaler()  
 # Don't cheat - fit only on training data
@@ -801,7 +801,7 @@ pca_thres = np.where(np.cumsum(pca1.explained_variance_)>=50)[0][0]
 
 #
 feats_fano_log = np.log(1e-10 + np.abs(feats_fano))
-#pca2 = PCA(n_components=65).fit_transform(feats_fano_log)
+pca2 = PCA(n_components=65).fit_transform(feats_fano_log)
 feats_fano_sqrt = np.sqrt(feats_fano)
 #pca3 = PCA(n_components=65).fit_transform(feats_fano_sqrt)
 
@@ -873,6 +873,8 @@ pickle.dump(nn, open("nn_model_new_cfs.p", "wb"))
 #%%
 feat_path = '/media/administrator/data/cfs/feature_analysis/'
 ## Feature importance with shapely values
+df_eeg = df_eeg[['chan', 'epoch', 'Delta', 'Theta', 'Alpha', 'Sigma', 'Beta', 'Line noise',
+                'subject', 'stage', 'stage_lab']]
 # Create Tree Explainer object that can calculate shap values
 explainer = shap.TreeExplainer(lgbm) #rf
 # train data 
@@ -1180,7 +1182,6 @@ part_all = np.concatenate(partArray)
 data_all = np.concatenate(allArrays)
 stages_All = np.concatenate(stageArrays)
 
-
 C3 = data_all[:, 0:5]
 C4 = data_all[:, 6:11]
 EOG = data_all[:, 24:29]
@@ -1264,6 +1265,41 @@ confusion = confusion_matrix(y_test, y_pred)
 print(confusion_matrix(y_test, y_pred))
 report = classification_report(y_test, y_pred, target_names=event_id.keys())
 print(classification_report(y_test, y_pred, target_names=event_id.keys()))
+
+#%%
+
+# Prediction model key
+model_id ={'model 1':'2 EEG, 1 EOG, 1 EMG',
+           'model 2':'1 EEG, 1 EOG, 1 EMG',
+           'model 3':'2 EEG, 1 EOG',
+           'model 4':'2 EEG, 1 EMG',
+           'model 5':'2 EEG',
+           'model 6':'1 EEG'}
+
+
+new_path = '/media/administrator/data/Study_1_data/Statistics/Classifier_validation/All/'
+title = 'Confusion matrix - Test - 2 EEG, 1 EOG, 1 EMG'
+     
+from sklearn.metrics import ConfusionMatrixDisplay
+disp = ConfusionMatrixDisplay.from_predictions(
+     y_test,
+     y_pred,
+     display_labels=event_id.keys(),
+     cmap=plt.cm.Blues,
+     normalize='true',
+     )
+
+disp.ax_.set_title(title)
+disp.ax_.grid(False)
+plt.xticks(rotation=45)
+plt.yticks(rotation=360)
+plt.tight_layout()
+for text in disp.text_.ravel():
+    value = float(text.get_text())
+    text.set_text(f"{value:.{2}f}")
+
+plt.savefig(new_path + "confusion_matrix_model1_test.png")
+plt.close('all')
 
 # %% Save RF Models/Training/Testing sets
 cd('/home/administrator/Documents/Classifier')

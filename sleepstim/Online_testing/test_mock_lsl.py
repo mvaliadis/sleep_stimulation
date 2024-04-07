@@ -28,6 +28,7 @@ from mne_lsl.lsl import local_clock
 from mne_lsl.player import PlayerLSL as Player
 from mne_lsl.stream import StreamLSL as Stream
 from mne_lsl.stream_viewer import StreamViewer
+from mne_lsl.lsl import StreamInlet, resolve_streams
 
 def re_reference(data, ch_names, trans_csd=None,
                  sf=512, reference='common average'):
@@ -298,9 +299,60 @@ def fun(stream, times, reference='csd'):
     
     return chan_data
     
+def local_SO_detection(trans_csd, surface_laplacian = True, stim_intervall=2.99):
+
+    # Get data
+    data = bfr2.get_data()[:,indices_to_pull]*1e6
+                               
+    # Apply filter
+    filtered_data = signal.filtfilt(b, a, data, axis=0)
+
+    # Median correction
+    filtered_data -= np.median(filtered_data, axis=0)
+                                  
+    # Surface Laplacian
+    if surface_laplacian == True:
+        sl_data = re_reference(data=filtered_data/1e3, ch_names=chanlabels[0:64],
+                               trans_csd=trans_csd, sf=bfr2.fs, reference='csd').T
+    else:
+        sl_data = re_reference(data=filtered_data, ch_names=chanlabels[0:64],
+                               sf=bfr2.fs, reference='mastoids').T
+        
+    # Extract target channel
+    chan_data = sl_data[:, chanlabels[0:64].index('C3')]                                              
+   
+    # Thresholding
+    prom_mean = 220
+    #prominence threshold is determined (adaptive mean+std)
+   
+    _, properties = scipy.signal.find_peaks(chan_data,
+                                            prominence=(None,None), 
+                                            distance=int(0.25*bfr2.fs))
+    prominence = (properties['prominences'].mean()+properties['prominences'].std())*0.4
+    peak_up = max(chan_data[int(-0.02*bfr2.fs):])
+    peak_down = min(chan_data[int(-0.4*bfr2.fs):])
+    
+    # Linear drift detection -> peak to peak exceeds 500 mV/mm^2
+    if np.ptp(chan_data[-2*int(bfr2.fs):]) > 500:
+        # reset threshold to prom_mean
+        prominence = prom_mean
+        block_auditory_stim = True
+                           
+    # Stimulate if the max. value of last 0.02s minus the min. value of last 400ms
+    # is bigger than the prominence threshold and if there has been a zerocrossing inbetween                       
+    if (peak_up - peak_down) > prominence and block_auditory_stim == False and (np.sign(peak_up) - np.sign(peak_down)) != 0:
+        if random.choice([True, False]):
+            # Real stimulation
+            reiz.marker.push('nmes_trigger_send')
+        else:
+            # Sham stimulation
+            reiz.marker.push('nmes_sham_send')
+   
+
 #%%
 # 1. Load pre-recorded dataset
-fname = '/media/administrator/data/Study_2_data/mne_lsl_data/test-raw.fif'
+#fname = '/media/administrator/data/Study_2_data/mne_lsl_data/test-raw.fif'
+fname = '/media/administrator/data/Study_2_data/NIDRA/CLNMES/PaJa_1-test.fif'
 #fname = sample.data_path() / "sample-ant-raw.fif"
 
 # 2. Load csd matrix
@@ -316,7 +368,7 @@ interpolator = RealTimeSplineInterpolator(all_pos)
 # 4. Initialize LSL player/buffer
 player = Player(fname)
 player.start()
-stream = Stream(bufsize=30)  # 30 seconds of buffer
+stream = Stream(bufsize=30, source_id='MNE-LSL')  # 30 seconds of buffer
 stream.connect(acquisition_delay=0.2)
 
 # 5. Initialize variables
@@ -332,8 +384,8 @@ target_chan = 'C3'
 roi_idx, roi = center_distances(all_pos, center=target_chan, ch_names=ch_names)
 
 # Result storage
-crit_reconstruct = []
-time_reconstruct = []
+crit_reconstruct_stim, crit_reconstruct_sham = [], []
+time_reconstruct_stim, time_reconstruct_sham = [], []
 
 # stream.info
 # stream.pick(["Fz", "Cz", "Oz"])
@@ -348,8 +400,8 @@ times = []
 
 # Sleep once in the beginning to allow stream to fill up
 time.sleep(extraction_window / fs)
-while len(crit_reconstruct) <= 100:
-    
+while len(crit_reconstruct_stim) <= 100:
+       
     # Make sure stimulation is not blocked
     block_auditory_stim = False 
     
@@ -410,7 +462,7 @@ while len(crit_reconstruct) <= 100:
                                             prominence=(None,None), 
                                             distance=int(0.25*fs))
     
-    prominence = (properties['prominences'].mean()+properties['prominences'].std())*1.4
+    prominence = (properties['prominences'].mean()+properties['prominences'].std())*1
     peak_up = max(chan_data[int(-0.02*fs):])
     #print(peak_up)
     peak_down = min(chan_data[int(-0.4*fs):])
@@ -424,11 +476,22 @@ while len(crit_reconstruct) <= 100:
     # Stimulate if the max. value of last 0.02s minus the min. value of last 400ms
     # is bigger than the prominence threshold and if there has been a zerocrossing inbetween
     if (peak_up - peak_down) > prominence and block_auditory_stim == False and (np.sign(peak_up) - np.sign(peak_down)) != 0:
-        
-        # Store the results
-        time_reconstruct.append(ts_new[int(-0.01*fs):][0])
-        crit_reconstruct.append(max(chan_data[int(-0.01*fs):]))   
-        block_auditory_stim = True 
+        if np.random.choice([True, False]):
+            # Real stimulation
+            time_reconstruct_stim.append(ts_new[int(-0.01*fs):][0])
+            crit_reconstruct_stim.append(max(chan_data[int(-0.01*fs):]))   
+            
+            print(f'Stim idx : {len(crit_reconstruct_stim)}') 
+            time.sleep(slide_interval / fs)   
+
+        else:
+            # Sham stimulation
+            time_reconstruct_sham.append(ts_new[int(-0.01*fs):][0])
+            crit_reconstruct_sham.append(max(chan_data[int(-0.01*fs):]))   
+            
+            print(f'Stim idx : {len(crit_reconstruct_sham)}') 
+            time.sleep(slide_interval / fs)               
+
         
         # Only append when criteria reached
         times.extend(ts_new)
@@ -439,8 +502,6 @@ while len(crit_reconstruct) <= 100:
         #plt.plot(ts_new - ts_new[0], chan_data)
         #plt.vlines(ts_new[-1] - ts_new[0], ymin=-100, ymax=100, linestyle='--') 
         
-        print(f'Stim idx : {len(crit_reconstruct)}') 
-        time.sleep(slide_interval / fs)   
 
     # Slide the window forward
     time.sleep(0.2)
@@ -497,7 +558,7 @@ data_csd = mne.preprocessing.compute_current_source_density(data)
 data_csd.plot(duration=30, n_channels=30, 
               title='EEG (CSD) Data with Reconstructed Times')
 # Create epochs
-trigger_times = time_reconstruct #- np.float64(t0) 
+trigger_times = time_reconstruct_stim #- np.float64(t0) 
 sample_indices = [int(t * fs) for t in trigger_times]
 
 # Prepare the events array
