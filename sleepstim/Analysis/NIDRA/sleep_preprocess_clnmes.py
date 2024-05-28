@@ -163,6 +163,9 @@ def preprocess_sleep_nmes_data(filename, save_path, save=True):
         night = 'pinknoise'
     else:
         night = 'nmes'
+        # del xdf_file, eego
+        # gc.collect()     
+        # return []
         
     if night == 'nmes':
         # Extract timestamps of nmes sham markers
@@ -194,27 +197,66 @@ def preprocess_sleep_nmes_data(filename, save_path, save=True):
             nmes_markers[chan]['stim'] = nmes_stim_start_marker
             
     elif night == 'pinknoise':
-        nmes_sham_send_exists = any('pinknoise_sham_send' in desc[0] for desc in xdf_file['reiz-marker'].time_series)
+        ## OLD
+        # nmes_sham_send_exists = any('pinknoise_sham_send' in desc[0] for desc in xdf_file['reiz-marker'].time_series)
         
+        # # Now use list comprehension to select the appropriate markers
+        # nmes_markers = dict()
+        # for chan in ('c3','fz'):
+        #     # Initialize a sub-dictionary for the channel if it doesn't exist
+        #     if chan not in nmes_markers:
+        #         nmes_markers[chan] = {'sham': [], 'stim': []}
+                
+        #     nmes_sham_marker = [xdf_file['reiz-marker'].time_stamps[idx] 
+        #                          for idx in range(len(xdf_file['reiz-marker'].time_series))
+        #                          if (f'pinknoise_sham_send_{chan}_sham' in xdf_file['reiz-marker'].time_series[idx][0]) or
+        #                             (f'pinknoise_sham_{chan}_sham' in xdf_file['reiz-marker'].time_series[idx][0] and not nmes_sham_send_exists)]
+        #     nmes_markers[chan]['sham'] = nmes_sham_marker
+            
+        #     # Extract timestamps of nmes stim markers
+        #     nmes_stim_start_marker = [xdf_file['reiz-marker'].time_stamps[idx] for idx in 
+        #                                range(len(xdf_file['reiz-marker'].time_series)) 
+        #                                if f'pinknoise_trigger_send_{chan}' in xdf_file['reiz-marker'].time_series[idx][0]]
+    
+        #     nmes_markers[chan]['stim'] = nmes_stim_start_marker
+                        
+        ## New and considers only 'real' pinknoise timestamps     
+        # Initialize a dictionary to store the markers for NMES and pink noise
+        nmes_sham_send_exists = any('pinknoise_sham_send' in desc[0] for desc in xdf_file['reiz-marker'].time_series)
+
         # Now use list comprehension to select the appropriate markers
         nmes_markers = dict()
         for chan in ('c3','fz'):
             # Initialize a sub-dictionary for the channel if it doesn't exist
             if chan not in nmes_markers:
                 nmes_markers[chan] = {'sham': [], 'stim': []}
-                
-            nmes_sham_marker = [xdf_file['reiz-marker'].time_stamps[idx] 
-                                 for idx in range(len(xdf_file['reiz-marker'].time_series))
-                                 if (f'pinknoise_sham_send_{chan}_sham' in xdf_file['reiz-marker'].time_series[idx][0]) or
-                                    (f'pinknoise_sham_{chan}_sham' in xdf_file['reiz-marker'].time_series[idx][0] and not nmes_sham_send_exists)]
-            nmes_markers[chan]['sham'] = nmes_sham_marker
             
-            # Extract timestamps of nmes stim markers
-            nmes_stim_start_marker = [xdf_file['reiz-marker'].time_stamps[idx] for idx in 
-                                       range(len(xdf_file['reiz-marker'].time_series)) 
-                                       if f'pinknoise_trigger_send_{chan}' in xdf_file['reiz-marker'].time_series[idx][0]]
-    
-            nmes_markers[chan]['stim'] = nmes_stim_start_marker
+            # Extract successive pink noise timestamps for stim
+            pinknoise_stim_markers = []
+            for idx in range(len(xdf_file['reiz-marker'].time_series) - 1):
+                if f'pinknoise_trigger_send_{chan}' in xdf_file['reiz-marker'].time_series[idx][0]:
+                    # Find the next 'pinknoise' marker
+                    next_idx = idx + 1
+                    while next_idx < len(xdf_file['reiz-marker'].time_series) and 'pinknoise' not in xdf_file['reiz-marker'].time_series[next_idx][0]:
+                        next_idx += 1
+                    # Check if we found a valid pink noise marker
+                    if next_idx < len(xdf_file['reiz-marker'].time_series) and 'pinknoise' in xdf_file['reiz-marker'].time_series[next_idx][0]:
+                        pinknoise_stim_markers.append(xdf_file['reiz-marker'].time_stamps[next_idx])
+            nmes_markers[chan]['stim'] = pinknoise_stim_markers
+           
+            # Extract successive pink noise timestamps for sham
+            pinknoise_sham_markers = []
+            for idx in range(len(xdf_file['reiz-marker'].time_series) - 1):
+                if (f'pinknoise_sham_send_{chan}_sham' in xdf_file['reiz-marker'].time_series[idx][0]) or \
+                   (f'pinknoise_sham_{chan}_sham' in xdf_file['reiz-marker'].time_series[idx][0] and not nmes_sham_send_exists):
+                    # Find the next 'pinknoise' marker
+                    next_idx = idx + 1
+                    while next_idx < len(xdf_file['reiz-marker'].time_series) and 'pinknoise' not in xdf_file['reiz-marker'].time_series[next_idx][0]:
+                        next_idx += 1
+                    # Check if we found a valid pink noise marker
+                    if next_idx < len(xdf_file['reiz-marker'].time_series) and 'pinknoise' in xdf_file['reiz-marker'].time_series[next_idx][0]:
+                        pinknoise_sham_markers.append(xdf_file['reiz-marker'].time_stamps[next_idx])
+            nmes_markers[chan]['sham'] = pinknoise_sham_markers
             
     # Delete unused objects 
     del xdf_file, eego
@@ -366,22 +408,25 @@ def preprocess_sleep_nmes_data(filename, save_path, save=True):
         ## 3. Pre-process data with MNE
         
         # Apply cubic interpolation for stimulation artifacts
-        # raw.apply_function(fun=interpolate_cubic, 
-        #                    picks='eeg', 
-        #                    n_jobs=1,
-        #                    channel_wise=True
-        #                    **dict(times = raw.times, 
-        #                           win = [-.016, .117]))
+        # if night == 'nmes':
+        #     raw.apply_function(fun=interpolate_cubic, 
+        #                        picks='eeg', 
+        #                        n_jobs=-1,
+        #                        channel_wise=True,
+        #                        #annotations=raw.annotations[np.logical_or(raw.annotations.description == 'nmes_stim_fz',
+        #                        #                                          raw.annotations.description == 'nmes_stim_c3')],
+        #                        **dict(times = raw.times, 
+        #                               win = [-.02, .15]))
         
-        # raw.apply_function(fun=interpolate_cubic, 
-        #                    picks='eeg', 
-        #                    n_jobs=-1, 
-        #                    channel_wise=False,
-        #                    times=raw.times, 
-        #                    annotations=raw.annotations[raw.annotations.description == 'nmes_stim'],
-        #                    win=(-0.016, 0.117),
-        #                    sfreq=raw.info['sfreq'])
-        
+            # raw.apply_function(fun=interpolate_cubic, 
+            #                    picks='eeg', 
+            #                    n_jobs=-1, 
+            #                    channel_wise=False,
+            #                    times=raw.times, 
+            #                    annotations=raw.annotations[raw.annotations.description == 'nmes_stim'],
+            #                    win=(-0.016, 0.117),
+            #                    sfreq=raw.info['sfreq'])
+            
         # Bandpass filter data
         raw.filter(0.3, 45, picks='eeg', n_jobs=1)
         raw.filter(0.3, 35, picks='eog', n_jobs=1)
@@ -437,7 +482,7 @@ def preprocess_sleep_nmes_data(filename, save_path, save=True):
                                     
 #%%
 
-path = '/media/administrator/Sleep_Data/Raw/*/*/*'
+path = '/media/administrator/Sleep_Data/Raw/*/*'
 if __name__ == '__main__':
     for file in tqdm(glob(path)):
         if 'sleepstim' in file:

@@ -109,7 +109,7 @@ import pingouin as pg
 
 #     return FDR_threshold, p_values
 
-def calculate_gfp_correlation(epochs, method='pearson'):
+def calculate_gfp_correlation(epochs, tmin=0, tmax=0.2, method='pearson'):
     """
     Calculate the correlation between the GFP of individual trials and the GFP of the evoked average
     to get a consistency score.
@@ -127,11 +127,11 @@ def calculate_gfp_correlation(epochs, method='pearson'):
         # Calculate RMS for each trial
         trial_gfps = np.linalg.norm(data, axis=1) / np.sqrt(len(data))
         
-    trial_gfps = trial_gfps[:, epochs.time_as_index(0)[0]:epochs.time_as_index(0.2)[0]]
+    trial_gfps = trial_gfps[:, epochs.time_as_index(tmin)[0]:epochs.time_as_index(tmax)[0]]
     
     # Calculate the evoked (grand-mean) average across all trials and its GFP
     evoked_average_gfp = epochs.average('csd').data.std(axis=0, ddof=0)*1e3
-    evoked_average_gfp = evoked_average_gfp[epochs.time_as_index(0)[0]:epochs.time_as_index(0.2)[0]]
+    evoked_average_gfp = evoked_average_gfp[epochs.time_as_index(tmin)[0]:epochs.time_as_index(tmax)[0]]
     
     # Calculate correlation between GFP of each trial and the evoked average GFP
     if method=='pearson':
@@ -145,7 +145,7 @@ def calculate_gfp_correlation(epochs, method='pearson'):
     
     return overall_consistency
 
-def calculate_topographic_consistency(epochs):
+def calculate_topographic_consistency(epochs, tmin=0, tmax=0.2):
     """
     Calculate topographic consistency as the mean correlation between the scalp maps
     of single trials and the average scalp map of these trials, focusing on spatial patterns at each time point.
@@ -158,18 +158,18 @@ def calculate_topographic_consistency(epochs):
     """
     # Extract data from epochs
     try:
-        data = epochs.get_data('csd', tmin=0, tmax=0.2)*1e3 
+        data = epochs.get_data('csd', tmin=tmin, tmax=tmax)*1e3 
         
         # Compute the grand average map across all epochs
         # This should be a 2D array: (n_channels, n_times) representing the grand average across all epochs
-        grand_average_map = epochs.average().get_data('csd', tmin=0, tmax=0.2)*1e3
+        grand_average_map = epochs.average().get_data('csd', tmin=tmin, tmax=tmax)*1e3
         
     except:
-        data = epochs.get_data('eeg', tmin=0, tmax=0.2)*1e6 
+        data = epochs.get_data('eeg', tmin=tmin, tmax=tmax)*1e6 
         
         # Compute the grand average map across all epochs
         # This should be a 2D array: (n_channels, n_times) representing the grand average across all epochs
-        grand_average_map = epochs.average().get_data('eeg', tmin=0, tmax=0.2)*1e6
+        grand_average_map = epochs.average().get_data('eeg', tmin=tmin, tmax=tmax)*1e6
     
     # Initialize a list to hold the mean correlation for each epoch
     epoch_correlations = []
@@ -193,7 +193,7 @@ def calculate_topographic_consistency(epochs):
     
     return topographic_consistency
 
-def calculate_gfp_strength(epochs, method='trial_avg'):
+def calculate_gfp_strength(epochs, tmin=0, tmax=0.2, method='trial_avg'):
     if method=='evoked_avg':
         # Calculate the evoked (grand-mean) average across all trials and its GFP/RMS
         try:
@@ -202,7 +202,7 @@ def calculate_gfp_strength(epochs, method='trial_avg'):
         except:
             D = epochs.average('eeg').data
             evoked_average_gfp = D.std(axis=0, ddof=0)*1e6
-        evoked_average_gfp = evoked_average_gfp[epochs.time_as_index(0)[0]:epochs.time_as_index(0.2)[0]]
+        evoked_average_gfp = evoked_average_gfp[epochs.time_as_index(tmin)[0]:epochs.time_as_index(tmax)[0]]
     
     elif method=='trial_avg':
         # Extract data from epochs
@@ -214,6 +214,6 @@ def calculate_gfp_strength(epochs, method='trial_avg'):
             data = epochs.get_data('csd')*1e3
             # Calculate RMS for each trial
             trial_gfps = np.linalg.norm(data, axis=1) / np.sqrt(len(data))
-        evoked_average_gfp = trial_gfps[:, epochs.time_as_index(0)[0]:epochs.time_as_index(0.2)[0]]
+        evoked_average_gfp = trial_gfps[:, epochs.time_as_index(tmin)[0]:epochs.time_as_index(tmax)[0]]
     
     return np.nanmean(evoked_average_gfp)

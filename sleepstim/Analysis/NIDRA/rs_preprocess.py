@@ -218,7 +218,7 @@ def preprocess_rs_data(filename, save_path, figure_path, save=True):
                                
 #%%
 
-path = '/media/administrator/Sleep_Data/Raw/*/*/*'
+path = '/media/administrator/Sleep_Data/Raw/*/*'
 # path = '/mnt/server/data03/2023_NIDRA/Recordings/*/*/*'
 save_path = '/media/administrator/Sleep_Data/Processed/RS/'
 figure_path = '/media/administrator/Sleep_Data/Processed/Figures/RS/'

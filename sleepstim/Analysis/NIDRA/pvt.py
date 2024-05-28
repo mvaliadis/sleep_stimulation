@@ -11,12 +11,33 @@ from glob import glob
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import mne 
+mne.set_log_level('ERROR')
 
 def process_pvt(file):
     # extract subject info
-    mode, subject_night, _ = file.split('/')[5:]
+    subject_night = file.split('/')[5]
+    print(subject_night)
     subject, night = subject_night.split('_')
     
+    # get stim mode (clas vs. clnmes)
+    try:  
+        events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_csd-epo.fif', 
+                                 return_event_id=True)
+        if 'pn_sham_c3' in events[-1]:
+            mode = 'pn'
+        elif 'nmes_sham_c3' in events[-1]:
+            mode = 'nmes'
+    
+    except Exception as e:
+        print(f"Error reading events: {e}")
+        return None
+    
+    # If mode is not set, return None or skip further processing
+    if mode is None:
+        print("No relevant events found.")
+        return None
+       
     # extract pvt csv file
     pvt = pd.read_csv(file)
     pvt = pvt[['sender', 'sender_type', 'response', 'response_action', 'ended_on', 'duration', 'time_run', 
@@ -51,13 +72,17 @@ def process_pvt(file):
         df_rt = pd.DataFrame({'RT': rt, 'Speed': speed, 'Lapses': lapses, 
                               'Lapse_Probability': lapse_prob,'Trial': trials,
                               'Subject': subjects, 'Night': night, 'Mode': mode})
+        
+        # drop RTs over 5 seconds
+        df_rt = df_rt[df_rt.RT <= 5000]
+        
         return df_rt
     
     else:
         print(f'{subject} is not the same as {np.unique(subjects)}')
 
 #%%
-path = '/media/administrator/Sleep_Data/Raw/*/*/*PVT.csv'
+path = '/media/administrator/Sleep_Data/Raw/*/*PVT.csv'
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
 pvts = []
 if __name__ == '__main__':

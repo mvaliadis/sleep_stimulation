@@ -21,7 +21,7 @@ import neurokit2 as nk
 from tqdm import tqdm
 import pandas as pd
 mne.set_log_level('ERROR')
-     
+         
 def graveyard(path_to_eeg='/media/administrator/Sleep_Data/Processed/LaKu_1_1-raw.fif'):
     spectral_pipe = SpectralPipe(
         path_to_eeg=path_to_eeg,
@@ -51,25 +51,33 @@ def graveyard(path_to_eeg='/media/administrator/Sleep_Data/Processed/LaKu_1_1-ra
     spectral_pipe.plot_psds(picks=["C3"])
     spectral_pipe.plot_topomap_collage()           
 
-def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path):
+def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path, thresh=25, ref='csd'):
     # 0a. Get subject, night info
     subject, night, ref = file.split('/')[-1].split('-')[0].split('_')
     
     # 0b. Check if this subject night has already been processed
-    sw_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_sw.csv')
-    spindles_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_spindles.csv')
+    if ref=='csd':
+        sw_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_sw.csv')
+        spindles_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_spindles.csv')
+    elif ref == 'lm':
+        sw_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_sw_lm.csv')
+        spindles_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_spindles_lm.csv')        
     if os.path.exists(sw_output_path) and os.path.exists(spindles_output_path):
         print(f"Skipping {subject} {night} - already processed.")
         sw_summary = pd.read_csv(sw_output_path)
         sp_summary = pd.read_csv(spindles_output_path)
         return sw_summary, sp_summary
-
+    
     # 1a. Load continuous data 
     raw = mne.io.read_raw_fif(file, preload=False) 
     
     # 1b. Get stimulation condition from epoch events
-    events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_csd-epo.fif', 
-                             return_event_id=True)
+    if ref == 'csd':
+        events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_csd-epo.fif', 
+                                 return_event_id=True)
+    elif ref == 'lm':
+        events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_lm-epo.fif', 
+                                 return_event_id=True)
     if 'pn_sham_c3' in events[-1]:
         mode = 'pn'
     elif 'nmes_sham_c3' in events[-1]:
@@ -79,22 +87,45 @@ def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path):
     hypno = np.load(hypno_path + f'{subject}_{night}_hypno.npy')
     
     # 3. SO/Spindle detection
-    data = raw.get_data('csd')*1e3
-    # Detect slow waves
-    thresh = np.percentile(np.abs(data[:, hypno==3]), 75)
-    print('75th percentile threshold in SWS: %.2f mm/V²' % thresh)
-    sw = yasa.sw_detect(data=data, 
-                        sf=raw.info['sfreq'], 
-                        ch_names=raw.ch_names[0:64],
-                        hypno=hypno,
-                        include=(2, 3),
-                        amp_neg=(None, None), # Disabled
-                        amp_pos=(None, None), # Disabled
-                        amp_ptp=(thresh, np.inf),  # No upper threshold: np.inf
-                        remove_outliers=True,
-                        coupling=True,
-                        coupling_params={"freq_sp": (12, 16), "time": 1, "p": 0.05},
-                        )
+    if ref=='csd':
+        import scipy
+        data = raw.get_data('csd')*1e3
+        # Detect slow waves
+        # thresh = np.percentile(np.abs(data[:, hypno==3]), 75)
+        # print('75th percentile threshold in SWS: %.2f mm/V²' % thresh)
+        # thresh = np.median(scipy.stats.median_abs_deviation(np.abs(data[:, hypno==3]), axis=1) / 0.6745)
+        # print('MAD threshold in SWS: %.2f mm/V²' % thresh)
+        sw = yasa.sw_detect(data=data, 
+                            sf=raw.info['sfreq'], 
+                            ch_names=raw.ch_names[0:64],
+                            hypno=hypno,
+                            include=(2, 3),
+                            freq_sw=(None, 1.5), 
+                            amp_neg=(None, None), # Disabled
+                            amp_pos=(None, None), # Disabled
+                            amp_ptp=(thresh, 200),  # No upper threshold: np.inf
+                            remove_outliers=True,
+                            coupling=True,
+                            coupling_params={"freq_sp": (12, 16), "time": 1, "p": 0.05},
+                            )
+        
+    elif ref=='lm': 
+        data = raw.get_data('eeg')*1e6
+        # Detect slow waves
+        sw = yasa.sw_detect(data=data, 
+                            sf=raw.info['sfreq'], 
+                            ch_names=raw.ch_names[0:64],
+                            hypno=hypno,
+                            include=(2, 3),
+                            freq_sw=(None, 1.5), 
+                            # amp_neg=(None, None), # standard
+                            # amp_pos=(None, None), # standard
+                            # amp_ptp=(thresh, np.inf),  # No upper threshold: np.inf
+                            remove_outliers=True,
+                            coupling=True,
+                            coupling_params={"freq_sp": (12, 16), "time": 1, "p": 0.05},
+                            )
+    
     # sw_summary = sw.summary(grp_chan=True, grp_stage=True)
     # yasa.topoplot(sw_summary.loc[3].Density)
     
@@ -124,7 +155,8 @@ def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path):
     sw_summary.insert(0, 'Subject', subject)
     sw_summary.insert(1, 'Night', night)
     sw_summary.insert(2, 'Mode', mode)
-    sw_summary.insert(3, '75_Thresh', thresh)
+    if ref=='csd':
+        sw_summary.insert(3, '75_Thresh', thresh)
     
     # Write SW and spindle summaries to CSV files
     sw_summary.reset_index().to_csv(sw_output_path, index=False)
@@ -142,7 +174,7 @@ def analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True,
     subject, night, _ = file.split('/')[-1].split('-')[0].split('_')
         
     # Check if this subject night has already been processed
-    hrv_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_hrv.csv')
+    hrv_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_hrv_lm.csv')
     if os.path.exists(hrv_output_path):
         print(f"Skipping {subject} {night} - already processed.")
         hrv_df = pd.read_csv(hrv_output_path)
@@ -267,10 +299,15 @@ def analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True,
     hrv = epochs[epochs.Quality!='Unacceptable'].copy()
 
     if power_desired:
-        hrv_df = add_power(hrv, raw.get_data('csd')*1e3, 
-                           sf, raw.ch_names[0:64], 
-                           subject, night, mode)
-        
+        try:
+            hrv_df = add_power(hrv, raw.get_data('csd')*1e3, 
+                               sf, raw.ch_names[0:64], 
+                               subject, night, mode)
+        except:
+            hrv_df = add_power(hrv, raw.get_data('eeg')*1e6, 
+                               sf, raw.ch_names[0:64], 
+                               subject, night, mode)
+            
     # Write HRV summary to CSV files
     hrv_df.to_csv(hrv_output_path, index=False)
     print(f"Processed and saved {subject} {night}")
@@ -295,19 +332,27 @@ def add_power(hrv, eeg, sf, ch_names, subject, night, mode):
             end = int(sf * (row["start"] + row["duration"]))
             
             # Get PSD using the Welch method
-            psds, freqs = mne.time_frequency.psd_array_welch(
+            # psds, freqs = mne.time_frequency.psd_array_welch(
+            #     x=eeg[chan_idx, start:end].squeeze(),
+            #     sfreq=sf, 
+            #     fmin=0.5, 
+            #     fmax=30, 
+            #     n_jobs=-1, 
+            #     **dict(average='median', 
+            #            n_fft=int(4*sf))
+            #     )
+            
+            psds, freqs = mne.time_frequency.psd_array_multitaper(
                 x=eeg[chan_idx, start:end].squeeze(),
                 sfreq=sf, 
                 fmin=0.5, 
                 fmax=30, 
-                n_jobs=-1, 
-                **dict(average='median', 
-                       n_fft=int(4*sf))
+                n_jobs=-1,
                 )
             
             # FOOOF data         
             fm = fooof.FOOOF(max_n_peaks=5)
-            fm.fit(freqs, psds)          
+            fm.fit(freqs, psds, freq_range=(3, 30))          
                        
             # Get relative power with YASA 
             bp = yasa.bandpower_from_psd(psds, freqs, ch_names=[chan],
@@ -372,7 +417,7 @@ def analyze_sleep_macroarchitecture(file, stats_path, hypno_path):
     
     # Load hypnogram
     hypno = np.load(hypno_path + f'{subject}_{night}_hypno.npy')
-    
+       
     # Get stimulation condition from epoch events
     try:  
         events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_csd-epo.fif', 
@@ -406,6 +451,10 @@ def analyze_sleep_transitions(file, stats_path, hypno_path):
     # Load hypnogram
     hypno = np.load(hypno_path + f'{subject}_{night}_hypno30s.npy')
     
+    # Get mixing time
+    tm, _ = nk.transition_matrix(hypno, show=False)
+    mx = nk.markov_mixingtime(tm)
+    
     # Get stimulation condition from epoch events
     try:  
         events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_csd-epo.fif', 
@@ -421,6 +470,9 @@ def analyze_sleep_transitions(file, stats_path, hypno_path):
     
     # Extract sleep transitions based on hypnogram
     _, probs = yasa.transition_matrix(hypno)
+    
+    # Calculate stage stability
+    stability = np.diag(probs.loc[2:, 2:]).mean()
                 
     # Make dataframe
     df = pd.DataFrame(probs)
@@ -429,16 +481,17 @@ def analyze_sleep_transitions(file, stats_path, hypno_path):
     df['Subject'] = subject
     df['Night'] = night
     df['Mode'] = mode
+    df['MixingTime'] = mx
+    df['Stability'] = stability
     
     return df  
     
 #%%
 if __name__ == '__main__':
     path = '/media/administrator/Sleep_Data/Processed/Sleep/Final/Raw/*csd-raw.fif'
+    #path = '/media/administrator/Sleep_Data/Processed/Sleep/Final/Raw/*lm-raw.fif'
     stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
-    # stats_path = '/media/administrator/data/Study_2_data/NIDRA/CLNMES/Statistics/'
     hypno_path = '/media/administrator/Sleep_Data/Processed/Hypnograms/' 
-    # hypno_path = '/media/administrator/data/Study_2_data/NIDRA/CLNMES/Hypnograms/' 
     figure_path = '/media/administrator/Sleep_Data/Processed/Figures/Sleep/'
     slowwaves = []
     spindles = []
@@ -457,22 +510,22 @@ if __name__ == '__main__':
         trans_p.append(df_trans)
         
         # Extract SO and Spindle summaries
-        sw_summary, sp_summary = analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path)
+        sw_summary, sp_summary = analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path, ref='csd')
         
         # HRV analysis
-        df_hrv = analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True, 
-                                         power_desired=True, plot=False)
+        # df_hrv = analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True, 
+        #                                  power_desired=True, plot=False)
         
         # Combine HRV with ndPAC
-        df_hrv_power_couping = combine_hrv_coupling(sw_summary, df_hrv)
+        #df_hrv_power_couping = combine_hrv_coupling(sw_summary, df_hrv)
           
         # Append summaries
         slowwaves.append(sw_summary)
         spindles.append(sp_summary)
-        hrvs.append(df_hrv_power_couping)
+        #hrvs.append(df_hrv_power_couping)
         
         # Delete heavy objects
-        del sw_summary, sp_summary, df_hrv, df_hrv_power_couping
+        del sw_summary, sp_summary #, df_hrv, df_hrv_power_couping
 
     # Combine sleep stats
     sleep_stats_df = pd.concat(sleep_stats).reset_index(drop=True)
@@ -487,5 +540,5 @@ if __name__ == '__main__':
     df_spindles.to_csv(stats_path + 'df_spindles.csv')
     df_sw = pd.concat(slowwaves).reset_index(drop=True)
     df_sw.to_csv(stats_path + 'df_sw.csv')
-    df_hrv = pd.concat(hrvs).reset_index(drop=True)
-    df_hrv.to_csv(stats_path + 'df_sleep_hrv.csv')
+    # df_hrv = pd.concat(hrvs).reset_index(drop=True)
+    # df_hrv.to_csv(stats_path + 'df_sleep_hrv.csv')

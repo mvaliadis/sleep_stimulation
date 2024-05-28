@@ -7,7 +7,7 @@ Created on Thu Feb  8 13:44:33 2024
 """
 
 import mne
-from mne_connectivity import spectral_connectivity_epochs, phase_slope_index
+from mne_connectivity import spectral_connectivity_epochs#, phase_slope_index
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -23,6 +23,7 @@ from sleepstim.Analysis.NIDRA import pci
 from sleepstim.Analysis.NIDRA import tct
 import pingouin as pg
 import pandas as pd
+import seaborn as sns
 import yasa
 import fooof
 import neurokit2 as nk
@@ -30,7 +31,7 @@ from sleepecg import detect_heartbeats
 mne.set_log_level('ERROR')
 
 def analyze_sleep_nmes_epochs_tfr(epochs, subject, night,
-                                  freq_range = (0.5,30), 
+                                  freq_range = (0.5, 45), 
                                   steps = 0.25,  
                                   baseline=(-3,3), 
                                   mode='zscore', 
@@ -74,7 +75,7 @@ def analyze_sleep_nmes_epochs_tfr(epochs, subject, night,
             'Stim': cond.split('_')[1],
             'Mode': cond.split('_')[0],
             'Target_chan': cond.split('_')[2], 
-            'TFR': Sxx.average(),
+            'TFR': Sxx[cond].average(),
         }
         
         # Append the dictionary to the list
@@ -111,7 +112,6 @@ def analyze_sleep_nmes_epochs_tfr(epochs, subject, night,
             #                          timefreqs=[(0, 12), (2, 12)])
             
             fig_path = '/media/administrator/Sleep_Data/Processed/Figures/Sleep/'
-            # fig_path = '/media/administrator/data/Study_2_data/NIDRA/Figures/'
             plt.savefig(fig_path + f'{cond}_{subject}_{night}_tfr.png')
             plt.close('all')
           
@@ -126,16 +126,24 @@ def phase_extraction(epochs, method='neurodsp', coi='C3'):
         inst_phase = np.concatenate([inst_phase])
         # Extract phase at stimulation
         stim_phase = inst_phase[:, epochs.time_as_index(0)[0]]
-    if method == 'hilbert':
+        
+    elif method == 'hilbert':
         # Filter data
-        epochs.copy().filter(None, 2)
+        sig = epochs.copy().pick(coi).filter(None, 2)
         # Extract instantaneous phase using Hilbert transform
-        n = epochs._data.shape[-1]
+        n = sig._data.shape[-1]
         nfast = next_fast_len(n)
-        inst_phase = np.angle(hilbert(epochs, N=nfast)[:n])
+        inst_phase = np.angle(hilbert(sig, N=nfast)[:n]).squeeze()
         # Extract phase at stimulation
-        stim_phase = inst_phase[:, epochs.ch_names.index(coi),
-                                epochs.time_as_index(0)[0]]
+        stim_phase = inst_phase[:, epochs.time_as_index(0)[0]]
+        
+    elif method == 'tensorpac':
+        sig = epochs.get_data(coi).squeeze()*1e3
+        sf = epochs.info['sfreq']
+        p = Pac(f_pha=[0.5, 2])
+        inst_phase = p.filter(sf, sig, ftype='phase', edges=None, n_jobs=-1).squeeze(0)
+        # Extract phase at stimulation
+        stim_phase = inst_phase[:, epochs.time_as_index(0)[0]]
     
     return stim_phase
 
@@ -237,82 +245,141 @@ def analyze_sleep_nmes_hr(epochs, subject, night):
 def analyze_sleep_nmes_epochs_power(epochs, subject, night, plot=False): 
     # Initialize list
     df = []
+    df_fooof = []
     
     # Compute power spectral and fit FOOOF models
     for cond in epochs.event_id.keys():
         
         # Compute PSD using the Welch method
-        epo_spectrum = epochs[cond].compute_psd(method='welch', fmin=0.5, fmax=30, n_jobs=-1, 
-                                                picks='csd', **dict(average='median', 
-                                                                    n_fft=int(4*epochs.info['sfreq'])))
+        # epo_spectrum = epochs[cond].compute_psd(method='welch', fmin=0.5, fmax=30, n_jobs=-1, 
+        #                                         picks='csd', **dict(average='median', 
+        #                                                             n_fft=int(4*epochs.info['sfreq'])))
+        epo_spectrum = epochs[cond].compute_psd(fmin=0.5, fmax=45,
+                                                tmin=-2, tmax=2,
+                                                n_jobs=-1, picks='csd')
         psds, freqs = epo_spectrum.get_data(return_freqs=True)
+        
+        # decimate freqs
+        freqs = freqs[::3]
+        psds = psds[:,:,::3]
+        psds *= 1e6
+        
+        # FOOOF data         
+        fm = fooof.FOOOFGroup(max_n_peaks=5)
+        fm.fit(freqs, psds.mean(0), freq_range=(3, 45))
+        
+        
+        df_fooof_dict ={
+            'Subject': subject,
+            'Night': night, 
+            'Condition' : cond, 
+            'Mode' : cond.split('_')[0], 
+            'fooof' : [fm],
+            #'Spectra_mne' : [epo_spectrum], 
+            }
+        
         
         # Get relative power with YASA 
         power_df = yasa.bandpower_from_psd(psds.mean(0), freqs, ch_names=epo_spectrum.ch_names,
+                                           relative=False, 
                                            bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
                                                   (8, 12, 'Alpha'), (12, 16, 'Sigma'),
-                                                  (16, 30, 'Beta')])
+                                                  (16, 30, 'Beta'), (30, 45, 'Gamma')])
         power_df.insert(0, 'Subject', subject)
         power_df.insert(1, 'Night', night)
         power_df.insert(2, 'Condition', cond)
         power_df.insert(3, 'Mode', cond.split('_')[0])
-        
-        # FOOOF data         
-        fm = fooof.FOOOFGroup(max_n_peaks=5)
-        fm.fit(freqs, psds.mean(0))
-        
+                
         # Extract aperiodic components for all channel
         power_df['Offset'] = fm.get_params(name='aperiodic_params', col='offset')
-        power_df['Aperiodic'] = fm.get_params(name='aperiodic_params', col='exponent')           
+        power_df['Aperiodic'] = fm.get_params(name='aperiodic_params', col='exponent')            
     
         # Define and plot frequency bands of interest
         if plot:
+            # Plot FOOOF results
+            fig = plt.figure() 
+            plt.tight_layout()
+            plt.yscale('log')
+            plt.xscale('log')
+            
+            afm_fooofed_spectrum_ = np.median([fm.get_fooof(ind=idx, regenerate=True).fooofed_spectrum_ for idx in range(len(fm))], axis=0)
+            afm_ap_fit = np.median([fm.get_fooof(ind=idx, regenerate=True)._ap_fit for idx in range(len(fm))], axis=0)
+            aperiodic = np.median([fm.get_fooof(ind=idx, regenerate=True).aperiodic_params_[1] for idx in range(len(fm))])
+  
+            plt.plot(fm.freqs, 10**(np.median(fm.power_spectra, 0)), c='k', label="Power spectrum", lw=2)
+            plt.plot(fm.freqs, 10**(afm_ap_fit), c='b',linestyle='--', label="Aperiodic fit", lw=2)
+            plt.plot(fm.freqs, 10**(afm_fooofed_spectrum_), c='r', label="FOOOF model fit", lw=2)
+            fig.suptitle(f'PSD - {cond}')
+            fig.axes[0].set_xlabel("Frequency (Hz)")
+            fig.axes[0].set_ylabel("PSD log($V^2$/Hz)")
+            fig.axes[0].legend()
+            # set text with fit parameters
+            fig.axes[0].text(0.1, 0.5, f"Slope: {round(aperiodic, 2)}",
+                            transform=fig.axes[0].transAxes)
+            sns.despine()
+            #plt.savefig(f'{fig_path}FOOOF_{obj_name}.png')
+            
+            ### old
             bands = {'Delta (0.5-4 Hz)': (0.5, 4), 'Theta (4-8 Hz)': (4, 8), 
-                      'Alpha (8-12 Hz)': (8, 12), 'Sigma (12-16 Hz)': (12, 16), 
-                      'Beta (16-30 Hz)': (16, 30)}
+                     'Alpha (8-12 Hz)': (8, 12), 'Sigma (12-16 Hz)': (12, 16), 
+                     'Beta (16-30 Hz)': (16, 30), 'Gamma (30-45 Hz)': (30, 45)}
             
             epo_spectrum.plot_topomap(bands=bands, normalize=True)
             plt.suptitle(f'{cond.capitalize()}')
             plt.close('all')
+            ####
             
         df.append(power_df)
+        df_fooof.append(pd.DataFrame(df_fooof_dict))    
     
     # Create df
     df = pd.concat(df).reset_index(drop=True)
+    df_fooof = pd.concat(df_fooof).reset_index(drop=True)
         
     # Split the 'Condition' column into 'Stim/Sham' and 'Target Chan' columns
     df['Stim'], df['Target_Chan'] = zip(*df['Condition'].apply(lambda x: x.split('_')[1:]))
     df.drop('Condition', axis=1, inplace=True)
     
-    return df
+    df_fooof['Stim'], df_fooof['Target_Chan'] = zip(*df_fooof['Condition'].apply(lambda x: x.split('_')[1:]))
+    df_fooof.drop('Condition', axis=1, inplace=True)
+    
+    return df, df_fooof
 
 def analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='spearman'):
     tcts = []
     for cond in epochs.event_id.keys():
-        consistency_gfp = tct.calculate_gfp_correlation(epochs[cond], method=method)
-        consistency_post = tct.calculate_topographic_consistency(epochs[cond])
-        gfp_post_trial = tct.calculate_gfp_strength(epochs[cond], method='trial_avg')
-        gfp_post_evoked = tct.calculate_gfp_strength(epochs[cond], method='evoked_avg')
-        if 'c3' in cond:
-            coi = 'C3'
-        elif 'fz' in cond:
-            coi = 'Fz'
-        erp = epochs[cond].get_data(coi, tmin=0, tmax=.2).squeeze().mean(1).mean()*1e3
-        # Create a new dictionary for the current channel and stimulation
-        tct_dict = {
-            'Subject': subject,
-            'Night': night,
-            'Condition': cond, 
-            'Mode': cond.split('_')[0], 
-            'Consistency_RMS': consistency_gfp,
-            'Consistency': consistency_post,
-            'RMS_Trial': gfp_post_trial, 
-            'RMS_Evoked': gfp_post_evoked, 
-            'ERP': erp,
-        }
-        
-        # Append the dictionary to the list
-        tcts.append(tct_dict)   
+        for times, latency in zip(((0.025, .225), (0.2, .4)), ('CLNMES', 'CLAS')):
+            tmin, tmax = times
+            consistency_gfp = tct.calculate_gfp_correlation(epochs[cond], method=method,
+                                                            tmin=tmin, tmax=tmax)
+            consistency_post = tct.calculate_topographic_consistency(epochs[cond],
+                                                                     tmin=tmin, tmax=tmax)
+            gfp_post_trial = tct.calculate_gfp_strength(epochs[cond], method='trial_avg',
+                                                        tmin=tmin, tmax=tmax)
+            gfp_post_evoked = tct.calculate_gfp_strength(epochs[cond], method='evoked_avg',
+                                                         tmin=tmin, tmax=tmax)
+            if 'c3' in cond:
+                coi = 'C3'
+            elif 'fz' in cond:
+                coi = 'Fz'
+                
+            erp = epochs[cond].get_data(coi, tmin=tmin, tmax=tmax).squeeze().mean(1).mean()*1e3
+            # Create a new dictionary for the current channel and stimulation
+            tct_dict = {
+                'Subject': subject,
+                'Night': night,
+                'Condition': cond, 
+                'Mode': cond.split('_')[0], 
+                'Latency' : times, 
+                'Consistency_RMS': consistency_gfp,
+                'Consistency': consistency_post,
+                'RMS_Trial': gfp_post_trial, 
+                'RMS_Evoked': gfp_post_evoked, 
+                'ERP': erp,
+            }
+            
+            # Append the dictionary to the list
+            tcts.append(tct_dict)   
         
     # Convert to df
     df = pd.DataFrame(tcts)
@@ -326,30 +393,49 @@ def analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='spearman'):
 def analyze_sleep_nmes_epochs_pci(epochs, subject, night):  
     # Extract PCI
     pcis = []
-    par = {'baseline_window':(-3,-1.5), 
-           'response_window':(.01, 1.0), 
-           'k':1.2, 
-           'min_snr':1.1, 
-           'max_var':99,
-           'embed':False,
-           'n_steps':100, 
-           'avgref': False}
-    for chan in ('C3','Fz'):
-        for stim in ('sham', 'stim'):
-            try:
-                evk = epochs[f'nmes_{stim}_{chan.lower()}'].average()
-            except:
-                evk = epochs[f'pn_{stim}_{chan.lower()}'].average()
+    for times in ((0.025, .225), (0.2, .4), (0.025, 0.8), (0.025, 1.5)):
+        tmin, tmax = times
+        par = {'baseline_window':(-3, -1.5), 
+               'response_window':(tmin, tmax), 
+               'k':1.2, 
+               'min_snr':1.1, 
+               'max_var':99,
+               'embed':False,
+               'n_steps':100, 
+               'avgref': False}
+        for chan in ('C3','Fz'):
+            if 'nmes' in list(epochs.event_id.keys())[0]:
+                mode = 'nmes'
+            else:
+                mode = 'pn'
+            evk = mne.combine_evoked([epochs[f'{mode}_stim_{chan.lower()}'].average(),
+                                      epochs[f'{mode}_sham_{chan.lower()}'].average()],
+                                     weights=[1, -1])
             pci_ = pci.calc_PCIst(evk.get_data()*1e3, evk.times, **par)
-
+            
+            from numpy import apply_along_axis as apply
+            def lziv(x):
+                import antropy as ant
+                """Binarize the EEG signal and calculate the Lempel-Ziv complexity.
+                """
+                return ant.lziv_complexity(x > np.median(x), normalize=True)
+            
+            amp = amp_by_time(evk.get_data()*1e3, 
+                              fs=evk.info['sfreq'])
+            
+            tmin_idx, tmax_idx = evk.time_as_index([tmin, tmax])
+            lziv_ = apply(lziv, axis=1, arr=amp[:, tmin_idx:tmax_idx])
+    
             # Create a new dictionary for the current channel and stimulation
             pci_dict = {
                 'Subject': subject,
                 'Night': night,
                 'Target_chan': chan,
-                'Stim': stim,
-                'Mode': list(epochs.event_id)[0].split('_')[0], 
+                'Mode': mode, 
+                'Latency': times, 
                 'PCI': pci_,
+                'Lempel_Ziv' : lziv_, 
+                'LZ_Chans' : [evk.ch_names], 
             }
             
             # Append the dictionary to the list
@@ -360,22 +446,133 @@ def analyze_sleep_nmes_epochs_pci(epochs, subject, night):
     
     return df
 
+def analyze_sleep_nmes_epochs_ndPAC_new(epochs, subject, night, method='tensorpac'):
+    # Initialize the list to hold all ndPAC data
+    ndPACs = []
+    for cond in epochs.event_id.keys():
+        epoch = epochs[cond]
+        for chan in epoch.ch_names[0:64]:
+            # Get channel data
+            data = epoch.copy().get_data(chan).squeeze()*1e3
+            # Get channel data
+            sf = epoch.info['sfreq']
+            
+            if method == 'tensorpac':
+                p = Pac(f_pha=[0.5, 2], f_amp=[12, 16.5, 0.5, 0.5])
+                sw_pha = p.filter(sf, data, ftype='phase', edges=None, n_jobs=-1).squeeze()
+                sp_amp = p.filter(sf, data, ftype='amplitude', edges=None, n_jobs=-1).squeeze()
+                sp_amp = sp_amp.mean(0)
+            elif method == 'hilbert':
+                # filter sw data
+                sw_data = mne.filter.filter_data(
+                    data, 
+                    sf, 
+                    None, 
+                    2, 
+                    method="fir",
+                    l_trans_bandwidth=0.2,
+                    h_trans_bandwidth=0.2
+                    )
+                
+                # filter sp data
+                sp_data = mne.filter.filter_data(
+                    data,
+                    sf,
+                    12,
+                    16,
+                    method="fir",
+                    l_trans_bandwidth=1.5,
+                    h_trans_bandwidth=1.5,
+                )
+                
+                # Now extract the instantaneous phase/amplitude using Hilbert transform
+                n_samples = data.shape[-1]
+                nfast = next_fast_len(n_samples)
+                sw_pha = np.angle(hilbert(sw_data, N=nfast)[:, :n_samples])
+                sp_amp = np.abs(hilbert(sp_data, N=nfast)[:, :n_samples])
+                                        
+            # Extract phase at pre/post stimulation
+            start_idx, end_idx = epoch.time_as_index((-1.5, 0.5))
+            pre_sw_pha = sw_pha[:, start_idx:end_idx]
+            start_idx2, end_idx2 = epoch.time_as_index((-1, 1))
+            post_sw_pha = sw_pha[:, start_idx2:end_idx2]
+        
+            # Extract phase at pre/post stimulation
+            pre_sp_amp = sp_amp[:, start_idx:end_idx]
+            post_sp_amp = sp_amp[:, start_idx2:end_idx2]
+            
+            # ndPAC calculation 
+            # Find location of max sigma amplitude in pre/post epoch
+            idx_max_amp_pre = pre_sp_amp.argmax(axis=1).reshape(-1, 1)
+            idx_max_amp_post = post_sp_amp.argmax(axis=1).reshape(-1, 1)
+                      
+            # PhaseAtSigmaPeak
+            # Find SW phase at max sigma amplitude in epoch            
+            pha_at_max_pre = np.squeeze(np.take_along_axis(pre_sw_pha,
+                                                           idx_max_amp_pre,
+                                                           axis=1))
+            pha_at_max_post = np.squeeze(np.take_along_axis(pre_sw_pha,
+                                                            idx_max_amp_post,
+                                                            axis=1))
+
+            # Normalized Direct PAC, with thresholding
+            ndp_pre = np.squeeze(tpm.norm_direct_pac(pre_sw_pha[None, :],
+                                                     pre_sp_amp[None, :], p=0.05))
+            ndp_post = np.squeeze(tpm.norm_direct_pac(post_sw_pha[None, :],
+                                                      post_sp_amp[None, :], p=0.05))
+                               
+            # Tuple pairs of conditions and their respective data for looping
+            conditions_data = [
+                ("Pre", pha_at_max_pre, ndp_pre),
+                ("Post", pha_at_max_post, ndp_post)
+            ]
+            
+            # Loop through each condition to process and append the data
+            for session, pha_at_max, ndp in conditions_data:            
+                # Calculate medians or other statistics as needed
+                mean_pha_at_max = pg.circ_mean(pha_at_max) # circular mean
+                mean_ndp = np.nanmean(ndp)
+            
+                # Create dictionary for the current session
+                dict_ndpac = {
+                    'Subject': subject,
+                    'Night': night,
+                    'Condition': cond,
+                    'Session': session,
+                    'Mode': cond.split('_')[0],
+                    'Chan': chan, 
+                    'PhaseAtSigmaPeak': mean_pha_at_max,
+                    'ndPAC': mean_ndp,
+                }
+            
+                # Append the dictionary to the ndPACs list
+                ndPACs.append(dict_ndpac)
+    
+    # Convert to df
+    df = pd.DataFrame(ndPACs) 
+    
+    # Split the 'Condition' column into 'Stim/Sham' and 'Target Chan' columns
+    df['Stim'], df['Target_Chan'] = zip(*df['Condition'].apply(lambda x: x.split('_')[1:]))
+    df.drop('Condition', axis=1, inplace=True)
+    
+    return df
+
 def analyze_sleep_nmes_epochs_ndPAC(epochs, subject, night, method='tensorpac'):
     # Initialize the list to hold all ndPAC data
     ndPACs = []
     for cond in epochs.event_id.keys():
         epoch = epochs[cond]
         if method=='tensorpac':
-            p = EventRelatedPac(f_pha=[0.5, 2], f_amp=[12, 16])
-            p = Pac(f_pha=[0.5, 2], f_amp=[5, 25, 0.25, 0.25])
+            p = Pac(f_pha=[0.5, 2], f_amp=[12, 16, 0.5, 0.5])
         for chan in epoch.ch_names[0:64]:
             # Get channel data
             data = epoch.copy().get_data(chan).squeeze()*1e3
             if method=='tensorpac':
                 # Get channel data
                 sf = epoch.info['sfreq']
-                sw_pha = p.filter(sf, data, ftype='phase', edges=int(sf), n_jobs=-1).squeeze()
-                sp_amp = p.filter(sf, data, ftype='amplitude', edges=int(sf), n_jobs=-1).squeeze()
+                sw_pha = p.filter(sf, data, ftype='phase', edges=None, n_jobs=-1).squeeze()
+                sp_amp = p.filter(sf, data, ftype='amplitude', edges=None, n_jobs=-1).squeeze()
+                sp_amp = sp_amp.mean(0)
             else:
                 # Extract instantaneous phase using Hilbert transform
                 sw_pha = [phase_by_time(data[i, :], fs=epochs.info['sfreq'],
@@ -389,9 +586,11 @@ def analyze_sleep_nmes_epochs_ndPAC(epochs, subject, night, method='tensorpac'):
                 sp_amp = np.concatenate([sp_amp])
                 
             # Extract phase at pre/post stimulation
-            start_idx, end_idx = epoch.time_as_index((-1.2, 0))
+            # start_idx, end_idx = epoch.time_as_index((-1.2, 0))
+            start_idx, end_idx = epoch.time_as_index((-1.2, 1.2))
             pre_sw_pha = sw_pha[:, start_idx:end_idx]
-            start_idx2, end_idx2 = epoch.time_as_index((0, 1.2))
+            # start_idx2, end_idx2 = epoch.time_as_index((0, 1.2))
+            start_idx2, end_idx2 = epoch.time_as_index((-0.5, 1.5))
             post_sw_pha = sw_pha[:, start_idx2:end_idx2]
         
             # Extract phase at pre/post stimulation
@@ -408,7 +607,7 @@ def analyze_sleep_nmes_epochs_ndPAC(epochs, subject, night, method='tensorpac'):
             time_in_seconds_pre = idx_max_amp_pre * time_per_sample
             time_in_seconds_post = idx_max_amp_post * time_per_sample
             time_relative_to_start_pre = time_in_seconds_pre - 1.2
-            time_relative_to_start_post = time_in_seconds_post + 0
+            time_relative_to_start_post = time_in_seconds_post + -0.5#0
             
             # PhaseAtSigmaPeak
             # Find SW phase at max sigma amplitude in epoch            
@@ -466,44 +665,93 @@ def analyze_sleep_nmes_epochs_ndPAC(epochs, subject, night, method='tensorpac'):
 def analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=False):
     erpacs = []
     for cond in epochs.event_id.keys():
-        epoch = epochs[cond]
-        edges=int(1*epoch.info['sfreq'])
+        epoch = epochs[cond].copy().crop(tmin=-2.75, tmax=2.75)
+        edges = int(0.75*epoch.info['sfreq'])
         if 'c3' in cond:
             coi = 'C3'
         elif 'fz' in cond:
             coi = 'Fz'
-        p = EventRelatedPac(f_pha=[0.5, 2], f_amp=(5, 25, .25, .25))
-        erpac = p.filterfit(int(epoch.info['sfreq']), epoch.get_data(picks=coi).squeeze()*1e3,
-                            method='gc', smooth=100, edges=edges, n_perm=200, 
-                            mcp='fdr', n_jobs=-1).squeeze()
-        
+        # p = EventRelatedPac(f_pha=[0.5, 1.5], f_amp=(5, 25, .25, .25))
+        # erpac = p.filterfit(int(epoch.info['sfreq']), epoch.get_data(picks=coi).squeeze()*1e3,
+        #                     method='gc', smooth=50, edges=edges, n_perm=200, 
+        #                     mcp='fdr', n_jobs=-1).squeeze()
+                
+        ###
+        # ERPAC (+/- 2 sec to avoid filter edge)
+        sf = epoch.info['sfreq']
+        data_erpac = epoch.get_data(picks=coi).squeeze()*1e3
+        erp = EventRelatedPac(f_pha=[0.5, 1.5], f_amp=np.arange(4.75, 25.75, 0.5), 
+                              verbose=False)  # f_pha = 0.8 Hz
+        #freqs = erp.f_amp.mean(1).astype(str)
+        pha = erp.filter(sf, data_erpac, ftype='phase', edges=edges)
+        amp = erp.filter(sf, data_erpac, ftype='amplitude', edges=edges)
+        ergcpac = np.squeeze(erp.fit(pha, amp, method="gc", smooth=25, n_jobs=-1)) 
+                       
         # Create a new dictionary for the erpac 
         dict_erpac = {
             'Subject': subject,
             'Night': night,
             'Condition': cond, 
             'Mode': cond.split('_')[0],
-            'ERPAC': erpac,
+            'ERPAC': ergcpac,
+            'Freqs' : erp.yvec, 
         }
         
         erpacs.append(dict_erpac)
         
-        if plot:        
-            plt.figure(figsize=(8, 4))
-            p.pacplot(erpac, epoch.times[edges:-edges], p.yvec, 
-                      xlabel='Time (second)', cmap='Spectral_r',
-                      # title='Event-Related PAC occurring for Delta phase',
-                      # fz_labels=15, fz_title=18)
-                      ylabel='Amplitude frequency (Hz)', title=p.method,
-                      cblabel='ERPAC', vmin=0., rmaxis=True)
-            plt.axvline(0., linestyle='--', color='w', linewidth=2)
+        if plot:  
+            fig_path = '/media/administrator/Sleep_Data/Processed/Figures/Sleep/'
+    
+            # ERGPAC Plot
+            # tmin, tmax = epoch.time_as_index([-2, 2])
+            # times = epoch[0].times[tmin:tmax]
+            # fig, ax = plt.subplots(figsize=(6, 5), dpi=100)
+            # im = plt.imshow(ergcpac[:, tmin:tmax], aspect='auto', 
+            #                 #cmap="Spectral_r", 
+            #                 origin='upper',
+            #                 #interpolation="gaussian", 
+            #                 #vmin=-0.2, vmax=1,
+            #                 extent=[times[0], times[-1], freqs[-1], freqs[0]])
+            
+            # plt.gca().invert_yaxis()
+            
+            # fig.suptitle(f"GC ERPAC - {cond}")
+            # plt.xlabel("Time from stim onset (s)")
+            # plt.ylabel("Frequency (Hz)")
+            # plt.axvline(0, ls=":", lw=1.5, color="k")
+            
+            # cb = plt.colorbar(im, shrink=0.7, pad=0.05, aspect=20)
+            # cb.set_label("Coupling")
+            # cb.outline.set_visible(False)
+            
+            # ax_sw = ax.twinx()
+            # data_erpac_ = epoch.copy().filter(None, 1.5).get_data(picks=coi, 
+            #                                                       tmin=-2, 
+            #                                                       tmax=3).squeeze()*1e3
+            # ax_sw.plot(times, data_erpac_.mean(0), color="k", lw=2)
+            # ax_sw.set_yticks([]);
+            
+            # fig.savefig(fig_path + f'{cond}_{subject}_{night}_erpac.png')
+            
+            ## Use this
+            ax = erp.pacplot(ergcpac, epoch.times[edges:-edges], erp.yvec, 
+                             xlabel='Time (second)', 
+                             title=f'Event-Related PAC {cond}',
+                             # fz_labels=15, fz_title=18
+                             ylabel='Amplitude frequency (Hz)', #title=erp.method,
+                             cblabel='ERPAC', vmin=0., rmaxis=True)
+            ax.axvline(0., linestyle='--', color='w', linewidth=2)
+            
+            ax_sw = ax.twinx()
+            data_erpac_ = epoch.copy().filter(None, 1.5).get_data(picks=coi, 
+                                                                  tmin=-2, 
+                                                                  tmax=2).squeeze()*1e3
+            ax_sw.plot(epoch.times[edges:-edges], data_erpac_.mean(0), color="k", lw=2)
+            ax_sw.set_yticks([]);
             
             plt.tight_layout()
-            p.show()
-            
-            fig_path = '/media/administrator/Sleep_Data/Processed/Figures/Sleep/'
-            # fig_path = '/media/administrator/data/Study_2_data/NIDRA/Figures/'
-            p.savefig(fig_path + f'{cond}_{subject}_{night}_erpac.png')
+            erp.show()         
+            erp.savefig(fig_path + f'{cond}_{subject}_{night}_erpac.png')
             plt.close('all')
         
     # Convert to df
@@ -515,29 +763,30 @@ def analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=False):
     
     return df
 
-def analyze_sleep_nmes_epochs_psi(epochs, subject, night):
-    # Number of channels (assuming 64 channels, indexed from 0 to 63)
-    n_channels = 64
+# def analyze_sleep_nmes_epochs_psi(epochs, subject, night):
+#     # Number of channels (assuming 64 channels, indexed from 0 to 63)
+#     n_channels = 64
     
-    # Seed channel index (e.g., channel 14)
-    seed_channel_idx = 14
+#     # Seed channel index (e.g., channel 14)
+#     seed_channel_idx = 14
     
-    # Generate indices for all pairs where the seed channel is connected to each other channel
-    # Note: We create a list of tuples (seed_channel_idx, other_channel_idx) for each other channel
-    indices = (np.array([seed_channel_idx] * n_channels),  # seed channel repeated
-               np.array([idx for idx in range(n_channels)]))  # all other channels
+#     # Generate indices for all pairs where the seed channel is connected to each other channel
+#     # Note: We create a list of tuples (seed_channel_idx, other_channel_idx) for each other channel
+#     indices = (np.array([seed_channel_idx] * n_channels),  # seed channel repeated
+#                np.array([idx for idx in range(n_channels)]))  # all other channels
     
-    # calculate PSI
-    psi = phase_slope_index(
-        eps[cond],
-        sfreq=eps.info['sfreq'],
-        indices=indices,
-        fmin=0.5,
-        fmax=2
-    )
-    yasa.topoplot(pd.Series(psi.get_data().squeeze(), psi.names))
+#     for eps in epochs:
+#         # calculate PSI
+#         psi = phase_slope_index(
+#             eps[cond],
+#             sfreq=eps.info['sfreq'],
+#             indices=indices,
+#             fmin=0.5,
+#             fmax=2
+#         )
+#         yasa.topoplot(pd.Series(psi.get_data().squeeze(), psi.names))
 
-def analyze_sleep_nmes_epochs_granger(epochs, subject, night, times=(0, 2), plot=False):
+def analyze_sleep_nmes_epochs_granger(epochs, subject, night, times=(-2, 2), plot=False):
     # Include only eeg sensors post stimulus onset 
     eps = epochs.copy().crop(tmin=times[0], tmax=times[1]).pick('csd')
     
@@ -563,7 +812,7 @@ def analyze_sleep_nmes_epochs_granger(epochs, subject, night, times=(0, 2), plot
             method=["gc"],
             indices=indices_ab,
             fmin=0.5,
-            fmax=30,
+            fmax=45,
             #rank=(np.array([3]), np.array([3])),
             gc_n_lags=lags,
         )  # A => B
@@ -573,7 +822,7 @@ def analyze_sleep_nmes_epochs_granger(epochs, subject, night, times=(0, 2), plot
             method=["gc"],
             indices=indices_ba,
             fmin=0.5,
-            fmax=30,
+            fmax=45,
             #rank=(np.array([3]), np.array([3])),
             gc_n_lags=lags,
         )  # B => A
@@ -589,7 +838,7 @@ def analyze_sleep_nmes_epochs_granger(epochs, subject, night, times=(0, 2), plot
             method=["gc_tr"],
             indices=indices_ab,
             fmin=0.5,
-            fmax=30,
+            fmax=45,
             #rank=(np.array([3]), np.array([3])),
             gc_n_lags=lags,
         )  # TR[A => B]
@@ -599,7 +848,7 @@ def analyze_sleep_nmes_epochs_granger(epochs, subject, night, times=(0, 2), plot
             method=["gc_tr"],
             indices=indices_ba,
             fmin=0.5,
-            fmax=30,
+            fmax=45,
             #rank=(np.array([3]), np.array([3])),
             gc_n_lags=lags,
         )  # TR[B => A]
@@ -637,6 +886,8 @@ def analyze_sleep_nmes_epochs_granger(epochs, subject, night, times=(0, 2), plot
     # Split the 'Condition' column into 'Stim/Sham' and 'Target Chan' columns
     df['Stim'], df['Target_Chan'] = zip(*df['Condition'].apply(lambda x: x.split('_')[1:]))
     df.drop('Condition', axis=1, inplace=True)
+    
+    plt.close('all')
       
     return df
         
@@ -717,6 +968,7 @@ if __name__ == '__main__':
     epochs_all = []
     df_phase_all = []
     df_power_all = []
+    df_fooof_all = []
     df_gc_all = []
     df_tct_all = []
     df_pci_all = []
@@ -729,62 +981,88 @@ if __name__ == '__main__':
         # 0. Get subject, night info
         subject, night, ref = file.split('/')[-1].split('-')[0].split('_')
         
-        # 1. Load & process epoched 
+        # 1a. Load & process epoched 
         epochs = mne.read_epochs(file)
         
-        # 2a. Extract stimulation targeting phases 
-        df_phase = analyze_sleep_nmes_epochs_phase(epochs, subject, night)
-        df_phase_all.append(df_phase)
-        
-        # 3a. Extract epoch-wise power & aperiodic params
-        df_power = analyze_sleep_nmes_epochs_power(epochs, subject, night, times=(0, 2), plot=False)
-        df_power_all.append(df_power)
-        
-        # 4a. Spatio Spectral Decomposition (SSD) Analysis
-        ssd = []  
-        
-        # 4b. Time reversed multivariate Granger causality 
-        df_gc = analyze_sleep_nmes_epochs_granger(epochs, subject, night, plot=True)
-        df_gc_all.append(df_gc)
-        
-        # 5a. TCT
-        df_tct = analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='pearson')
-        df_tct_all.append(df_tct)
-        
-        # 6a. Extract PCI 
-        df_pci = analyze_sleep_nmes_epochs_pci(epochs, subject, night)
-        df_pci_all.append(df_pci)
-        
-        # 7a. Extract TFR
-        df_tfr = analyze_sleep_nmes_epochs_tfr(epochs, subject, night, 
-                                               freq_range=(5, 25), 
-                                               steps=0.5,  
-                                               baseline=(-3, -2),
-                                               mode='zscore',
-                                               length=(-2, 2), 
-                                               plot=True, 
-                                               cmap='Spectral_r')
-        df_tfr_all.append(df_tfr) 
-        
-        # 8a. Coupling Analysis (ERPAC)
-        df_erpac = analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=True)
-        df_erpac_all.append(df_erpac)   
-        
-        # 8b. Coupling Analysis (ndPAC) 
-        df_ndpac = analyze_sleep_nmes_epochs_ndPAC(epochs, subject, 
-                                                   night, method='neurodsp')
-        df_ndpac_all.append(df_ndpac) 
-        
-        # 9. Extract inst HR
-        df_inst_hr = analyze_sleep_nmes_hr(epochs, subject, night)
-        df_inst_hr_all.append(df_inst_hr)
-        
-        # 10a. Combine epochs with metainfo
+        # 1b. If mode is 'pinknoise', then timeshift 100 ms 
         mode = list(epochs.event_id)[0].split('_')[0]
+        if mode == 'pn':
+            epochs.shift_time(-.1)    
+        #     evk = mne.combine_evoked([epochs['pn_stim_fz'].average(), 
+        #                               epochs['pn_sham_fz'].average()],
+        #                              weights=[1, -1])
+        #     evk.plot('Fz', xlim=(0, .5), titles=f'{subject} {mode} - Fz')
+        # else:
+        #     evk = mne.combine_evoked([epochs['nmes_stim_fz'].average(), 
+        #                               epochs['nmes_sham_fz'].average()],
+        #                              weights=[1, -1])
+        #     evk.plot('C3', xlim=(0, .5), titles=f'{subject} {mode} - C3')
+            
+        # 1c. Combine epochs with metainfo
         epochs_all.append([subject, night, mode, epochs])
         
-        # delete to save memory
-        del epochs, df_phase, df_power, df_tct, df_pci, df_tfr, df_ndpac, df_erpac
+        # # 2a. Extract stimulation targeting phases 
+        # df_phase = analyze_sleep_nmes_epochs_phase(epochs, subject, night)
+        # df_phase_all.append(df_phase)
+        
+        # # 3a. Extract epoch-wise power & aperiodic params
+        # df_power, df_fooof = analyze_sleep_nmes_epochs_power(epochs, subject, night, plot=False)
+        # df_power_all.append(df_power)
+        # df_fooof_all.append(df_fooof)
+        
+        # # 4a. Spatio Spectral Decomposition (SSD) Analysis
+        # ssd = []  
+        
+        # # 4b. Time reversed multivariate Granger causality 
+        # df_gc = analyze_sleep_nmes_epochs_granger(epochs, subject, night, plot=True)
+        # df_gc_all.append(df_gc)
+        
+        # # 5a. TCT
+        # df_tct = analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='pearson')
+        # df_tct_all.append(df_tct)
+        
+        # # 6a. Extract PCI 
+        # df_pci = analyze_sleep_nmes_epochs_pci(epochs, subject, night)
+        # df_pci_all.append(df_pci)
+        
+        # # 7a. Extract TFR
+        # df_tfr = analyze_sleep_nmes_epochs_tfr(epochs, subject, night, 
+        #                                         freq_range=(5, 25), 
+        #                                         steps=0.5,  
+        #                                         baseline=(-3, -2),
+        #                                         mode='zscore',
+        #                                         length=(-2, 2), 
+        #                                         plot=True, 
+        #                                         cmap='Spectral_r')
+        # df_tfr_all.append(df_tfr) 
+        
+        # # 8a. Coupling Analysis (ERPAC)
+        # df_erpac = analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=True)
+        # df_erpac_all.append(df_erpac)   
+        
+        # # 8b. Coupling Analysis (ndPAC) 
+        # df_ndpac = analyze_sleep_nmes_epochs_ndPAC_new(epochs, subject, night, method='hilbert')
+        # df_ndpac_all.append(df_ndpac) 
+        
+        # # 9. Extract inst HR
+        # df_inst_hr = analyze_sleep_nmes_hr(epochs, subject, night)
+        # df_inst_hr_all.append(df_inst_hr)
+        
+        # # delete to save memory
+        # del epochs, df_phase, df_power, df_tct, df_pci, df_tfr, df_ndpac, df_erpac
+        
+    # . Convert epochs into dataframe 
+    epochs_all_df = pd.DataFrame(epochs_all, 
+                                  columns=['Subject','Night','Mode','Epochs'])
+    epochs_all_df.to_pickle(stats_path + 'df_epochs.p')
+        
+    # . Create evoked contrasts object 
+    evoked_all_df = pd.DataFrame(create_evoked_contrasts(epochs_all_df))
+    evoked_all_df.to_pickle(stats_path + 'df_evokeds.p')
+    
+    # . Create GAVs
+    gavs = pd.DataFrame(create_gavs(evoked_all_df))                        
+    gavs.to_pickle(stats_path + 'df_gavs.p') 
     
     # Convert inst hr to dataframe
     df_inst_hrs_all =  pd.concat(df_inst_hr_all).reset_index(drop=True)
@@ -796,10 +1074,12 @@ if __name__ == '__main__':
     
     # 3b. Convert power/aperiodic into dataframe
     df_powers_all = pd.concat(df_power_all).reset_index(drop=True)
+    df_fooofs_all = pd.concat(df_fooof_all).reset_index(drop=True)
     df_powers_all.to_csv(stats_path + 'df_power.csv') 
+    df_fooofs_all.to_pickle(stats_path + 'df_fooof.p')
     
     # 4b. SSD -> Not sure if its worth doing
-    ssd = ssd
+    #ssd = ssd
     
     # 4c. Convert GC to df
     df_gcs_all = pd.concat(df_gc_all).reset_index(drop=True)
@@ -822,20 +1102,7 @@ if __name__ == '__main__':
     df_erpacs_all.to_pickle(stats_path + 'df_erpac.p')
     
     df_ndpacs_all = pd.concat(df_ndpac_all).reset_index(drop=True)
-    df_ndpacs_all.to_csv(stats_path + 'df_ndpac.csv')
-        
-    # . Convert epochs into dataframe 
-    epochs_all_df = pd.DataFrame(epochs_all, 
-                                 columns=['Subject','Night','Mode','Epochs'])
-    epochs_all_df.to_pickle(stats_path + 'df_epochs.p')
-        
-    # . Create evoked contrasts object 
-    evoked_all_df = pd.DataFrame(create_evoked_contrasts(epochs_all_df))
-    evoked_all_df.to_pickle(stats_path + 'df_evokeds.p')
-    
-    # . Create GAVs
-    gavs = pd.DataFrame(create_gavs(evoked_all_df))                        
-    gavs.to_pickle(stats_path + 'df_gavs.p') 
+    df_ndpacs_all.to_csv(stats_path + 'df_ndpac.csv')    
     
 #%%
 

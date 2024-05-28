@@ -10,23 +10,29 @@ import yasa
 import pandas as pd
 
 # Load data 
-stats_path = '/media/administrator/data/Study_2_data/NIDRA/CLNMES/Statistics/'
-df_ndpac = pd.read_csv(stats_path + 'df_ndpac.csv')
+stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
+df_hrv = pd.read_csv(stats_path + 'df_sleep_hrv.csv', index_col=0)
+
+
+df_sws = pd.read_csv(stats_path + 'df_sw.csv', index_col=0)
+
+df_spindle = pd.read_csv(stats_path + 'df_spindles.csv', index_col=0)
 
 #%%
 # Plot data
-yasa.topoplot(df_ndpacs_all.groupby(['Condition','Session','Chan']).mean().loc['nmes_sham_fz','Post'].ndPAC, 
-              cmap = 'Spectral_r', vmin=0.2, vmax=0.3)
-yasa.topoplot(df_ndpacs_all.groupby(['Condition','Session','Chan']).mean().loc['nmes_stim_fz','Post'].ndPAC,
-              cmap = 'Spectral_r', vmin=0.2, vmax=0.3)
-yasa.topoplot(df_ndpacs_all.groupby(['Condition','Session','Chan']).mean().loc['nmes_sham_c3','Post'].ndPAC,
-              cmap = 'Spectral_r', vmin=0.2, vmax=0.3)
-yasa.topoplot(df_ndpacs_all.groupby(['Condition','Session','Chan']).mean().loc['nmes_stim_c3','Post'].ndPAC,
-              cmap = 'Spectral_r', vmin=0.2, vmax=0.3)
+# Loop over each combination of stimulation type and channel
+for stim in df_ndpac.Stim.unique():
+    for chan in df_ndpac.Target_Chan.unique():
+        # Calculate the mean ndPAC for the specified conditions
+        data = df_ndpac.groupby(['Mode', 'Session', 'Target_Chan', 'Chan']).mean().loc['nmes', stim, 'Post', chan].ndPAC
+        
+        # Generate the topoplot for each condition
+        yasa.topoplot(data, cmap='Spectral_r', vmin=0.2, vmax=0.3)
+
 
 # Pivot table to restructure data for difference calculation
-df_pivot = df_ndpacs_all.pivot_table(index=['Condition','Subject','Night','Recording','Chan'], columns='Session',
-                                     values=['SigmaPeakTime', 'PhaseAtSigmaPeak', 'ndPAC'])
+df_pivot = df_ndpac.pivot_table(index=['Mode','Subject','Night','Chan'], columns='Session',
+                                values=['SigmaPeakTime', 'PhaseAtSigmaPeak', 'ndPAC'])
 
 # Calculate the difference (post - pre)
 df_contrasts = df_pivot.copy()

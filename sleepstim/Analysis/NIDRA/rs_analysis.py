@@ -15,8 +15,34 @@ from tqdm import tqdm
 import yasa
 import neurokit2 as nk
 from glob import glob
+import seaborn as sns
 mne.set_log_level('ERROR')
 
+        
+def fooof_plot(fm, cond):
+    # Plot FOOOF results
+    fig = plt.figure() 
+    plt.tight_layout()
+    plt.yscale('log')
+    plt.xscale('log')
+    
+    afm_fooofed_spectrum_ = np.median([fm.get_fooof(ind=idx, regenerate=True).fooofed_spectrum_ for idx in range(len(fm))], axis=0)
+    afm_ap_fit = np.median([fm.get_fooof(ind=idx, regenerate=True)._ap_fit for idx in range(len(fm))], axis=0)
+    aperiodic = np.median([fm.get_fooof(ind=idx, regenerate=True).aperiodic_params_[1] for idx in range(len(fm))])
+  
+    plt.plot(fm.freqs, 10**(np.median(fm.power_spectra, 0)), c='k', label="Power spectrum", lw=2)
+    plt.plot(fm.freqs, 10**(afm_ap_fit), c='b',linestyle='--', label="Aperiodic fit", lw=2)
+    plt.plot(fm.freqs, 10**(afm_fooofed_spectrum_), c='r', label="FOOOF model fit", lw=2)
+    fig.suptitle(f'PSD - {cond}')
+    fig.axes[0].set_xlabel("Frequency (Hz)")
+    fig.axes[0].set_ylabel("PSD log($V^2$/Hz)")
+    fig.axes[0].legend()
+    
+    # set text with fit parameters
+    fig.axes[0].text(0.1, 0.5, f"Slope: {round(aperiodic, 2)}",
+                    transform=fig.axes[0].transAxes)
+    sns.despine()
+    
 def analyze_rs_data(file, figure_path, plot=False): 
     # Get subject, night info
     subject, night, session, _, _ = file.split('/')[-1].split('-')[0].split('_')
@@ -34,30 +60,37 @@ def analyze_rs_data(file, figure_path, plot=False):
             mode = 'nmes'
     except Exception as e:
         print(f"Error reading events: {e}")
-        return None
+        return None, None
     
     # If mode is not set, return None or skip further processing
     if mode is None:
         print("No relevant events found.")
-        return None
+        return None, None
     
     # Initialize list
     df = []
+    df_fooof = []
     
     # Compute power spectral and fit FOOOF models for eyes open and closed 
     for cond in list(epochs.event_id):
         
         # Compute PSD using the Welch method
-        epo_spectrum = epochs[cond].compute_psd(method='welch', fmin=1, fmax=30, n_jobs=-1, 
-                                                picks='csd', **dict(average='median', 
-                                                                    n_fft=int(2*epochs.info['sfreq'])))
+        epo_spectrum = epochs[cond].compute_psd(fmin=1, fmax=45, n_jobs=-1, picks='csd')
+                                                # **dict(average='median', 
+                                                #        n_fft=int(2*epochs.info['sfreq'])))
         psds, freqs = epo_spectrum.get_data(return_freqs=True)
+        freqs = freqs[::6]
+        psds = psds[:,:,::6]
+        psds *= 1e6
         
         # Get relative power with YASA 
-        power_df = yasa.bandpower_from_psd(psd=psds.mean(0), freqs=freqs, 
+        power_df = yasa.bandpower_from_psd(psd=psds.mean(0), 
+                                           freqs=freqs, 
                                            ch_names=epo_spectrum.ch_names,
+                                           relative=False, 
                                            bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),
-                                                  (8, 12, 'Alpha'), (12, 30, 'Beta')])
+                                                  (8, 12, 'Alpha'), (12, 30, 'Beta'),
+                                                  (30, 45, 'Gamma')])
         power_df.insert(0, 'Subject', subject)
         power_df.insert(1, 'Night', night)
         power_df.insert(2, 'Condition', cond)
@@ -66,7 +99,17 @@ def analyze_rs_data(file, figure_path, plot=False):
         
         # FOOOF data                 
         fm = fooof.FOOOFGroup(max_n_peaks=5)
-        fm.fit(freqs, psds.mean(0))  
+        fm.fit(freqs, psds.mean(0), freq_range=(1, 45)) 
+        
+        df_fooof_dict ={
+            'Subject': subject,
+            'Night': night, 
+            'Condition' : cond, 
+            'Session' : session, 
+            'Mode' : mode, 
+            'fooof' : [fm],
+            'Spectra_mne' : [epo_spectrum], 
+            }
         
         # Extract aperiodic components for all channel
         power_df['Offset'] = fm.get_params(name='aperiodic_params', col='offset')
@@ -75,18 +118,24 @@ def analyze_rs_data(file, figure_path, plot=False):
         # Define and plot frequency bands of interest
         if plot:
             bands = {'Delta (1-4 Hz)': (1, 4), 'Theta (4-8 Hz)': (4, 8), 
-                     'Alpha (8-12 Hz)': (8, 12), 'Beta (12-30 Hz)': (12, 30)}
+                     'Alpha (8-12 Hz)': (8, 12), 'Beta (12-30 Hz)': (12, 30),
+                     'Gamma (30-45) Hz': (30, 45)}
             
             epo_spectrum.plot_topomap(bands=bands, normalize=True)
             plt.suptitle(f'{cond.capitalize()}')
+            
+            fooof_plot(fm, cond)
+            
             plt.close('all')
             
         df.append(power_df)
+        df_fooof.append(pd.DataFrame(df_fooof_dict))
     
     # Create df
     df = pd.concat(df).reset_index(drop=True)
+    df_fooof = pd.concat(df_fooof).reset_index(drop=True)
             
-    return df
+    return df, df_fooof
 
 def analyze_rs_hrv(file, figure_path, plot=False):
     # Get subject, night info
@@ -179,21 +228,25 @@ def analyze_rs_hrv(file, figure_path, plot=False):
                            
 #%%
 if __name__ == '__main__':
-    
     ## 1. Power Analysis
     path = '/media/administrator/Sleep_Data/Processed/RS/*csd-epo.fif'
     # path = '/mnt/server/data03/2023_NIDRA/Recordings/*/*/*'
     save_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
     figure_path = '/media/administrator/Sleep_Data/Processed/Figures/RS/'
     power_dfs = []
+    fooof_dfs = []
     for file in tqdm(glob(path)):
         print(file)
-        power_df = analyze_rs_data(file, figure_path, plot=False) 
+        power_df, fooof_df = analyze_rs_data(file, figure_path, plot=False) 
         power_dfs.append(power_df)
+        fooof_dfs.append(fooof_df)
         
     # Concatenate power dataframes
     power_dfs_all = pd.concat(power_dfs).reset_index(drop=True)
     power_dfs_all.to_csv(save_path + 'df_rs.csv') 
+    
+    fooof_dfs_all = pd.concat(fooof_dfs).reset_index(drop=True)
+    fooof_dfs_all.to_pickle(save_path + 'df_rs_fooof.p') 
     
     ## 2. HRV Analyis
     raw_path = '/media/administrator/Sleep_Data/Processed/RS/*csd-raw.fif'

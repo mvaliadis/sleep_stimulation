@@ -413,3 +413,127 @@ def get_time_index(times, onset=0):
     first non-negative time.
     '''
     return np.sum(times < onset)
+
+#%%
+if __name__ == "__main__":
+    import mne
+    from functools import reduce
+    import operator
+    mne.set_log_level('ERROR')
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from numpy import apply_along_axis as apply
+    import pandas as pd
+    import yasa
+    from tqdm import tqdm
+    import glob
+    import pingouin as pg
+    from neurodsp.timefrequency import amp_by_time
+    def lziv(x):
+        import antropy as ant
+        """Binarize the EEG signal and calculate the Lempel-Ziv complexity.
+        """
+        return ant.lziv_complexity(x > np.median(x), normalize=True)
+    
+    def drop_bads_df(df, subject_nights=[('ChrSt', 1), ('UyDe', 1), ('IsEb', 2)]):
+        # Ensure the night numbers are of the same type as in the DataFrame
+        # If Night is a string in the DataFrame, convert the night numbers to strings
+        subject_nights = [(subj, str(night)) if isinstance(df['Night'].iloc[0], str) else (subj, night) for subj, night in subject_nights]
+        
+        # Create masks for each condition to drop
+        masks = [((df['Subject'] == subj) & (df['Night'] == night)) for subj, night in subject_nights]
+        
+        # Combine the individual masks with a logical OR
+        if masks:
+            combined_mask = reduce(operator.or_, masks)
+        else:
+            combined_mask = pd.Series([False] * len(df))
+        
+        # Apply the mask to filter out the rows
+        df = df[~combined_mask]
+        return df
+    
+    path = '/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/*csd-epo.fif'
+    stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
+    results_dict = []
+    evokeds = []
+    for file in tqdm(glob.glob(path)):
+        print(file)
+
+        subject, night, ref = file.split('/')[-1].split('-')[0].split('_')
+        
+        epochs = mne.read_epochs(file)
+        
+        response_window = (0.01, .21)
+        
+        par = {'baseline_window':(-3, -1.5), 
+               'response_window':response_window, 
+               'k':1.2, 
+               'min_snr':1.1, 
+               'max_var':99,
+               'embed':False,
+               'n_steps':100, 
+               'avgref': False}
+        for chan in ('C3','Fz'):
+            
+            if 'nmes' in list(epochs.event_id.keys())[0]:
+                mode = 'nmes'
+            else:
+                mode = 'pn'
+            evoked = mne.combine_evoked([epochs[f'{mode}_stim_{chan.lower()}'].average(),
+                                         epochs[f'{mode}_sham_{chan.lower()}'].average()],
+                                         weights=[1, -1])
+            #evoked = epochs[f'{mode}_stim_{chan.lower()}'].average()
+            evokeds.append([mode, evoked])
+            tmin, tmax = evoked.time_as_index(response_window)
+            amp = amp_by_time(evoked.get_data()*1e3, 
+                              fs=evoked.info['sfreq'])
+                   
+            lziv_ = apply(lziv, axis=1, arr=amp[:, tmin:tmax])
+
+            
+            pci = calc_PCIst(evoked.get_data()*1e3, evoked.times,
+                             full_return=False, **par)
+       
+            
+            # plt.figure()
+            # plt.plot(pci_nmes['NST_diff'].mean(1), 'k', label='NST diff - nmes')
+            # # plt.plot(pci_nmes['NST_base'].mean(1), 'y', label='NST baseline - nmes')
+            # # plt.plot(pci_nmes['NST_resp'].mean(1), 'r', label='NST response - nmes')
+            
+            # plt.plot(pci_pn['NST_diff'].mean(1), 'g', label='NST diff - pn')
+            # # plt.plot(pci_pn['NST_base'].mean(1), 'b', label='NST baseline - pn')
+            # # plt.plot(pci_pn['NST_resp'].mean(1), 'b', label='NST response - pn')
+        
+            # plt.suptitle(f'PCI pn: ({pci_pn["PCI"].round(2)}), PCI nmes : ({pci_nmes["PCI"].round(2)}) --> Target: {chan}, {stim.upper()}')
+            # plt.legend()
+            
+            # Iterate over each channel in evoked data to flatten the data
+            for i, ch_name in enumerate(evoked.ch_names):
+                result = {
+                    'Subject': subject,
+                    'Mode': mode,
+                    'Night': night,
+                    'Target_Chan': chan,
+                    'Chan': ch_name,
+                    'LempelZiv': lziv_[i],  # Assuming lziv_ correctly aligns with channels
+                    'PCI': pci  
+                }
+                
+                results_dict.append(result)
+            
+   
+    df = pd.DataFrame(results_dict)
+    df = drop_bads_df(df)
+    df_mean = df.groupby(['Subject','Mode','Target_Chan']).mean().reset_index()
+    
+    print(df_mean.rm_anova(dv='LempelZiv', within=['Mode','Target_Chan'], subject='Subject'))
+    print(df_mean.rm_anova(dv='PCI', within=['Mode','Target_Chan'], subject='Subject'))
+    sns.lmplot(data=df_mean, x='PCI', y='LempelZiv')
+    plt.show()
+    
+    # yasa.topoplot(df.groupby(['Mode','Chan']).mean().loc['nmes'].LempelZiv)
+    # yasa.topoplot(df.groupby(['Mode','Chan']).mean().loc['pn'].LempelZiv)
+    
+    pn_gav = mne.grand_average([evokeds[i][1] for i in range(len(evokeds)) if 'pn' in evokeds[i][0]])
+    nmes_gav = mne.grand_average([evokeds[i][1] for i in range(len(evokeds)) if 'nmes' in evokeds[i][0]])

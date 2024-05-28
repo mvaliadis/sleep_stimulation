@@ -41,6 +41,7 @@ def postprocess_and_combine_raw_files(file_group, save_path,
     
     # Combine the processed raws
     subject, night = file_group[0].split('/')[-1].split('_')[:2]
+    save_path_lm = save_path + f'{subject}_{night}_lm-raw.fif'
     save_path = save_path + f'{subject}_{night}_csd-raw.fif'
     hypno_path = hypno_path + f'{subject}_{night}' 
     if save:   
@@ -75,12 +76,19 @@ def postprocess_and_combine_raw_files(file_group, save_path,
         #                        duration=new_annotations['duration'],
         #                        description=new_annotations['description'])
         
+        # filter continuous data
+        raw.filter(0.5, None) #30
+        
+        # save lm data 
+        print(f"Saving processed raw to: {save_path_lm}")
+        raw.save(save_path_lm, overwrite=True)
+        
         # apply CSD to data 
-        raw = mne.preprocessing.compute_current_source_density(raw)
+        raw_csd = mne.preprocessing.compute_current_source_density(raw)
         
         # 2. Load and plot hypnogram (with spectrogram of ROI average)
-        fig = yasa.plot_spectrogram(data=raw.get_data(picks=roi).mean(0)*1e3, 
-                                    sf=raw.info['sfreq'], hypno=hypno_with_art, 
+        fig = yasa.plot_spectrogram(data=raw_csd.get_data(picks=roi).mean(0)*1e3, 
+                                    sf=raw_csd.info['sfreq'], hypno=hypno_with_art, 
                                     **dict(lw=1))  
         # Add title based on filename
         plt.suptitle(f'Subject: {subject}, Night: {night} hypnogram', fontsize=16)
@@ -91,9 +99,9 @@ def postprocess_and_combine_raw_files(file_group, save_path,
         
         # save data 
         print(f"Saving processed raw to: {save_path}")
-        raw.save(save_path, overwrite=True)
+        raw_csd.save(save_path, overwrite=True)
         
-        return raw
+        return raw_csd
    
 def graveyard_code(raw):
     import pickle
