@@ -231,7 +231,10 @@ def psd_stats_rm_anova(rs_df, target='Aperiodic', test='Cluster'):
             df_session = rs_df[(rs_df['Mode'] == mode) & (rs_df['Session'] == session)]
             grouped_session = df_session.groupby(['Subject', 'Chan']).mean(numeric_only=True)[target].unstack()[list(rs_df.Chan.unique())]
             if target != 'Aperiodic':
-                grouped_session = np.log(grouped_session)
+                if target.endswith('_Osc'):
+                    pass
+                else:
+                    grouped_session = np.log(grouped_session)
             contrasts[mode][session] = grouped_session
             if mode_common is None:
                 mode_common = set(grouped_session.index)
@@ -284,7 +287,8 @@ def psd_stats_rm_anova(rs_df, target='Aperiodic', test='Cluster'):
         
         for effect in effects:
             pthresh = 0.05
-            f_thresh = mne.stats.f_threshold_mway_rm(reshaped_data.shape[0], [2, 2], effect, pthresh)
+            f_thresh = mne.stats.f_threshold_mway_rm(reshaped_data.shape[0], [2, 2], 
+                                                     effect, pthresh)
             
             # Perform the permutation cluster test
             F_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_test(
@@ -411,7 +415,7 @@ rs_df = pd.read_csv(os.path.join(stats_path, 'df_rs.csv'), index_col=0)
 rs_df = drop_bads_df(rs_df)
 
 # Interaction stats:
-psd_stats_rm_anova(rs_df, target='Beta', test='Cluster')
+psd_stats_rm_anova(rs_df, target='Aperiodic', test='Cluster')
 
 # # Plot
 # plot_psd_diff(rs_df[rs_df.Condition=='eyes_open'])
@@ -419,7 +423,7 @@ psd_stats_rm_anova(rs_df, target='Beta', test='Cluster')
 # plot_psd_diff(rs_df)
              
 # 2. Select only frontocentral channels
-frontocentral = ['Fz', 'FC1', 'FC2', 'Cz', 'C1', 'C2']
+frontocentral = ['Fz', 'FC1', 'FCz', 'FC2', 'Cz'] #, 'C1', 'C2']
 fc_df = rs_df[rs_df.Chan.isin(frontocentral)]
 # mean over fc channels
 fc_df = fc_df.groupby(['Condition','Mode','Subject','Session']).mean()
@@ -492,7 +496,8 @@ hrv_rs_df['HRV_RMSSD'] = np.log(hrv_rs_df['HRV_RMSSD'])
 hrv_rs_df['HRV_SDNN'] = np.log(hrv_rs_df['HRV_SDNN'])
 hrv_rs_df['HRV_LF'] = np.log(hrv_rs_df['HRV_LF'])
 hrv_rs_df['HRV_HF'] = np.log(hrv_rs_df['HRV_HF'])
-hrv_rs_df['HRV_HFn'] = np.log(hrv_rs_df['HRV_HFn'])
+# hrv_rs_df['HRV_HFn'] = np.log(hrv_rs_df['HRV_HFn'])
+# hrv_rs_df['HRV_LFn'] = np.log(hrv_rs_df['HRV_LFn'])
 hrv_rs_df['HRV_LFHF'] = np.log(hrv_rs_df['HRV_LFHF'])
 hrv_rs_df['HRV_MeanNN'] = np.log(hrv_rs_df['HRV_MeanNN'])
 
@@ -527,4 +532,12 @@ axs[1].tick_params(axis='x', labelsize=15)
 plt.tight_layout() 
 plt.show()
 
+hrv_rs_df.rm_anova(dv='HR', subject='Subject', within=['Mode','Session'])
+hrv_rs_df.rm_anova(dv='HRV_LF', subject='Subject', within=['Mode','Session'])
+hrv_rs_df.rm_anova(dv='HRV_LFn', subject='Subject', within=['Mode','Session'])
+hrv_rs_df.rm_anova(dv='HRV_HF', subject='Subject', within=['Mode','Session'])
+hrv_rs_df.rm_anova(dv='HRV_LnHF', subject='Subject', within=['Mode','Session'])
 hrv_rs_df.rm_anova(dv='HRV_LFHF', subject='Subject', within=['Mode','Session'])
+hrv_rs_df.rm_anova(dv='HRV_RMSSD', subject='Subject', within=['Mode','Session'])
+hrv_rs_df.rm_anova(dv='HRV_SDNN', subject='Subject', within=['Mode','Session'])
+hrv_rs_df.rm_anova(dv='HRV_MeanNN', subject='Subject', within=['Mode','Session'])

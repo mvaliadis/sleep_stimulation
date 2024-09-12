@@ -46,7 +46,7 @@ def pvt_plot(df_pvt, dv='Lapse_Probability'):
                    )
     
     # Set titles and labels
-    if dv=='Lapse_Probability':
+    if dv=='Lapse_Probability' or dv=='Lapses_Transformed':
         axs.set_title('Lapses', fontsize=18)
         axs.set_ylabel(f'{" ".join(dv.split("_"))}', fontsize=15)
     elif dv=='RT':
@@ -109,6 +109,7 @@ df_pvt_mean = nan_imputation_missing_data(df_pvt_mean.reset_index()).reset_index
 # Plot
 pvt_plot(df_pvt_mean, dv='RT')
 pvt_plot(df_pvt_mean, dv='Lapse_Probability')
+pvt_plot(df_pvt_mean, dv='Lapses_Transformed')
 
 # Stats
 res_RT = pg.wilcoxon(x=df_pvt_mean.groupby(['Mode','Subject']).mean().loc['nmes'].RT,
@@ -118,3 +119,7 @@ print(f'RT : \n {res_RT}')
 res_Lapses = pg.wilcoxon(x=df_pvt_mean.groupby(['Mode','Subject']).mean().loc['nmes'].Lapse_Probability,
                          y=df_pvt_mean.groupby(['Mode','Subject']).mean().loc['pn'].Lapse_Probability)
 print(f'Lapses : \n {res_Lapses}')
+
+res_Lapses = pg.wilcoxon(x=df_pvt_mean.groupby(['Mode','Subject']).mean().loc['nmes'].Lapses_Transformed,
+                         y=df_pvt_mean.groupby(['Mode','Subject']).mean().loc['pn'].Lapses_Transformed)
+print(f'Lapses (Transformed) : \n {res_Lapses}')

@@ -19,6 +19,7 @@ import scipy
 import yasa
 import statsmodels.api as sm
 import neurokit2 as nk 
+mne.set_log_level('ERROR')
 
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
 
@@ -175,12 +176,12 @@ def plot_erp_consistency(df_tct):
         plt.tight_layout()
         plt.show()
 
-def group_sleep_epoch_stats(gavs, obj, title=None):
+def group_sleep_epoch_stats(gavs, obj, times=(-0.01, 0.01), title=None):
     # prepare adjacency matrix (only takes eeg)
     adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif')
     adjacency, ch_names = mne.channels.find_ch_adjacency(adj_epochs.info, 'eeg')
     # extract evoked data 
-    eps = [list(obj[1].Epochs)[i].get_data(tmin=-0.01, tmax=0.01).mean(1)*1e3 for i in range(len(obj[1]))]
+    eps = [list(obj[1].Epochs)[i].get_data(tmin=times[0], tmax=times[1]).mean(1)*1e3 for i in range(len(obj[1]))]
     contrast = np.concatenate([eps])
         
     # spatial permuation cluster test
@@ -416,6 +417,396 @@ def roi_ttest(df_evoked):
         plt.show()
 
 ## 3. TFR funcs
+def topoplot(
+    data,
+    montage="standard_1020",
+    vmin=None,
+    vmax=None,
+    mask=None,
+    title=None,
+    cmap=None,
+    n_colors=100,
+    cbar_title=None,
+    cbar_ticks=None,
+    show_cbar=True,
+    figsize=(6, 6),
+    dpi=80,
+    fontsize=14,
+    axes=None,
+    **kwargs,
+):
+    """
+    Topoplot.
+
+    This is a wrapper around :py:func:`mne.viz.plot_topomap`.
+
+    For more details, please refer to this `example notebook
+    <https://github.com/raphaelvallat/yasa/blob/master/notebooks/15_topoplot.ipynb>`_.
+
+    .. versionadded:: 0.4.1
+
+    Parameters
+    ----------
+    data : :py:class:`pandas.Series`
+        A pandas Series with the values to plot. The index MUST be the channel
+        names (e.g. ['C4', 'F4'] or ['C4-M1', 'C3-M2']).
+    montage : str
+        The name of the montage to use. Valid montages can be found at
+        :py:func:`mne.channels.make_standard_montage`.
+    vmin, vmax : float
+        The minimum and maximum values of the colormap. If None, these will be
+        defined based on the min / max values of ``data``.
+    mask : :py:class:`pandas.Series`
+        A pandas Series indicating the significant electrodes. The index MUST
+        be the channel names (e.g. ['C4', 'F4'] or ['C4-M1', 'C3-M2']).
+    title : str
+        The plot title.
+    cmap : str
+        A matplotlib color palette. A list of color palette can be found at:
+        https://seaborn.pydata.org/tutorial/color_palettes.html
+    n_colors : int
+        The number of colors to discretize the color palette.
+    cbar_title : str
+        The title of the colorbar.
+    cbar_ticks : list
+        The ticks of the colorbar.
+    figsize : tuple
+       Width, height in inches.
+    dpi : int
+        The resolution of the plot.
+    fontsize : int
+        Global font size of all the elements of the plot.
+    **kwargs : dict
+        Other arguments that are passed to :py:func:`mne.viz.plot_topomap`.
+
+    Returns
+    -------
+    fig : :py:class:`matplotlib.figure.Figure`
+        Matplotlib Figure
+
+    Examples
+    --------
+
+    1. Plot all-positive values
+
+    .. plot::
+
+        >>> import yasa
+        >>> import pandas as pd
+        >>> data = pd.Series([4, 8, 7, 1, 2, 3, 5],
+        ...                  index=['F4', 'F3', 'C4', 'C3', 'P3', 'P4', 'Oz'],
+        ...                  name='Values')
+        >>> fig = yasa.topoplot(data, title='My first topoplot')
+
+    2. Plot correlation coefficients (values ranging from -1 to 1)
+
+    .. plot::
+
+        >>> import yasa
+        >>> import pandas as pd
+        >>> data = pd.Series([-0.5, -0.7, -0.3, 0.1, 0.15, 0.3, 0.55],
+        ...                  index=['F3', 'Fz', 'F4', 'C3', 'Cz', 'C4', 'Pz'])
+        >>> fig = yasa.topoplot(data, vmin=-1, vmax=1, n_colors=8,
+        ...                     cbar_title="Pearson correlation")
+    """
+    from matplotlib.colors import ListedColormap
+    
+    # Increase font size while preserving original
+    old_fontsize = plt.rcParams["font.size"]
+    plt.rcParams.update({"font.size": fontsize})
+    plt.rcParams.update({"savefig.bbox": "tight"})
+    plt.rcParams.update({"savefig.transparent": "True"})
+
+    # Make sure we don't do any in-place modification
+    assert isinstance(data, pd.Series), "Data must be a Pandas Series"
+    data = data.copy()
+
+    # Add mask, if present
+    if mask is not None:
+        assert isinstance(mask, pd.Series), "mask must be a Pandas Series"
+        assert mask.dtype.kind in "bi", "mask must be True/False or 0/1."
+    else:
+        mask = pd.Series(1, index=data.index, name="mask")
+
+    # Convert to a dataframe (col1 = values, col2 = mask)
+    data = data.to_frame().join(mask, how="left")
+
+    # Preprocess channel names: C4-M1 --> C4
+    data.index = data.index.str.split("-").str.get(0)
+
+    # Define electrodes coordinates
+    Info = mne.create_info(data.index.tolist(), sfreq=100, ch_types="eeg")
+    Info.set_montage(montage, match_case=False, on_missing="ignore")
+    chan = Info.ch_names
+
+    # Define vmin and vmax
+    if vmin is None:
+        vmin = data.iloc[:, 0].min()
+    if vmax is None:
+        vmax = data.iloc[:, 0].max()
+
+    # Choose and discretize colormap
+    if cmap is None:
+        if vmin < 0 and vmax <= 0:
+            cmap = "mako"
+        elif vmin < 0 and vmax > 0:
+            cmap = "Spectral_r"
+        elif vmin >= 0 and vmax > 0:
+            cmap = "rocket_r"
+
+    cmap = ListedColormap(sns.color_palette(cmap, n_colors).as_hex())
+
+    if "sensors" not in kwargs:
+        kwargs["sensors"] = True
+    if "res" not in kwargs:
+        kwargs["res"] = 256
+    if "names" not in kwargs:
+        kwargs["names"] = chan   
+    if "mask_params" not in kwargs:
+        kwargs["mask_params"] = dict(marker=None)
+
+    # Hidden feature: if names='values', show the actual values.
+    if kwargs["names"] == "values":
+        kwargs["names"] = data.iloc[:, 0][chan].round(2).to_numpy()
+
+    # Start the plot
+    with sns.axes_style("white"):
+        if axes is None:
+            fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        else:
+            fig = plt.gcf()
+            ax = axes
+        # Plot topomap
+        im, _ = mne.viz.plot_topomap(
+            data=data.iloc[:, 0][chan],
+            pos=Info,
+            vlim=(vmin, vmax), 
+            mask=data.iloc[:, 1][chan],
+            cmap=cmap,
+            show=False,
+            axes=ax,
+            **kwargs,
+            
+        )
+
+        if title is not None:
+            ax.set_title(title)
+
+        # Add colorbar
+        if cbar_title is None:
+            cbar_title = data.iloc[:, 0].name
+
+        if show_cbar == True:
+            cbar = fig.colorbar(ax.images[-1], ax=ax, orientation="vertical",
+                            ticks=None, fraction=0.05)
+            cbar.set_label(cbar_title)
+
+            #cax = fig.add_axes([0.95, 0.3, 0.02, 0.5])
+            #cbar = fig.colorbar(im, cax=cax, ticks=cbar_ticks, fraction=0.5)
+            #cbar.set_label(cbar_title)
+
+        # Revert font-size
+        plt.rcParams.update({"font.size": old_fontsize})
+        
+    return fig
+
+def plot_max_sig(t_obs, spindle_frange, tmin, tmax, ch_names, aggregated_cluster_map, spindle=True):
+    # Create mask for significant clusters
+    cluster_df = pd.DataFrame({'Chan' : ch_names,
+                               'T-Values': t_obs[spindle_frange, tmin:tmax, :].mean(axis=(0, 1)),
+                               'pval': aggregated_cluster_map.mean(axis=(0, 1)) > 0})
+    cluster_df = cluster_df.set_index('Chan')
+    
+    # Identify significant clusters
+    cluster_df['sig'] = (cluster_df['pval'] == True)
+    
+    # Identify maximum effect size within significant clusters
+    cluster_df['max_effect_size'] = cluster_df.apply(
+        #lambda row: row['T-Values'] == cluster_df['T-Values'][cluster_df['sig']].max() if row['sig'] else False, axis=1
+        lambda row: row['T-Values'] == cluster_df['T-Values'].max(), axis=1
+    )
+    
+    if spindle==True:
+        title = 'Spindles at 1s ± .25s'
+    else:
+        title = 'Theta at 0.5s ± .25s'
+        
+    # Create a topoplot using yasa
+    fig, ax = plt.subplots()
+    topoplot(cluster_df['T-Values'], 
+             names=None, 
+             #mask=cluster_df['sig'], 
+             #mask_params=dict(markersize=5, markerfacecolor='y'),
+             axes=ax,
+             title=title)
+    
+    # Add cross to indicate maximal effect size at correct sensor location
+    topoplot(cluster_df['T-Values'], 
+            names=None,
+            mask=cluster_df['max_effect_size'], 
+            show_cbar=False,
+            mask_params=dict(markersize=10, marker='o', 
+                             markerfacecolor='w'),
+            axes=ax,
+            title=title)
+    plt.tight_layout()
+    
+def tfr_stats_new(df_tfr, plot=True):
+    df_tfr_ = df_tfr.copy()
+    
+    df_tfr_contrast, df_tfr_contrast_double, df_best_contrasts = create_tfr_contrasts(df_tfr_)
+    
+    df_tfr_contrast = df_tfr_contrast.groupby(['Subject']).filter(lambda x: len(x) == 4)
+    
+    #plot_tfr_gav(df_tfr_contrast, trange=(-0.5, 2))
+    
+    # prepare adjacency matrix (only takes eeg)
+    adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif')
+    adjacency, ch_names = mne.channels.find_ch_adjacency(adj_epochs.info, 'eeg')
+    
+    for (mode, target), df_ in df_tfr_contrast.groupby(['Mode','Target']):
+        print(mode, target)
+        data = list(df_['TFR Contrast'])
+        
+        # Double contrast
+        # data = list(df_tfr_contrast_double[df_tfr_contrast_double.Target=='c3']['Double Contrast'])
+        # data = list(df_tfr_contrast_double[df_tfr_contrast_double.Target=='fz']['Double Contrast'])
+        
+        # Best contrast
+        # data = list(df_best_contrasts['Best Contrasts'])
+        
+        X = np.swapaxes(np.concatenate([np.expand_dims(x.crop(-0.5, 2).data, -1) 
+                                        for x in data], axis=-1), -1, 0)
+
+        # Create variables
+        times = data[0].times
+        freqs = data[0].freqs
+        
+        # Theta variables
+        tmin_theta, tmax_theta = data[0].time_as_index([.25, .75])
+        theta_frange = np.where(np.logical_and(freqs >= 4, freqs <= 8))[0]
+        # theta_power = X[:, theta_frange, tmin_theta:tmax_theta, :].mean(axis=(0, 1, 2))
+        # # Plot topomap
+        # yasa.topoplot(pd.Series(theta_power, index=data[0].ch_names))
+        
+        # Spindle variables
+        tmin, tmax = data[0].time_as_index([.75, 1.25])
+        spindle_frange = np.where(np.logical_and(freqs >= 12, freqs <= 17))[0]
+        # spindle_power = X[:, spindle_frange, tmin:tmax, :].mean(axis=(0, 1, 2))
+        # # Plot topomap
+        # yasa.topoplot(pd.Series(spindle_power, index=data[0].ch_names))
+        
+        # our data at each observation is of shape frequencies × times × channels
+        tfr_adjacency = mne.stats.combine_adjacency(X.shape[1], X.shape[2], adjacency)
+    
+        # Arbitrary threshold
+        tfr_threshold = 5.0
+    
+        # run cluster based permutation analysis
+        t_obs, clusters, cluster_p_values, H0 = mne.stats.spatio_temporal_cluster_1samp_test(
+            X,
+            n_permutations=1024,
+            threshold=tfr_threshold,
+            tail=0,
+            n_jobs=-1,
+            buffer_size=None,
+            adjacency=tfr_adjacency,
+            out_type='mask',      
+            seed=42,
+        )
+        
+        # Boolean mask for significant p-values
+        significant_clusters_mask = cluster_p_values < 0.05
+        
+        # Get the indices of clusters with significant p-values
+        significant_cluster_indices = np.where(significant_clusters_mask)[0]
+        
+        # Use these indices to select the corresponding clusters
+        significant_clusters = np.take(clusters, significant_cluster_indices, axis=0)
+        
+        # Combine all the significant clusters into a single binary mask using logical OR
+        aggregated_cluster_map = np.any(significant_clusters, axis=0)
+        
+        # Plot
+        if plot: 
+            if mode == 'pn':
+                name = 'CLAS'
+            elif mode == 'nmes':
+                name = 'CLNMES'
+                
+            fig, ax = plt.subplots(1, figsize=(10, 8))
+            fig.suptitle(f'{name} ERSP ({target.capitalize()} Target Contrast)', fontsize=18)
+            vmax = np.percentile(t_obs, 97.5)
+            vmin = np.percentile(t_obs, 2.5)
+            
+            # Define the channels for different ROIs
+            if target == 'fz':
+                cs = ['F1', 'Fz', 'F2']
+            elif target == 'c3':
+                cs = ['C5', 'C3', 'CP1', 'C1']
+                
+            roi = [ch_names.index(item) for item in cs]
+            
+            # Plot the non-significant background data (average across ROI channels)
+            CM = ax.pcolormesh(
+                times,
+                freqs,
+                t_obs[:, :, roi].mean(-1),  # Averaging the t-values across the selected channels
+                shading='gouraud',
+                cmap='RdBu_r',
+                rasterized=True,
+                antialiased=True,
+                alpha=0.9,
+                vmin=vmin,
+                vmax=vmax
+            )
+            
+            # Overlay significant clusters using logical OR across ROI channels
+            roi_cluster_map = np.any(aggregated_cluster_map[:, :, roi], axis=-1)
+            
+            ax.pcolormesh(
+                times,
+                freqs,
+                roi_cluster_map,
+                shading='gouraud',
+                cmap='Greys',
+                rasterized=True,
+                antialiased=True,
+                alpha=0.25,  # Increase transparency to highlight the underlying data
+                vmin=0,
+                vmax=1
+            )
+            
+            # Add contour lines to highlight cluster boundaries
+            ax.contour(
+                times,
+                freqs,
+                roi_cluster_map,
+                levels=[0.5],  # Adjust based on cluster significance threshold
+                colors='black',
+                linewidths=1.5
+            )
+            
+            # Customize the plot labels
+            ax.set_ylabel('Frequency (Hz)', fontsize=16)
+            ax.set_xlabel('Time (s)', fontsize=16)
+            
+            # Single unified colorbar
+            cbar = plt.colorbar(CM, ax=ax)
+            cbar.set_label('T-Values', rotation=270, fontsize=16, labelpad=20)
+            
+            # Set tighter limits for the x and y axes if needed
+            ax.set_xlim([times[0], times[-1]])
+            ax.set_ylim([freqs[0], freqs[-1]])
+            
+            # Enhance the layout and display the plot
+            plt.tight_layout()
+            plt.show()
+            
+            # Plot Spindle and Theta power topomaps in t-units          
+            plot_max_sig(t_obs, spindle_frange, tmin, tmax, ch_names, aggregated_cluster_map, spindle=True)
+            plot_max_sig(t_obs, theta_frange, tmin_theta, tmax_theta, ch_names, aggregated_cluster_map, spindle=False)
+
 def max_stat_tfr_plot(T_obs_plot, adj_epochs):
     # Create a mask for the significant sensors
     significant_sensors_mask = np.any(np.any(~np.isnan(T_obs_plot), axis=2), axis=1)
@@ -505,30 +896,48 @@ def create_tfr_contrasts(df_tfr):
     
     df2 = pd.DataFrame(gavs_dict_con)
     
-    gavs_dict_con2 = []    
-    for subj, tfr_ in df2.groupby('Subject'):
-        if len(tfr_) == 4:
-            print(subj)
-            nmes = tfr_double.set_index(['Mode']).loc['nmes']['TFR Contrast']
-            pn = tfr_double.set_index(['Mode']).loc['pn']['TFR Contrast']
-            dc = nmes.__sub__(pn)
+    # Third, create a contrast between nmes C3 and pn Fz
+    gavs_dict_final = []
+    for subj, tfr_triplet in df.groupby('Subject'):
+        if len(tfr_triplet)==4:
+            nmes_c3 = tfr_triplet[np.logical_and(tfr_triplet.Target == 'c3',
+                                  tfr_triplet.Mode == 'nmes')]['TFR Contrast'].values[0]
+            pn_fz = tfr_triplet[np.logical_and(tfr_triplet.Target == 'fz',
+                                  tfr_triplet.Mode == 'pn')]['TFR Contrast'].values[0]
+            combined_contrast = nmes_c3.__sub__(pn_fz)
             
             dict_gav3 = {
-                'Subject' : subj,
-                'Target': target,
-                'Double Contrast' : dc
-                }
-                
-            # Append the dictionary to the list
-            gavs_dict_con2.append(dict_gav3) 
-        else:
-            pass
+                'Subject': subj,
+                'Best Contrasts': combined_contrast
+            }
+            gavs_dict_final.append(dict_gav3)
     
-    df3 = pd.DataFrame(gavs_dict_con2)
+    df3 = pd.DataFrame(gavs_dict_final)
+    
+    # gavs_dict_con2 = []    
+    # for subj, tfr_ in df2.groupby('Subject'):
+    #     if len(tfr_) == 4:
+    #         print(subj)
+    #         nmes = tfr_double.set_index(['Mode']).loc['nmes']['TFR Contrast']
+    #         pn = tfr_double.set_index(['Mode']).loc['pn']['TFR Contrast']
+    #         dc = nmes.__sub__(pn)
+            
+    #         dict_gav3 = {
+    #             'Subject' : subj,
+    #             'Target': target,
+    #             'Double Contrast' : dc
+    #             }
+                
+    #         # Append the dictionary to the list
+    #         gavs_dict_con2.append(dict_gav3) 
+    #     else:
+    #         pass
+    
+    # df4 = pd.DataFrame(gavs_dict_con2)
         
     return df, df2, df3   
   
-def plot_tfr_gav(df):
+def plot_tfr_gav(df, trange=(-0.5, 2)):
     for (mode, target), tfr_gav in df.groupby(['Mode','Target']):
         
         gavs = list(tfr_gav['TFR Contrast'])
@@ -538,12 +947,12 @@ def plot_tfr_gav(df):
         else:
             coi = 'Fz'
             
-        Sxx_ = np.concatenate([gavs[idx].copy().crop(tmin=-0.5, tmax=2).pick(coi).data 
-                              #[gavs[idx].copy().crop(tmin=-0.5, tmax=2).data.mean(0, keepdims=True)#.pick('Fz').data 
+        Sxx_ = np.concatenate([gavs[idx].copy().crop(tmin=trange[0], tmax=trange[1]).pick(coi).data 
+                              #[gavs[idx].copy().crop(tmin=trange[0], tmax=trange[1]).data.mean(0, keepdims=True)#.pick('Fz').data 
                                for idx in range(len(gavs))], 0)
-        con = np.concatenate([np.expand_dims(gavs[idx].copy().crop(tmin=-0.5, tmax=2).data, 0) 
+        con = np.concatenate([np.expand_dims(gavs[idx].copy().crop(tmin=trange[0], tmax=trange[1]).data, 0) 
                               for idx in range(len(gavs))], 0)
-        times = gavs[0].copy().crop(tmin=-0.5, tmax=2).times
+        times = gavs[0].copy().crop(tmin=trange[0], tmax=trange[1]).times
         freqs = gavs[0].freqs
         
         fig, ax = plt.subplots()
@@ -567,11 +976,11 @@ def plot_tfr_gav(df):
         #                                    timefreqs={(1, 13): (1, 4)})
         mne.grand_average(gavs).plot_joint(baseline=None, picks=coi, 
                                            cmap='Spectral_r', vlim=(vmin,vmax),
-                                           tmin=-0.5, tmax=2, mode='mean',
+                                           tmin=trange[0], tmax=trange[1],
+                                           mode='mean',
                                            timefreqs={(.75, 14): (1, 4)})
 
 def tfr_stats(contrast, coi, target):
-    # prepare adjacency matrix
     # prepare adjacency matrix (only takes eeg)
     adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif')
     adjacency, ch_names = mne.channels.find_ch_adjacency(adj_epochs.info, 'eeg')
@@ -711,37 +1120,61 @@ def ndPAC_stats(df, session='Post'):
         plt.show()
         
 ## 5. ERPAC funcs
-def plot_ergpac_diff(df_erpac):
-    df = df_erpac#.set_index(['Mode','Stim','Target_Chan'])
-    for (mode, stim, target), df_ in df.groupby(['Mode','Stim','Target_Chan']):
-        print(mode, stim, target)
-        df_.reset_index(drop=True, inplace=True)
-
-        erpac = np.concatenate([np.expand_dims(df_.iloc[i].ERPAC, 0) 
-                                for i in range(len(df_))], 0)
+def plot_ergpac_diff(df_erpac, times=(-2, 2), do_stats=False):
+    erpacs = []
+    df = df_erpac.copy().groupby(['Subject']).filter(lambda x: len(x) == 8)
+    for (mode, target), df_ in df.groupby(['Mode','Target_Chan']):
+        print(mode, target)
+        
+        df_stim = df_.set_index('Stim').loc['stim'].reset_index(drop=True)
+        df_sham = df_.set_index('Stim').loc['sham'].reset_index(drop=True)
+        
+        erpac_stim = np.concatenate([np.expand_dims(df_stim.iloc[i].ERPAC, 0) 
+                                     for i in range(len(df_stim))], 0)
+        erpac_sham = np.concatenate([np.expand_dims(df_sham.iloc[i].ERPAC, 0) 
+                                     for i in range(len(df_sham))], 0)
+        
+        erpac = erpac_stim - erpac_sham
+        erpacs.append([mode, target, erpac])
         
         df_evoked = pd.read_pickle(os.path.join(stats_path, 'df_evokeds.p'))
         df_evoked = drop_bads_df(df_evoked)
         df_evoked.set_index(['Mode','Subject'], inplace=True)
+        df_evoked = df_evoked.groupby(['Subject']).filter(lambda x: len(x) == 2)
         
-        data = list(df_evoked.loc[mode].Evoked_stim_c3)
         if target == 'fz':
             tar = 'Fz'
         else:
             tar = 'C3'
-        data_ = mne.grand_average(data).get_data(tar, tmin=-2, tmax=2).squeeze()*1e3
+            
+        data = list(df_evoked.loc[mode][f'Contrast_{target}'])
+        data_sw = np.concatenate([data[idx].copy().filter(None, 1.5).get_data(tar, tmin=times[0], tmax=times[1])*1e3 for idx in range(len(data))])
+        data_sp = np.concatenate([data[idx].copy().filter(11.75, 16.25).get_data(tar, tmin=times[0], tmax=times[1])*1e3 for idx in range(len(data))])
         
-        cond = mode, stim, target
-        plot_ergpac(erpac, data_, cond)
-
-def plot_ergpac(erpac, data, cond):
-    freqs = np.arange(5, 24.75,.25)
-    times = np.arange(-2, 2, 1/128)
+        tmin, tmax = data[0].time_as_index(times)
+        
+        cond = mode, target
+        plot_ergpac(erpac, data_sw.mean(0), data_sp.mean(0), cond, times)
+        
+        if do_stats:
+            print('')
+            erpac_stats(erpac, tmin, tmax, tar, mode, times)
+            # erpac_stats(erpacs[0][2] - erpacs[2][2], tmin, tmax, 'C3', 'DC', times)
+            # erpac_stats(erpacs[1][2] - erpacs[3][2], tmin, tmax, 'Fz', 'DC', times)
+    
+def plot_ergpac(erpac, data_sw, data_sp, cond, times=(-2, 2)):
+    freqs = np.arange(4, 24, 0.5)
+    times = np.arange(times[0], times[1], 1/128)
     
     # ERGPAC Plot
     fig, ax = plt.subplots(figsize=(6, 5), dpi=100)
-    im = plt.imshow(erpac.mean(0), aspect='auto', cmap="Spectral_r", origin='upper',
+    im = plt.imshow(erpac.mean(0),
+                    aspect='auto', 
+                    cmap="Spectral_r", 
+                    origin='upper',
                     interpolation="gaussian", 
+                    vmin=-0.01, 
+                    vmax=0.02, 
                     extent=[times[0], times[-1], freqs[-1], freqs[0]])
     
     plt.gca().invert_yaxis()
@@ -756,8 +1189,114 @@ def plot_ergpac(erpac, data, cond):
     cb.outline.set_visible(False)
     
     ax_sw = ax.twinx()
-    ax_sw.plot(times, data, color="k", lw=3)
+    ax_sw.plot(times, data_sw, color="k", lw=3)
+    ax_sw.plot(times, data_sp*5 + 2, color="k", lw=1.5)
     ax_sw.set_yticks([]);
+   
+def erpac_stats(erpac, tmin, tmax, target, mode, times=(-2, 2)):
+    X = erpac[:,:,tmin:tmax]
+
+    # Create variables
+    times = np.linspace(times[0], times[1], X.shape[-1])
+    freqs = np.arange(4.25, 24.75, 0.5)
+        
+    # our data at each observation is of shape frequencies × times
+    tfr_adjacency = mne.stats.combine_adjacency(X.shape[1], X.shape[2])
+
+    # Arbitrary threshold
+    tfr_threshold = 2.0
+
+    # run cluster based permutation analysis
+    t_obs, clusters, cluster_p_values, H0 = mne.stats.spatio_temporal_cluster_1samp_test(
+        X,
+        n_permutations=1024,
+        threshold=tfr_threshold,
+        tail=0,
+        n_jobs=-1,
+        buffer_size=None,
+        adjacency=tfr_adjacency,
+        out_type='mask',      
+        seed=42,
+    )
+    
+    # Boolean mask for significant p-values
+    significant_clusters_mask = cluster_p_values < 0.05
+    
+    # Get the indices of clusters with significant p-values
+    significant_cluster_indices = np.where(significant_clusters_mask)[0]
+    
+    # Use these indices to select the corresponding clusters
+    significant_clusters = np.take(clusters, significant_cluster_indices, axis=0)
+    
+    # Combine all the significant clusters into a single binary mask using logical OR
+    aggregated_cluster_map = np.any(significant_clusters, axis=0)
+    
+    # Plot
+    if mode == 'pn':
+        name = 'CLAS'
+    elif mode == 'nmes':
+        name = 'CLNMES'
+    else:
+        name = 'DC'
+        
+    fig, ax = plt.subplots(1, figsize=(10, 8))
+    fig.suptitle(f'{name} ERGPAC ({target.capitalize()} Target Contrast)', fontsize=18)
+    vmax = np.percentile(t_obs, 97.5)
+    vmin = np.percentile(t_obs, 2.5)
+    
+    # Plot the non-significant background data (average across ROI channels)
+    CM = ax.pcolormesh(
+        times,
+        freqs,
+        t_obs,  # Averaging the t-values across the selected channels
+        shading='gouraud',
+        cmap='RdBu_r',
+        rasterized=True,
+        antialiased=True,
+        alpha=0.9,
+        vmin=vmin,
+        vmax=vmax
+    )
+    
+    # Overlay significant clusters  
+    ax.pcolormesh(
+        times,
+        freqs,
+        aggregated_cluster_map,
+        shading='gouraud',
+        cmap='Greys',
+        rasterized=True,
+        antialiased=True,
+        alpha=0.25,  # Increase transparency to highlight the underlying data
+        vmin=0,
+        vmax=1
+    )
+    
+    # Add contour lines to highlight cluster boundaries
+    ax.contour(
+        times,
+        freqs,
+        aggregated_cluster_map,
+        levels=[0.5],  # Adjust based on cluster significance threshold
+        colors='black',
+        linewidths=1.5
+    )
+    
+    # Customize the plot labels
+    ax.set_ylabel('Frequency (Hz)', fontsize=16)
+    ax.set_xlabel('Time (s)', fontsize=16)
+    
+    # Single unified colorbar
+    cbar = plt.colorbar(CM, ax=ax)
+    cbar.set_label('T-Values', rotation=270, fontsize=16, labelpad=20)
+    
+    # Set tighter limits for the x and y axes if needed
+    ax.set_xlim([times[0], times[-1]])
+    ax.set_ylim([freqs[0], freqs[-1]])
+    
+    # Enhance the layout and display the plot
+    plt.tight_layout()
+    plt.show()
     
 #%%
 ## Stats Pipeline
@@ -776,13 +1315,44 @@ def plot_ergpac(erpac, data, cond):
 ## 0. Instantaneous HR changes
 df_inst_hr =  pd.read_csv(stats_path + 'df_inst_hr.csv', index_col=0)
 df_inst_hr = drop_bads_df(df_inst_hr)
-df_inst_hr.rm_anova(within=['Mode','Stim'], subject='Subject', dv='HR_ratio_change')
+df_inst_hr = df_inst_hr.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HR_Ratio_Change')
+df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HRV_RMSSD_Ratio_Change')
+df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HRV_SDNN_Ratio_Change')
 
-sns.boxplot(df_inst_hr, x='Mode', hue='Stim', y='HR_ratio_change')
+def plot_hr_changes(df, metric='HR_Ratio_Change'):
+    # df = df_inst_hr.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+    df['Target_Chan'] = df['Target_Chan'].str.replace('_', ' ').str.capitalize()
 
+    g = sns.catplot(
+        data=df,
+        kind="box",
+        x="Mode",
+        y=metric,
+        hue="Target_Chan",
+        palette="pastel",
+        legend=True,
+        showfliers=False,
+    )
+    
+    # include points for data 
+    g.map_dataframe(sns.stripplot, x="Mode", y=metric, 
+                    hue="Target_Chan",
+                    dodge=True, palette="pastel", 
+                    size=10, alpha=0.5, linewidth=1)
+    
+    g.set_axis_labels("", "Heart Rate Change (%)", fontsize=14)
+    g.set_titles("{col_name} Target ({row_name})", size=16)
+    g.fig.suptitle(f"{metric}", fontsize=16, weight='bold') 
+    plt.show()
+    
+    # stats
+    df.rm_anova(within=['Mode','Target_Chan'], 
+                subject='Subject', dv=metric)
+  
 #%%
-## 1. Phase targeting analysis -> Use time shifted data 
-df_phase = pd.read_csv(os.path.join(stats_path, 'df_phase_ts.csv'), index_col=0)
+## 1. Phase targeting analysis
+df_phase = pd.read_csv(os.path.join(stats_path, 'df_phase.csv'), index_col=0)
 df_phase = drop_bads_df(df_phase)
 
 # Plot
@@ -805,20 +1375,20 @@ df_tfr = drop_bads_df(df_tfr)
 
 #%%
 ## 4. ndPAC analysis
-df_ndpac = pd.read_csv(os.path.join(stats_path, 'df_ndpac_hilbert.csv'), index_col=0)
+df_ndpac = pd.read_csv(os.path.join(stats_path, 'df_ndpac.csv'), index_col=0)
 df_ndpac = drop_bads_df(df_ndpac)
 
 df_ndpac = df_ndpac[df_ndpac.Session=='Post'].reset_index(drop=True)
 
 # df_ndpac.set_index(['Mode','Stim','Target_Chan','Chan']).loc['nmes','stim','c3']
-d = (df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['nmes','stim','c3'].ndPAC  
-     #- df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['nmes','sham','c3'].ndPAC)
-     )
+d =  (df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['nmes','stim','c3'].ndPAC  
+    - df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['nmes','sham','c3'].ndPAC)
+     
 yasa.topoplot(d)
 
 d = (df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['pn','stim','c3'].ndPAC  
-     #- df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['pn','sham','c3'].ndPAC)
-     )
+     - df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['pn','sham','c3'].ndPAC)
+     
 yasa.topoplot(d)
 plt.show()
 
@@ -827,7 +1397,7 @@ plt.show()
 df_erpac = pd.read_pickle(os.path.join(stats_path, 'df_erpac.p'))
 df_erpac = drop_bads_df(df_erpac)
 
-plot_ergpac_diff(df_erpac)
+plot_ergpac_diff(df_erpac, times=(-0.5, 2))
         
 #%%
 # Extract grand averages for pinknoise stimulation
@@ -860,6 +1430,66 @@ p7 = gav_nmes_sham_fz.plot_joint(title='NMES sham Fz', times=times, ts_args=ts_a
 p8 = gav_nmes_stim_fz.plot_joint(title='NMES stim Fz', times=times, ts_args=ts_args, topomap_args=topomap_args)
 
 # 
+#%%
+
+# def plot_diff()
+c3_pn = list(df_evoked.loc['pn'].Contrast_c3)
+c3_pn_ma = np.concatenate([np.expand_dims(c3_pn[i].get_data(picks=['C5','C3','C1','CP3']).mean(0), 0)
+                           for i in range(len(c3_pn))])
+
+c3_nmes = list(df_evoked.loc['nmes'].Contrast_c3)
+c3_nmes_ma = np.concatenate([np.expand_dims(c3_nmes[i].get_data(picks=['C5','C3','C1','CP3']).mean(0), 0)
+                             for i in range(len(c3_nmes))])
+
+# spatial permuation cluster test
+t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+    c3_nmes_ma,  #c3_pn_ma,             # numpy array for contrast [n_subjects, n_voltage, n_channels]
+    n_permutations=1024,                # 1000 is the minimum
+    threshold=3, #dict(start=0, step=0.2),  # TFCE, starting at 0, in 0.2 steps (in t-values)
+    tail=0,                             # two-tailed test (1 or -1 for one-tailed)
+    n_jobs=-1,                          # increase value to speed up computations
+    buffer_size=None,
+    out_type='mask',                    # returns a mask map instead of indices of sig. points
+    seed=1503
+)
+
+# Plot the first subplot with time series data
+plt.plot(times, c3_pn_ma.mean(0) * 1e3, label='Motor Area Response - CLAS (C3)')
+# plt.plot(times, c3_pn_ma.T*1e3, linewidth=0.2)
+
+plt.plot(times, c3_nmes_ma.mean(0) * 1e3, label='Motor Area Response - CLNMES (C3)')
+# plt.plot(times, c3_nmes_ma.T*1e3, linewidth=0.2)
+
+# # Plot the second subplot with T-values
+# for cluster, p_value in zip(clusters, cluster_p_values):
+#     if p_value < 0.05:
+#         ax1.fill_between(times[cluster[0]], t_obs[cluster[0]], color='red', alpha=0.3)
+
+# Highlighting significant clusters (p < 0.05) using fill_between
+for cluster, p_value in zip(clusters, cluster_p_values):
+    if p_value < 0.05:
+        plt.fill_between(times[cluster[0]], c3_nmes_ma.mean(0)[cluster[0]] * 1e3,
+                         color='blue', alpha=0.3)
+       
+# spatial permuation cluster test
+t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+    c3_pn_ma,  #c3_pn_ma,             # numpy array for contrast [n_subjects, n_voltage, n_channels]
+    n_permutations=1024,                # 1000 is the minimum
+    threshold=3, #dict(start=0, step=0.2),  # TFCE, starting at 0, in 0.2 steps (in t-values)
+    tail=0,                             # two-tailed test (1 or -1 for one-tailed)
+    n_jobs=-1,                          # increase value to speed up computations
+    buffer_size=None,
+    out_type='mask',                    # returns a mask map instead of indices of sig. points
+    seed=1503
+)
+
+# Highlighting significant clusters (p < 0.05) using fill_between
+for cluster, p_value in zip(clusters, cluster_p_values):
+    if p_value < 0.05:
+        plt.fill_between(times[cluster[0]], c3_pn_ma.mean(0)[cluster[0]] * 1e3,
+                         color='red', alpha=0.3)
+
+plt.legend()
 
 #%%
 # Plot RMS responses by condition
@@ -895,8 +1525,9 @@ def process_evoked_data_gfp(evokeds):
         all_data = np.concatenate([np.expand_dims(evk.data, 1)*1e3 for evk in evoked_list], 1)
         
         # Calculate the norm over columns (i.e., across trials), then normalize by sqrt(N)
-        norm_data = np.linalg.norm(all_data, axis=0) / np.sqrt(len(evoked_list)) 
-              
+        #norm_data = np.linalg.norm(all_data, axis=0) / np.sqrt(len(evoked_list)) 
+        norm_data = np.sqrt((all_data**2).mean(axis=0))       
+        
         # Initialize the dictionary for the current condition
         results[condition] = {}
                    
@@ -921,7 +1552,7 @@ T_obs, clusters, cluster_p_values, H0 = mne.stats.permutation_cluster_test(
     n_permutations=1024,
     threshold=thresh,
     tail=1,
-    n_jobs=None,
+    n_jobs=-1,
     out_type="mask",
 )
 
@@ -985,14 +1616,405 @@ for (target_chan, mode), group in averaged_data.groupby(["Target_Chan", "Mode"])
 final_contrasts = pd.concat(contrasts, ignore_index=True)
 
 #%%
-## . Power Analysis
+## Power Analysis (Epoched)
 df_power = pd.read_csv(stats_path + 'df_power.csv', index_col=0) 
 df_power = drop_bads_df(df_power)
 
-# Multiply by 1e6 then convert scale to log, not necessary after next rerun
-df_power[['Delta', 'Theta', 'Alpha', 'Sigma','Beta']] = np.log(1e6*df_power[['Delta', 'Theta', 'Alpha', 'Sigma','Beta']])
-df_power
-yasa.topoplot(df_power.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['nmes','stim','c3'].Sigma)
+def group_sleep_power_stats(df_power):
+    # Load adjacency matrix
+    adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif')
+    adjacency, ch_names = mne.channels.find_ch_adjacency(adj_epochs.info, 'eeg')
+    
+    # Filter subjects with both 'pn' and 'nmes' conditions
+    df_power = df_power.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+
+    # Convert specified bands to logarithmic scale (excluding Aperiodic and Offset)
+    #bands_to_log = ['Delta', 'Theta', 'Alpha', 'Sigma', 'Beta', 'Gamma', 'TotalAbsPow']
+    bands_to_log = ['Delta']
+    df_power[bands_to_log] = np.log(df_power[bands_to_log])
+
+    # Features to be analyzed, including log-transformed bands and untransformed features like 'Aperiodic' and 'Offset'
+    features = bands_to_log + ['Aperiodic', 'Offset']
+
+    # Loop over modes, target channels, and features
+    for mode in df_power.Mode.unique():
+        for target in df_power.Target_Chan.unique():
+            for feature in features:
+                # Separate stim and sham conditions
+                df_stim = df_power[(df_power.Mode == mode) & (df_power.Stim == 'stim') & (df_power.Target_Chan == target)]
+                df_sham = df_power[(df_power.Mode == mode) & (df_power.Stim == 'sham') & (df_power.Target_Chan == target)]
+
+                # Ensure consistent channel ordering
+                unique_channels = df_stim['Chan'].unique()
+
+                # Extract contrast (stim - sham) for the current feature
+                contrast = (df_stim.pivot_table(index='Subject', columns='Chan').reindex(columns=unique_channels, level=1)[feature].values - 
+                            df_sham.pivot_table(index='Subject', columns='Chan').reindex(columns=unique_channels, level=1)[feature].values)
+
+                # Calculate t-threshold for the cluster test
+                pval = 0.05
+                dof = contrast.shape[0] - 1  # degrees of freedom for the test
+                thresh = scipy.stats.t.ppf(1 - pval / 2, dof)  # two-tailed, t distribution
+
+                # Spatial permutation cluster test
+                t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+                    contrast,                            # numpy array for contrast [n_subjects, n_channels]
+                    n_permutations=1024,                 # 1000 is the minimum
+                    threshold=thresh,                    # threshold for cluster formation
+                    tail=0,                              # two-tailed test (1 or -1 for one-tailed)
+                    n_jobs=-1,                           # increase value to speed up computations
+                    adjacency=adjacency,                 # sparse matrix for channel adjacency as computed above
+                    buffer_size=None,
+                    out_type='mask',                     # returns a mask map instead of indices of sig. points
+                    seed=1503
+                )
+
+                # Handle significant clusters and visualization
+                if all(p > 0.05 for p in cluster_p_values):
+                    print(f'No significant clusters found for {feature} in {mode} {target}')
+                    df_stats = pd.DataFrame({'Chan': ch_names, 
+                                             'Power': contrast.mean(0).squeeze(), 
+                                             'T-Stat': t_obs.squeeze(), 
+                                             'Sig': [False] * len(ch_names)})
+                    #mask = [False] * len(ch_names)
+                else:
+                    min_p_value = min(cluster_p_values)
+                    print(f"P-Value: {min_p_value} for {feature} in {mode} {target}")
+                    df_stats = pd.DataFrame({'Chan': ch_names, 
+                                             'Power': contrast.mean(0).squeeze(), 
+                                             'T-Stat': t_obs.squeeze(), 
+                                             'Sig': clusters[np.argmin(cluster_p_values)]})
+                    #mask = clusters[np.argmin(cluster_p_values)]
+
+                df_stats = df_stats.set_index("Chan")
+
+                # Visualization
+                if feature == 'Aperiodic':
+                    unit = 'Spectral Exponent' 
+                elif feature == 'Offset':
+                    unit = 'Spectral Offset'
+                else:
+                    unit = f'{feature}' #'log (mV/m2 / Hz)'
+                
+                # Plot
+                fig, ax = plt.subplots(1, 2, figsize=(8, 6))
+                
+                if any(np.sign(df_stats['T-Stat']) == -1.0):
+                    cmap = 'RdBu_r'
+                else:
+                    cmap = 'Reds'
+                    
+                topoplot(df_stats['Power'], 
+                         mask=None, 
+                         cmap=cmap,
+                         names=None,
+                         axes=ax[0],
+                         cbar_title=unit,
+                        )
+                
+                topoplot(df_stats['T-Stat'], 
+                         mask=df_stats['Sig'], 
+                         cmap=cmap,
+                         names=None,
+                         axes=ax[1],
+                         mask_params=dict(markersize=6, markerfacecolor='y'), 
+                         )
+                             
+                plt.tight_layout()
+                plt.suptitle(f'{mode.upper()} ({target.capitalize()} Target) -> {feature}', fontsize=18)
+                plt.show()
+
+def group_sleep_power_stats_double_contrast(df_power):
+    # Load adjacency matrix for EEG channels
+    adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif')
+    adjacency, ch_names = mne.channels.find_ch_adjacency(adj_epochs.info, 'eeg')
+    
+    # Filter subjects with both 'pn' and 'nmes' conditions
+    df_power = df_power.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+
+    # Convert specified bands to logarithmic scale (excluding Aperiodic and Offset)
+    bands_to_log = ['Delta', 'Theta', 'Alpha', 'Sigma', 'Beta', 'Gamma', 'TotalAbsPow']
+    df_power[bands_to_log] = np.log(df_power[bands_to_log])
+
+    # Features to be analyzed, including log-transformed bands and untransformed features like 'Aperiodic' and 'Offset'
+    features = bands_to_log + ['Aperiodic', 'Offset']
+
+    # Loop over target channels and features
+    for target in df_power.Target_Chan.unique():
+        for feature in features:
+            # Calculate contrasts for 'nmes' and 'pn' separately
+            df_nmes_stim = df_power[(df_power.Mode == 'nmes') & (df_power.Stim == 'stim') & (df_power.Target_Chan == target)]
+            df_nmes_sham = df_power[(df_power.Mode == 'nmes') & (df_power.Stim == 'sham') & (df_power.Target_Chan == target)]
+            df_pn_stim = df_power[(df_power.Mode == 'pn') & (df_power.Stim == 'stim') & (df_power.Target_Chan == target)]
+            df_pn_sham = df_power[(df_power.Mode == 'pn') & (df_power.Stim == 'sham') & (df_power.Target_Chan == target)]
+
+            # Ensure consistent channel ordering
+            unique_channels = df_nmes_stim['Chan'].unique()
+
+            # Calculate individual contrasts (stim - sham)
+            contrast_nmes = (df_nmes_stim.pivot_table(index='Subject', columns='Chan').reindex(columns=unique_channels, level=1)[feature].values - 
+                             df_nmes_sham.pivot_table(index='Subject', columns='Chan').reindex(columns=unique_channels, level=1)[feature].values)
+
+            contrast_pn = (df_pn_stim.pivot_table(index='Subject', columns='Chan').reindex(columns=unique_channels, level=1)[feature].values - 
+                           df_pn_sham.pivot_table(index='Subject', columns='Chan').reindex(columns=unique_channels, level=1)[feature].values)
+
+            # Calculate the double contrast: (nmes contrast) - (pn contrast)
+            double_contrast = scipy.stats.zscore(contrast_nmes, axis=1) - scipy.stats.zscore(contrast_pn, axis=1)
+
+            # Calculate t-threshold for the cluster test
+            pval = 0.05
+            dof = double_contrast.shape[0] - 1  # degrees of freedom for the test
+            thresh = scipy.stats.t.ppf(1 - pval / 2, dof)  # two-tailed, t distribution
+
+            # Spatial permutation cluster test on the double contrast
+            t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+                double_contrast,                     # numpy array for double contrast [n_subjects, n_channels]
+                n_permutations=1024,                 # 1000 is the minimum
+                threshold=thresh,                    # threshold for cluster formation
+                tail=0,                              # two-tailed test (1 or -1 for one-tailed)
+                n_jobs=-1,                           # increase value to speed up computations
+                adjacency=adjacency,                 # sparse matrix for channel adjacency as computed above
+                buffer_size=None,
+                out_type='mask',                     # returns a mask map instead of indices of sig. points
+                seed=1503
+            )
+
+            # Handle significant clusters and visualization
+            if all(p > 0.05 for p in cluster_p_values):
+                print(f'No significant clusters found for {feature} in double contrast {target}')
+                df_stats = pd.DataFrame({'Chan': ch_names, 
+                                         'Power': double_contrast.mean(0).squeeze(), 
+                                         'T-Stat': t_obs.squeeze(), 
+                                         'Sig': [False] * len(ch_names)})
+                #mask = [False] * len(ch_names)
+            else:
+                min_p_value = min(cluster_p_values)
+                print(f"P-Value: {min_p_value} for {feature} in double contrast {target}")
+                df_stats = pd.DataFrame({'Chan': ch_names, 
+                                         'Power': double_contrast.mean(0).squeeze(), 
+                                         'T-Stat': t_obs.squeeze(), 
+                                         'Sig': clusters[np.argmin(cluster_p_values)]})
+                #mask = clusters[np.argmin(cluster_p_values)]
+
+            df_stats = df_stats.set_index("Chan")
+
+            # Visualization
+            if feature == 'Aperiodic':
+                unit = 'Spectral Exponent' 
+            elif feature == 'Offset':
+                unit = 'Spectral Offset'
+            else:
+                unit = f'{feature}' #'log (mV/m2 / Hz)'
+            
+            # Plot
+            fig, ax = plt.subplots(1, 2, figsize=(8, 6))
+            
+            if any(np.sign(df_stats['T-Stat']) == -1.0):
+                cmap = 'RdBu_r'
+            else:
+                cmap = 'Reds'
+                
+            topoplot(df_stats['Power'], 
+                     mask=None, 
+                     cmap=cmap,
+                     names=None,
+                     axes=ax[0],
+                     cbar_title=unit,
+                    )
+            
+            topoplot(df_stats['T-Stat'], 
+                     mask=df_stats['Sig'], 
+                     cmap=cmap,
+                     names=None,
+                     axes=ax[1],
+                     mask_params=dict(markersize=6, markerfacecolor='y'), 
+                     )
+                         
+            # im1, _ = mne.viz.plot_topomap(double_contrast.mean(0).squeeze(), 
+            #                               pos=adj_epochs.info,
+            #                               axes=ax[0], 
+            #                               cmap='RdBu_r',
+            #                               show=False, 
+            #                               names=None)
+            # cbar1 = fig.colorbar(im1, fraction=0.05, ax=ax[0])   
+            # cbar1.ax.set_ylabel(unit, rotation=270)
+            # plt.tight_layout()
+
+            # if all(p > 0.05 for p in cluster_p_values): 
+            #     im2, _ = mne.viz.plot_topomap(t_obs.squeeze(), 
+            #                                   pos=adj_epochs.info,
+            #                                   axes=ax[1], 
+            #                                   cmap='RdBu_r',
+            #                                   names=None,
+            #                                   show=False)
+            # else:
+            #     im2, _ = mne.viz.plot_topomap(t_obs.squeeze(), 
+            #                                   pos=adj_epochs.info,
+            #                                   axes=ax[1], 
+            #                                   mask=mask,
+            #                                   cmap='RdBu_r',
+            #                                   names=None,
+            #                                   show=False,  
+            #                                   mask_params=dict(markersize=8, markerfacecolor='y'))
+            
+            # cbar2 = fig.colorbar(im2, fraction=0.05, ax=ax[1])   
+            # cbar2.ax.set_ylabel('t-stat', rotation=270)
+            
+            plt.tight_layout()
+            plt.suptitle(f'CLNMES - CLAS ({target.capitalize()} Target) -> {feature}', fontsize=18)
+            plt.show()
+
+#%%
+## Power Analysis (Continuous)
+df_power = pd.read_csv(stats_path + 'df_sleep_hrv.csv', index_col=0)
+df_power = drop_bads_df(df_power)
+df_power = df_power[df_power.columns[:-8]]
+
+def group_sleep_power_stats_cont(df_power, stage=2, feature='Theta'):
+
+    df_power = df_power.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+    df_power = df_power[df_power.Stage==stage]
+    
+    df_nmes = df_power[(df_power.Mode == 'nmes')]
+    df_pn = df_power[(df_power.Mode == 'pn')]
+    
+    unique_channels = df_nmes['Channel'].unique()
+    
+    #if feature == 'Aperiodic' or feature == 'Offset':
+    contrast = (
+        df_nmes.pivot_table(index='Subject', 
+                            columns='Channel', 
+                            values=feature, 
+                            aggfunc='mean').reindex(columns=unique_channels, level=1).values  
+        -                    
+        df_pn.pivot_table(index='Subject', 
+                          columns='Channel',
+                          values=feature, 
+                          aggfunc='mean').reindex(columns=unique_channels, level=1).values
+    )
+    # else: 
+    #     contrast = (
+    #         scipy.stats.zscore(df_nmes.pivot_table(index='Subject', 
+    #                             columns='Channel', 
+    #                             values=feature, 
+    #                             aggfunc='mean').reindex(columns=unique_channels, level=1).values, -1)  
+    #         -                    
+    #         scipy.stats.zscore(df_pn.pivot_table(index='Subject', 
+    #                             columns='Channel',
+    #                             values=feature, 
+    #                             aggfunc='mean').reindex(columns=unique_channels, level=1).values, -1)
+    #     )
+        
+    # contrast[1, 15] = 0
+    
+    # Adjacency matrix
+    adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif')
+    adjacency, ch_names = mne.channels.find_ch_adjacency(adj_epochs.info, 'eeg')
+    
+    # Permutation Test
+    pval = 0.05
+    dof = contrast.shape[0] - 1  # degrees of freedom for the test
+    if all(np.sign(contrast.mean(0)) == -1.0):
+        cmap = 'Blues'
+        # tail = -1
+        # thresh = scipy.stats.t.ppf(pval, dof)  # One-tailed test (left tail)
+    elif any(np.sign(contrast.mean(0)) == -1.0):
+        cmap = 'RdBu_r'
+        # tail = 0
+        # thresh = scipy.stats.t.ppf(1 - pval / 2, dof)  # two-tailed, t distribution
+    else:
+        cmap = 'Reds'
+        # tail = 1
+        # thresh = scipy.stats.t.ppf(1 - pval, dof)
+        
+    tail = 0
+    thresh = scipy.stats.t.ppf(1 - pval / 2, dof)  
+        
+    t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+        contrast,                            # numpy array for contrast [n_subjects, n_channels]
+        n_permutations=1024,                 # 1000 is the minimum
+        threshold=thresh,                    # threshold for cluster formation
+        tail=tail,                           # 0 for two-tailed test (1 or -1 for one-tailed)
+        n_jobs=-1,                           # increase value to speed up computations
+        adjacency=adjacency,                 # sparse matrix for channel adjacency as computed above
+        buffer_size=None,
+        out_type='mask',                     # returns a mask map instead of indices of sig. points
+        seed=1503
+    )
+    
+    # Get significant clusters
+    if all(p > 0.05 for p in cluster_p_values):
+        print(f'No significant clusters found for {feature} -> {tail} tail Permutation Test')
+        df_stats = pd.DataFrame({'Chan': ch_names, 
+                                 'Power': contrast.mean(0).squeeze(), 
+                                 'T-Stat': t_obs.squeeze(),
+                                 'Null' : [False] * len(ch_names),
+                                 'Sig': [False] * len(ch_names)})
+    else:
+        min_p_value = min(cluster_p_values)
+        print(f"P-Value: {min_p_value} for {feature} -> {tail} tail Permutation Test")
+        df_stats = pd.DataFrame({'Chan': ch_names, 
+                                 'Power': contrast.mean(0).squeeze(), 
+                                 'T-Stat': t_obs.squeeze(), 
+                                 'Null' : [False] * len(ch_names),
+                                 'Sig': clusters[np.argmin(cluster_p_values)]})
+    
+    # Set channel as index
+    df_stats = df_stats.set_index("Chan")
+    
+    # Plot feature and stats
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    
+    if feature == 'Aperiodic':
+        unit = '\u0394' + ' Spectral Exponent' 
+    else:
+        unit = '\u0394' + f' {feature}'
+    
+    # Plot topomaps
+    topoplot(df_stats['Power'], 
+             mask=df_stats['Null'], 
+             cmap=cmap,
+             names=None,
+             axes=ax[0],
+             cbar_title=unit,
+            )
+    
+    topoplot(df_stats['T-Stat'], 
+             mask=df_stats['Sig'], 
+             cmap=cmap,
+             names=None,
+             axes=ax[1],
+             mask_params=dict(markersize=6, markerfacecolor='y'), 
+             )
+    
+    if stage == 2:
+        fig.suptitle(f'NREM {unit} (CLNMES - CLAS)', fontsize=18)
+    else:
+        fig.suptitle(f'REM {unit} (CLNMES - CLAS)', fontsize=18)
+        
+    plt.tight_layout()
+    plt.show()
+
+#%%
+## Bayesian analysis 
+import bambi as bmb
+import arviz as az
+az.style.use("arviz-white")
+
+# Initialize model
+model = bmb.Model('HRV_LFHF ~ Mode + (1|Subject)', df_power)
+print(model)
+
+# Fit the model using 1000 on each chain
+results = model.fit(draws=1000)
+
+# Use ArviZ to plot the results
+az.plot_trace(results)
+az.summary(results)
+
+# Posterior predictive check
+ppc = model.predict(results)
+az.plot_ppc(ppc)
 
 #%%
 # TCT analysis
@@ -1003,8 +2025,8 @@ df_tct = drop_bads_df(df_tct)
 data_pn = df_tct[df_tct['Mode'] == 'pn']
 data_nmes = df_tct[df_tct['Mode'] == 'nmes']
 
-for dv in [ 'Consistency_RMS', 'Consistency',
-            'RMS_Trial', 'RMS_Evoked', 'ERP']:
+for dv in ['Consistency_RMS', 'Consistency',
+           'RMS_Trial', 'RMS_Evoked', 'ERP']:
     # Create a figure with four subplots
     fig, axs = plt.subplots(2, 2, figsize=(20, 12), sharey=True)
 

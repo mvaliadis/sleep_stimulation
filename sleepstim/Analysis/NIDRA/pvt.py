@@ -50,6 +50,8 @@ def process_pvt(file):
     
     # extract reaction times, trials, and subject info
     rt = np.asarray([df['duration'][idx] for idx, trial in enumerate(df['ended_on']) if trial=='response' and df['Trial_Number'][idx] >= 0])
+    # correct ~50 ms lag
+    rt = rt - 50
     subjects = np.asarray([df['code'][idx] for idx, trial in enumerate(df['ended_on']) if trial=='response' and df['Trial_Number'][idx] >= 0])
     if np.unique(subjects) == subject:
         trials = np.asarray([df['Trial_Number'][idx] for idx, trial in enumerate(df['ended_on']) if trial=='response' and df['Trial_Number'][idx] >= 0]).astype(int)
@@ -69,9 +71,15 @@ def process_pvt(file):
             lapse_prob = 0.0
         
         # create dataframe and add RT, Subject, and trials as column
-        df_rt = pd.DataFrame({'RT': rt, 'Speed': speed, 'Lapses': lapses, 
-                              'Lapse_Probability': lapse_prob,'Trial': trials,
-                              'Subject': subjects, 'Night': night, 'Mode': mode})
+        df_rt = pd.DataFrame({'RT': rt, 
+                              'Speed': speed, 
+                              'Lapses': lapses, 
+                              'Lapses_Transformed' : np.sqrt(lapses) + (np.sqrt(lapses + 1)), 
+                              'Lapse_Probability': lapse_prob,
+                              'Trial': trials,
+                              'Subject': subjects, 
+                              'Night': night, 
+                              'Mode': mode})
         
         # drop RTs over 5 seconds
         df_rt = df_rt[df_rt.RT <= 5000]

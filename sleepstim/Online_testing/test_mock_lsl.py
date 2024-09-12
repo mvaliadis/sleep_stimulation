@@ -352,7 +352,8 @@ def local_SO_detection(trans_csd, surface_laplacian = True, stim_intervall=2.99)
 #%%
 # 1. Load pre-recorded dataset
 #fname = '/media/administrator/data/Study_2_data/mne_lsl_data/test-raw.fif'
-fname = '/media/administrator/data/Study_2_data/NIDRA/CLNMES/PaJa_1-test.fif'
+# fname = '/media/administrator/data/Study_2_data/NIDRA/CLNMES/PaJa_1-test.fif'
+fname = '/media/administrator/Sleep_Data/Pilot/Processed/PaJa_1-raw.fif'
 #fname = sample.data_path() / "sample-ant-raw.fif"
 
 # 2. Load csd matrix

@@ -14,7 +14,9 @@ import yasa
 # import sleepeegpy
 from sleepecg import detect_heartbeats
 import fooof
+import scipy
 from sleepeegpy.pipeline import SpectralPipe
+from sleepstim.Analysis.NIDRA.swa_decay import swa_decay_stim
 import glob
 import os
 import neurokit2 as nk
@@ -88,7 +90,6 @@ def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path, thresh=25, ref=
     
     # 3. SO/Spindle detection
     if ref=='csd':
-        import scipy
         data = raw.get_data('csd')*1e3
         # Detect slow waves
         # thresh = np.percentile(np.abs(data[:, hypno==3]), 75)
@@ -168,13 +169,13 @@ def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path, thresh=25, ref=
     
     return sw_summary, sp_summary
      
-def analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True, 
+def analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=False, 
                             power_desired=True, plot=False):
     # Get subject, night info
     subject, night, _ = file.split('/')[-1].split('-')[0].split('_')
         
     # Check if this subject night has already been processed
-    hrv_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_hrv_lm.csv')
+    hrv_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_hrv_csd.csv') # was -lm
     if os.path.exists(hrv_output_path):
         print(f"Skipping {subject} {night} - already processed.")
         hrv_df = pd.read_csv(hrv_output_path)
@@ -216,10 +217,13 @@ def analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True,
     # Find periods of equal duration
     epochs = yasa.hypno_find_periods(hypno=hypno, 
                                      sf_hypno=sf, 
-                                     threshold="2.5min", 
+                                     threshold="1min", 
                                      equal_length=True)
-    epochs = epochs[epochs["values"].isin([2, 4])].reset_index(drop=True)
-    
+    if nrem_block:
+        epochs = epochs[epochs["values"].isin([2, 4])].reset_index(drop=True)
+    else:
+        epochs = epochs[epochs["values"].isin([2, 3, 4])].reset_index(drop=True)
+        
     # Sort by stage and add epoch number
     epochs = epochs.sort_values(by=["values", "start"])
     epochs["epoch"] = epochs.groupby("values")["start"].transform(lambda x: range(len(x)))
@@ -300,11 +304,11 @@ def analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True,
 
     if power_desired:
         try:
-            hrv_df = add_power(hrv, raw.get_data('csd')*1e3, 
+            hrv_df = add_power(hrv, raw.copy().pick('csd'), 
                                sf, raw.ch_names[0:64], 
                                subject, night, mode)
         except:
-            hrv_df = add_power(hrv, raw.get_data('eeg')*1e6, 
+            hrv_df = add_power(hrv, raw.copy().pick('eeg'), 
                                sf, raw.ch_names[0:64], 
                                subject, night, mode)
             
@@ -315,10 +319,279 @@ def analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True,
     return hrv_df # rpeaks
 
 def add_power(hrv, eeg, sf, ch_names, subject, night, mode):
+    
+    # Initialize band columns for all channels outside the loop
+    for band in ["Delta", "Theta", "Alpha", "Sigma", "Beta", "Gamma",
+                 "TotalAbsPow", "Offset", "Aperiodic"]:
+        for chan in ch_names:
+            hrv[f"{chan}_{band}"] = np.nan
+                
+    # Calculate PSD and FOOOF data once per epoch
+    for idx, row in hrv.iterrows():
+
+        # Epoch data into 4s windows for eeg
+        eps = mne.make_fixed_length_epochs(eeg.copy().crop(tmin=int(row["start"]), 
+                                                           tmax=int(row["start"] + row["duration"])),
+                                                           duration=60)
+        # Get PSDs
+        psds, freqs = eps.compute_psd(fmin=0.5,
+                                      fmax=45,
+                                      method='welch',
+                                      n_per_seg=int((2/0.5)*sf), 
+                                      n_jobs=-1,
+                                      ).get_data(return_freqs=True)
+        psds = psds * 1e6
+        
+        # FOOOF data
+        fg = fooof.FOOOFGroup(max_n_peaks=5)
+        fg.fit(freqs, psds.mean(0), freq_range=(3, 45)) 
+        
+        fooof_params = {
+            'Offset': fg.get_params(name='aperiodic_params', col='offset'),
+            'Aperiodic': fg.get_params(name='aperiodic_params', col='exponent')
+        }
+        
+        # Get relative power with YASA
+        bp = yasa.bandpower_from_psd(psds.mean(0), freqs, ch_names=ch_names,
+                                     bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
+                                            (8, 12, 'Alpha'), (12, 16, 'Sigma'),
+                                            (16, 30, 'Beta'), (30, 45, 'Gamma')],
+                                     relative=False).set_index('Chan')
+        
+        bands_to_log = ['Delta', 'Theta', 'Alpha', 'Sigma', 'Beta', 'Gamma','TotalAbsPow']
+        bp[bands_to_log] = np.log(bp[bands_to_log])
+                               
+        del fg
+                
+        # Update bandpower values
+        for c_idx, chan in enumerate(ch_names):
+            hrv.at[idx, f"{chan}_Delta"] = bp.loc[chan, "Delta"]
+            hrv.at[idx, f"{chan}_Theta"] = bp.loc[chan, "Theta"]
+            hrv.at[idx, f"{chan}_Alpha"] = bp.loc[chan, "Alpha"]
+            hrv.at[idx, f"{chan}_Sigma"] = bp.loc[chan, "Sigma"]
+            hrv.at[idx, f"{chan}_Beta"] = bp.loc[chan, "Beta"]
+            hrv.at[idx, f"{chan}_Gamma"] = bp.loc[chan, "Gamma"]
+            hrv.at[idx, f"{chan}_TotalAbsPow"] = bp.loc[chan, "TotalAbsPow"]
+    
+            # Extract aperiodic components for all channels
+            hrv.at[idx, f"{chan}_Offset"] = fooof_params['Offset'][c_idx]
+            hrv.at[idx, f"{chan}_Aperiodic"] = fooof_params['Aperiodic'][c_idx]
+                
+    # Initialize list
+    hrvs = []
+    
+    # Process each channel separately to create the final DataFrame
+    for chan_idx, chan in enumerate(ch_names):
+        hrv_chan = hrv.copy()
+        hrv_chan = hrv_chan[[col for col in hrv.columns if col.startswith(f"{chan}_") 
+                             or col.startswith("HR")]]
+
+        # Rename columns to remove channel prefix
+        hrv_chan.columns = [col.replace(f"{chan}_", "") if col.startswith(f"{chan}_") else col for col in hrv_chan.columns]
+        
+        # Group by 'Stage', calculate mean, and add additional info
+        hrv_chan_grouped = hrv_chan.groupby('values').mean(numeric_only=True).reset_index()
+        hrv_chan_grouped['Subject'] = subject
+        hrv_chan_grouped['Night'] = night
+        hrv_chan_grouped['Mode'] = mode
+        hrv_chan_grouped['Channel'] = chan
+        
+        # Rename 'values' column to 'Stage'
+        hrv_chan_grouped.rename(columns={'values': 'Stage'}, inplace=True)
+
+        # Append the grouped DataFrame to the list
+        hrvs.append(hrv_chan_grouped)
+
+    # Concatenate all channel DataFrames
+    hrv_final = pd.concat(hrvs).reset_index(drop=True)
+
+    return hrv_final
+
+def add_power_mid_high(hrv, eeg, sf, ch_names, subject, night, mode):
+    
+    # Initialize band columns for all channels outside the loop
+    for band in ["Delta", "Theta", "Alpha", "Sigma", "Beta", "Gamma",
+                 "TotalAbsPow", "Offset", "Aperiodic"]:
+        for chan in ch_names:
+            hrv[f"{chan}_{band}"] = np.nan
+                
+    # Calculate PSD and FOOOF data once per epoch
+    for idx, row in hrv.iterrows():
+        # start = int(row["start"] * sf)
+        # end = int(sf * (row["start"] + row["duration"]))
+
+        # epoch data into 4s windows for eeg
+        eps = mne.make_fixed_length_epochs(eeg.copy().crop(tmin=int(row["start"]), 
+                                                           tmax=int(row["start"] + row["duration"])),
+                                                           duration=150)
+        # Get PSDs
+        psds, freqs = eps.compute_psd(  fmin=0.5,
+                                        fmax=45,
+                                        method='welch',
+                                        n_per_seg=int((2/0.5)*sf), 
+                                        n_jobs=-1,
+                                        ).get_data(return_freqs=True)
+        psds = psds * 1e6
+        
+        # FOOOF data
+        fg = fooof.FOOOFGroup(max_n_peaks=5)
+        fg.fit(freqs, psds.mean(0), freq_range=(3, 45)) 
+        
+        fooof_params = {
+            'Offset': fg.get_params(name='aperiodic_params', col='offset'),
+            'Aperiodic': fg.get_params(name='aperiodic_params', col='exponent')
+        }
+        
+        # Get relative power with YASA
+        bp = yasa.bandpower_from_psd(psds.mean(0), freqs, ch_names=ch_names,
+                                     bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
+                                            (8, 12, 'Alpha'), (12, 16, 'Sigma'),
+                                            (16, 30, 'Beta'), (30, 45, 'Gamma')],
+                                     relative=False).set_index('Chan')
+        
+        bands_to_log = ['Delta', 'Theta', 'Alpha', 'Sigma', 'Beta', 'Gamma','TotalAbsPow']
+        bp[bands_to_log] = np.log(bp[bands_to_log])
+                               
+        del fg
+                
+        # Update bandpower values
+        for c_idx, chan in enumerate(ch_names):
+            hrv.at[idx, f"{chan}_Delta"] = bp.loc[chan, "Delta"]
+            hrv.at[idx, f"{chan}_Theta"] = bp.loc[chan, "Theta"]
+            hrv.at[idx, f"{chan}_Alpha"] = bp.loc[chan, "Alpha"]
+            hrv.at[idx, f"{chan}_Sigma"] = bp.loc[chan, "Sigma"]
+            hrv.at[idx, f"{chan}_Beta"] = bp.loc[chan, "Beta"]
+            hrv.at[idx, f"{chan}_Gamma"] = bp.loc[chan, "Gamma"]
+            hrv.at[idx, f"{chan}_TotalAbsPow"] = bp.loc[chan, "TotalAbsPow"]
+    
+            # Extract aperiodic components for all channels
+            hrv.at[idx, f"{chan}_Offset"] = fooof_params['Offset'][c_idx]
+            hrv.at[idx, f"{chan}_Aperiodic"] = fooof_params['Aperiodic'][c_idx]
+                
+    # Initialize list
+    hrvs = []
+    
+    # Process each channel separately to create the final DataFrame
+    for chan_idx, chan in enumerate(ch_names):
+        hrv_chan = hrv.copy()
+        hrv_chan = hrv_chan[[col for col in hrv.columns if col.startswith(f"{chan}_") 
+                             or col in hrv.columns[1:94]]]
+        
+        # Rename columns to remove channel prefix
+        hrv_chan.columns = [col.replace(f"{chan}_", "") if col.startswith(f"{chan}_") else col for col in hrv_chan.columns]
+        
+        # Group by 'values', calculate mean, and add additional info
+        hrv_chan_grouped = hrv_chan.groupby('values').mean(numeric_only=True).reset_index()
+        hrv_chan_grouped['Subject'] = subject
+        hrv_chan_grouped['Night'] = night
+        hrv_chan_grouped['Mode'] = mode
+        hrv_chan_grouped['Channel'] = chan
+
+        # Rename 'values' column to 'Stage'
+        hrv_chan_grouped.rename(columns={'values': 'Stage'}, inplace=True)
+
+        # Append the grouped DataFrame to the list
+        hrvs.append(hrv_chan_grouped)
+
+    # Concatenate all channel DataFrames
+    hrv_final = pd.concat(hrvs).reset_index(drop=True)
+
+    return hrv_final
+
+def add_power_mid(hrv, eeg, sf, ch_names, subject, night, mode):
+    
+    # Initialize a list to hold DataFrames for each channel
+    hrvs = []
+
+    # Initialize band columns for all channels outside the loop
+    for band in ["Delta", "Theta", "Alpha", "Sigma", "Beta", "Gamma", "Offset", "Aperiodic"]:
+        hrv[band] = np.nan
+    
+    # Calculate PSD and FOOOF data once per epoch
+    for idx, row in hrv.iterrows():
+        start = int(row["start"] * sf)
+        end = int(sf * (row["start"] + row["duration"]))
+
+        epoch_psds = []
+        epoch_fooof_params = []
+
+        # Compute PSD for each channel once per epoch
+        for chan_idx, chan in enumerate(ch_names):
+            psds, freqs = mne.time_frequency.psd_array_welch(
+                x=eeg[chan_idx, start:end].squeeze(),
+                sfreq=sf,
+                fmin=0.5,
+                fmax=45,
+                n_jobs=-1,
+            )
+            epoch_psds.append(psds)
+            
+            # FOOOF data
+            fm = fooof.FOOOF(max_n_peaks=5)
+            # fm.fit(freqs[::75], psds[::75], freq_range=(3, 45))
+            fm.fit(freqs, psds, freq_range=(3, 45))
+            fooof_params = {
+                'Offset': fm.get_params(name='aperiodic_params', col='offset'),
+                'Aperiodic': fm.get_params(name='aperiodic_params', col='exponent')
+            }
+            epoch_fooof_params.append(fooof_params)
+
+        # Update the DataFrame with bandpower values and FOOOF params for each channel
+        for chan_idx, chan in enumerate(ch_names):
+            psds = epoch_psds[chan_idx]
+            fooof_params = epoch_fooof_params[chan_idx]
+
+            # Get relative power with YASA
+            bp = yasa.bandpower_from_psd(psds, freqs, ch_names=[chan],
+                                         bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
+                                                (8, 12, 'Alpha'), (12, 16, 'Sigma'),
+                                                (16, 30, 'Beta'), (30, 45, 'Gamma')],
+                                         relative=True).set_index('Chan')
+            
+            # Update bandpower values
+            hrv.at[idx, f"{chan}_Delta"] = bp.loc[chan, "Delta"]
+            hrv.at[idx, f"{chan}_Theta"] = bp.loc[chan, "Theta"]
+            hrv.at[idx, f"{chan}_Alpha"] = bp.loc[chan, "Alpha"]
+            hrv.at[idx, f"{chan}_Sigma"] = bp.loc[chan, "Sigma"]
+            hrv.at[idx, f"{chan}_Beta"] = bp.loc[chan, "Beta"]
+            hrv.at[idx, f"{chan}_Gamma"] = bp.loc[chan, "Gamma"]
+
+            # Extract aperiodic components for all channels
+            hrv.at[idx, f"{chan}_Offset"] = fooof_params['Offset']
+            hrv.at[idx, f"{chan}_Aperiodic"] = fooof_params['Aperiodic']
+    
+    # Process each channel separately to create the final DataFrame
+    for chan_idx, chan in enumerate(ch_names):
+        hrv_chan = hrv.copy()
+        hrv_chan = hrv_chan[[col for col in hrv.columns if col.startswith(f"{chan}_") or col in ['start', 'duration', 'values']]]
+        
+        # Rename columns to remove channel prefix
+        hrv_chan.columns = [col.replace(f"{chan}_", "") if col.startswith(f"{chan}_") else col for col in hrv_chan.columns]
+        
+        # Group by 'values', calculate mean, and add additional info
+        hrv_chan_grouped = hrv_chan.groupby('values').mean().reset_index()
+        hrv_chan_grouped['Subject'] = subject
+        hrv_chan_grouped['Night'] = night
+        hrv_chan_grouped['Mode'] = mode
+        hrv_chan_grouped['Channel'] = chan
+
+        # Rename 'values' column to 'Stage'
+        hrv_chan_grouped.rename(columns={'values': 'Stage'}, inplace=True)
+
+        # Append the grouped DataFrame to the list
+        hrvs.append(hrv_chan_grouped)
+
+    # Concatenate all channel DataFrames
+    hrv_final = pd.concat(hrvs).reset_index(drop=True)
+
+    return hrv_final
+
+def add_power_old(hrv, eeg, sf, ch_names, subject, night, mode):
     # Initialize a list to hold DataFrames for each channel
     hrvs = []
 
     for chan_idx, chan in enumerate(ch_names):
+        print(chan_idx, chan)
         # Create a copy of the hrv DataFrame for current channel
         hrv_chan = hrv.copy()
 
@@ -331,40 +604,33 @@ def add_power(hrv, eeg, sf, ch_names, subject, night, mode):
             start = int(row["start"] * sf)
             end = int(sf * (row["start"] + row["duration"]))
             
-            # Get PSD using the Welch method
-            # psds, freqs = mne.time_frequency.psd_array_welch(
-            #     x=eeg[chan_idx, start:end].squeeze(),
-            #     sfreq=sf, 
-            #     fmin=0.5, 
-            #     fmax=30, 
-            #     n_jobs=-1, 
-            #     **dict(average='median', 
-            #            n_fft=int(4*sf))
-            #     )
-            
+            # Get PSD using the multitaper method            
             psds, freqs = mne.time_frequency.psd_array_multitaper(
                 x=eeg[chan_idx, start:end].squeeze(),
                 sfreq=sf, 
                 fmin=0.5, 
-                fmax=30, 
+                fmax=45, 
                 n_jobs=-1,
                 )
             
             # FOOOF data         
             fm = fooof.FOOOF(max_n_peaks=5)
-            fm.fit(freqs, psds, freq_range=(3, 30))          
+            fm.fit(freqs[::75], psds[::75], freq_range=(3, 45))          
                        
             # Get relative power with YASA 
             bp = yasa.bandpower_from_psd(psds, freqs, ch_names=[chan],
                                          bands=[(0.5, 4, 'Delta'), (4, 8, 'Theta'),
                                                 (8, 12, 'Alpha'), (12, 16, 'Sigma'),
-                                                (16, 30, 'Beta')]).set_index('Chan')
+                                                (16, 30, 'Beta'), (30, 45, 'Gamma')],
+                                         relative=True).set_index('Chan')
            
             # Update bandpower values
             hrv_chan.at[idx, "Delta"] = bp.loc[chan, "Delta"]
             hrv_chan.at[idx, "Theta"] = bp.loc[chan, "Theta"]
             hrv_chan.at[idx, "Alpha"] = bp.loc[chan, "Alpha"]
             hrv_chan.at[idx, "Sigma"] = bp.loc[chan, "Sigma"]
+            hrv_chan.at[idx, "Beta"] = bp.loc[chan, "Beta"]
+            hrv_chan.at[idx, "Gamma"] = bp.loc[chan, "Gamma"]
             
             # Extract aperiodic components for all channel
             hrv_chan.at[idx, 'Offset'] = fm.get_params(name='aperiodic_params', col='offset')
@@ -389,7 +655,9 @@ def add_power(hrv, eeg, sf, ch_names, subject, night, mode):
     return hrv_final
 
 def combine_hrv_coupling(sw_summary, df_hrv):
-    ndPAC_grouped = sw_summary.groupby(['Stage','Channel']).mean()['ndPAC'].reset_index()
+    ndPAC_grouped = sw_summary.groupby(['Stage','Channel']).mean(numeric_only=True)[['ndPAC', 
+                                                                                     'PhaseAtSigmaPeak',
+                                                                                     'CooccurringSpindle']].reset_index()
         
     # Adjust Stage values: convert both stages 2 and 3 to stage 2 for NREM grouping
     ndPAC_grouped['Stage'] = ndPAC_grouped['Stage'].replace({3: 2})
@@ -416,8 +684,9 @@ def analyze_sleep_macroarchitecture(file, stats_path, hypno_path):
     raw = mne.io.read_raw(file, preload=False)
     
     # Load hypnogram
-    hypno = np.load(hypno_path + f'{subject}_{night}_hypno.npy')
-       
+    hypno30s = np.load(hypno_path + f'{subject}_{night}_hypno30s.npy')
+    hypno = np.load(hypno_path + f'{subject}_{night}_hypno.npy') 
+    
     # Get stimulation condition from epoch events
     try:  
         events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_csd-epo.fif', 
@@ -433,6 +702,14 @@ def analyze_sleep_macroarchitecture(file, stats_path, hypno_path):
     
     # Extract sleep stats based on hypnogram
     sleep_stats = yasa.sleep_statistics(hypno, sf_hyp=raw.info['sfreq'])
+    
+    # Extract sleep transitions based on hypnogram
+    _, probs = yasa.transition_matrix(hypno30s)
+    
+    # Calculate stage stability
+    stability = np.diag(probs.loc[2:, 2:]).mean()
+    
+    sleep_stats['Stability'] = stability
     
     # Make dataframe
     df = pd.DataFrame([sleep_stats])
@@ -498,47 +775,75 @@ if __name__ == '__main__':
     hrvs = []
     sleep_stats = [] 
     trans_p = []
+    decay = []
     for file in tqdm(glob.glob(path)):
         print(file)
         
-        # Macroarchitecture analysis
-        df_macro = analyze_sleep_macroarchitecture(file, stats_path, hypno_path)
-        sleep_stats.append(df_macro)
+        # # Macroarchitecture analysis
+        # df_macro = analyze_sleep_macroarchitecture(file, stats_path, hypno_path)
+        # sleep_stats.append(df_macro)
         
-        # Transition analysis 
-        df_trans = analyze_sleep_transitions(file, stats_path, hypno_path)
-        trans_p.append(df_trans)
+        # # Transition analysis 
+        # df_trans = analyze_sleep_transitions(file, stats_path, hypno_path)
+        # trans_p.append(df_trans)
+        
+        # # SWA decay analysis
+        # df_decay = swa_decay_stim(file, plot=True)
+        # decay.append(df_decay)
         
         # Extract SO and Spindle summaries
-        sw_summary, sp_summary = analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path, ref='csd')
+        sw_summary, sp_summary = analyze_sleep_nmes_so_spindles(file, stats_path, 
+                                                                hypno_path, ref='csd')
         
         # HRV analysis
-        # df_hrv = analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True, 
-        #                                  power_desired=True, plot=False)
+        df_hrv = analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True, 
+                                         power_desired=True, plot=False)
+        
+        # yasa.topoplot(df_hrv.groupby(['Stage','Channel']).mean(numeric_only=True).loc[2].Delta)
+        # yasa.topoplot(df_hrv.groupby(['Stage','Channel']).mean(numeric_only=True).loc[2].Sigma)
         
         # Combine HRV with ndPAC
-        #df_hrv_power_couping = combine_hrv_coupling(sw_summary, df_hrv)
+        df_hrv_power_couping = combine_hrv_coupling(sw_summary, df_hrv)
           
         # Append summaries
         slowwaves.append(sw_summary)
         spindles.append(sp_summary)
-        #hrvs.append(df_hrv_power_couping)
+        hrvs.append(df_hrv_power_couping)
         
         # Delete heavy objects
-        del sw_summary, sp_summary #, df_hrv, df_hrv_power_couping
+        # del sw_summary, sp_summary, df_hrv, df_hrv_power_couping
 
-    # Combine sleep stats
-    sleep_stats_df = pd.concat(sleep_stats).reset_index(drop=True)
-    sleep_stats_df.to_csv(stats_path + 'df_sleep_stats.csv')
+    # # Combine sleep stats
+    # sleep_stats_df = pd.concat(sleep_stats).reset_index(drop=True)
+    # sleep_stats_df.to_csv(stats_path + 'df_sleep_stats.csv')
     
-    # Combine transition probs
-    trans_p_df = pd.concat(trans_p).reset_index()
-    trans_p_df.to_csv(stats_path + 'df_trans.csv')
+    # # Combine transition probs
+    # trans_p_df = pd.concat(trans_p).reset_index()
+    # trans_p_df.to_csv(stats_path + 'df_trans.csv')
+    
+    # # Combine SWA decay
+    # decay_df = pd.concat(decay).reset_index().rename(columns={'index': 'Chan'})
+    # decay_df.to_pickle(stats_path + 'df_swa_decay.p')
     
     # Combined SW/Spindle detection summaries
     df_spindles = pd.concat(spindles).reset_index(drop=True)
     df_spindles.to_csv(stats_path + 'df_spindles.csv')
     df_sw = pd.concat(slowwaves).reset_index(drop=True)
     df_sw.to_csv(stats_path + 'df_sw.csv')
-    # df_hrv = pd.concat(hrvs).reset_index(drop=True)
-    # df_hrv.to_csv(stats_path + 'df_sleep_hrv.csv')
+    df_hrvs = pd.concat(hrvs).reset_index(drop=True)
+    df_hrvs.to_csv(stats_path + 'df_sleep_hrv.csv')
+    
+#%%
+# Correlation in NREM sleep
+cols = ["CooccurringSpindle", "ndPAC", "HR", "HRV_RMSSD", "HRV_LFHF","Delta", "Theta", "Alpha", "Sigma"]
+df_hrvs.set_index('Stage').loc[2][cols].corr(method="spearman").round(2)#.iloc[:2]
+
+# HRV Stats
+for col in df_hrvs.columns[1:93]:
+    try:
+        summary = df_hrvs.rm_anova(dv=col, within=['Stage','Mode'], subject='Subject')
+        if summary['p-GG-corr'][2] < 0.05:
+            print(col)
+            print(summary)
+    except:
+        continue

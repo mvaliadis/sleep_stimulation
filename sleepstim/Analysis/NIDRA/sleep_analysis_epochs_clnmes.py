@@ -46,7 +46,7 @@ def analyze_sleep_nmes_epochs_tfr(epochs, subject, night,
     # n_cyc = freqs
     
     # Define the starting cycles and the increment per Hz
-    start_cycles = 4.5
+    start_cycles = 4# 4.5 if starting with 5 Hz
     cycle_increment_per_hz = 0.5
     # Calculate the increment for each frequency starting from the lowest frequency
     cycle_increments = (freqs - freq_range[0]) * cycle_increment_per_hz
@@ -202,7 +202,7 @@ def get_inst_hr(epoch, sf, duration):
                         interpolation_method='monotone_cubic', 
                         show=False)
     
-    return hr, hr_quality
+    return hr, hr_quality, pks
         
 def analyze_sleep_nmes_hr(epochs, subject, night):
     sf = epochs.info['sfreq']
@@ -211,12 +211,14 @@ def analyze_sleep_nmes_hr(epochs, subject, night):
     for cond in epochs.event_id.keys():
         data = epochs[cond].get_data('ecg', units='uV').squeeze()
         for idx, epoch in enumerate(data):
-            hr, hr_quality = get_inst_hr(epoch, sf, duration)
+            hr, hr_quality, pks = get_inst_hr(epoch, sf, duration)
             if hr_quality != 'Unacceptable':
-                hr_pre = np.nanmean(hr[0:len(hr)//2])
-                hr_post = np.nanmean(hr[len(hr)//2:])
-                hr_ratio_change = ((hr_post - hr_pre)/hr_pre)*100
-            
+                # hr_pre = np.nanmean(hr[0:len(hr)//2])
+                # hr_post = np.nanmean(hr[len(hr)//2:])
+                # hr_ratio_change = ((hr_post - hr_pre)/hr_pre)*100
+                hr_mean = np.nanmean(hr)
+                hrv = nk.hrv_time(pks, sampling_rate=sf, show=False)
+                
                 # Save rpeaks to dict
                 hr_dict = {
                     'Subject': subject, 
@@ -224,7 +226,10 @@ def analyze_sleep_nmes_hr(epochs, subject, night):
                     'Condition': cond,
                     'Epoch': idx,
                     'Quality': hr_quality, 
-                    'HR_ratio_change': hr_ratio_change,
+                    # 'HR_ratio_change': hr_ratio_change,
+                    'HR' : hr_mean, 
+                    'HRV_RMSSD' : hrv['HRV_RMSSD'].values[0], 
+                    'HRV_SDNN' : hrv['HRV_SDNN'].values[0],
                     }
                 
                 hrs.append(hr_dict)
@@ -238,10 +243,31 @@ def analyze_sleep_nmes_hr(epochs, subject, night):
     df.drop('Condition', axis=1, inplace=True)
     
     # Mean over epochs
-    df = df.groupby(['Subject','Night','Mode','Stim','Target_Chan']).mean()['HR_ratio_change'].reset_index()
+    df = df.groupby(['Subject','Night','Mode','Stim','Target_Chan']).mean(numeric_only=True)[['HR', 'HRV_RMSSD', 'HRV_SDNN']].reset_index()
     
-    return df
-   
+    # Pivot the dataframe to have 'Stim' as columns, so we can calculate the ratio
+    pivot_df = df.pivot_table(index=['Subject', 'Night', 'Mode', 'Target_Chan'],
+                              columns='Stim', values=['HR', 'HRV_RMSSD', 'HRV_SDNN']).reset_index()
+    
+    # Flatten the MultiIndex columns, making them easier to access
+    pivot_df.columns = ['_'.join(col).strip() if type(col) is tuple else col for col in pivot_df.columns]
+    
+    # Rename columns to remove trailing underscores from 'Subject_', 'Night_', 'Mode_', and 'Target_Chan_'
+    pivot_df.rename(columns=lambda x: x.rstrip('_') if x.endswith('_') else x, inplace=True)
+    
+    # Calculate the ratio of Stim/Sham for HR, HRV_RMSSD, and HRV_SDNN
+    pivot_df['Delta_HR'] = pivot_df['HR_stim'] - pivot_df['HR_sham']
+    pivot_df['HR_Ratio_Change'] = ((pivot_df['HR_stim'] - pivot_df['HR_sham']) / pivot_df['HR_sham']) * 100
+    
+    pivot_df['Delta_HRV_RMSSD'] = pivot_df['HRV_RMSSD_stim'] - pivot_df['HRV_RMSSD_sham']
+    pivot_df['HRV_RMSSD_Ratio_Change'] = ((pivot_df['HRV_RMSSD_stim'] - pivot_df['HRV_RMSSD_sham']) / pivot_df['HRV_RMSSD_sham']) * 100
+    
+    pivot_df['Delta_HRV_SDNN'] = pivot_df['HRV_SDNN_stim'] - pivot_df['HRV_SDNN_sham']
+    pivot_df['HRV_SDNN_Ratio_Change'] = ((pivot_df['HRV_SDNN_stim'] - pivot_df['HRV_SDNN_sham']) / pivot_df['HRV_SDNN_sham']) * 100
+    
+    # Return the pivot_df without trailing underscores
+    return pivot_df
+
 def analyze_sleep_nmes_epochs_power(epochs, subject, night, plot=False): 
     # Initialize list
     df = []
@@ -255,6 +281,7 @@ def analyze_sleep_nmes_epochs_power(epochs, subject, night, plot=False):
         #                                         picks='csd', **dict(average='median', 
         #                                                             n_fft=int(4*epochs.info['sfreq'])))
         epo_spectrum = epochs[cond].compute_psd(fmin=0.5, fmax=45,
+                                                #tmin=0, 
                                                 tmin=-2, tmax=2,
                                                 n_jobs=-1, picks='csd')
         psds, freqs = epo_spectrum.get_data(return_freqs=True)
@@ -348,38 +375,59 @@ def analyze_sleep_nmes_epochs_power(epochs, subject, night, plot=False):
 def analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='spearman'):
     tcts = []
     for cond in epochs.event_id.keys():
-        for times, latency in zip(((0.025, .225), (0.2, .4)), ('CLNMES', 'CLAS')):
-            tmin, tmax = times
-            consistency_gfp = tct.calculate_gfp_correlation(epochs[cond], method=method,
+        #for times, latency in zip(((0.025, .225), (0.2, .4)), ('CLNMES', 'CLAS')):
+        for times, latency in zip(((0.18, 0.28), (0,0), (0,0), (0.35, 0.6), (1, 1.5)), 
+                                  ('P200', 'N550_1', 'N550_2', 'N550', 'P900')):
+            for chans, region_names in zip((['F1', 'Fz', 'F2'],['C5', 'C3', 'CP1', 'C1']),
+                                            ('Frontal','Motor')):
+
+                tmin, tmax = times
+                consistency_gfp = tct.calculate_gfp_correlation(epochs[cond], 
+                                                                method=method,
+                                                                tmin=tmin,
+                                                                tmax=tmax)
+                consistency_post = tct.calculate_topographic_consistency(epochs[cond],
+                                                                         tmin=tmin, tmax=tmax)
+                gfp_post_trial = tct.calculate_gfp_strength(epochs[cond], method='trial_avg',
                                                             tmin=tmin, tmax=tmax)
-            consistency_post = tct.calculate_topographic_consistency(epochs[cond],
-                                                                     tmin=tmin, tmax=tmax)
-            gfp_post_trial = tct.calculate_gfp_strength(epochs[cond], method='trial_avg',
-                                                        tmin=tmin, tmax=tmax)
-            gfp_post_evoked = tct.calculate_gfp_strength(epochs[cond], method='evoked_avg',
-                                                         tmin=tmin, tmax=tmax)
-            if 'c3' in cond:
-                coi = 'C3'
-            elif 'fz' in cond:
-                coi = 'Fz'
+                gfp_post_evoked = tct.calculate_gfp_strength(epochs[cond], method='evoked_avg',
+                                                             tmin=tmin, tmax=tmax)
+           
+                # Get ERP
+                if 'c3' in cond:
+                    coi = 'C3'
+                elif 'fz' in cond:
+                    coi = 'Fz'
+                                    
+                # Convert channel names to indices
+                chans_idx = [epochs.ch_names.index(ch) for ch in chans if ch in epochs.ch_names]
+                # Create combined channel
+                region_epochs = mne.channels.combine_channels(
+                    epochs[cond], 
+                    groups={region_names : chans_idx},
+                    method='mean'
+                    )
                 
-            erp = epochs[cond].get_data(coi, tmin=tmin, tmax=tmax).squeeze().mean(1).mean()*1e3
-            # Create a new dictionary for the current channel and stimulation
-            tct_dict = {
-                'Subject': subject,
-                'Night': night,
-                'Condition': cond, 
-                'Mode': cond.split('_')[0], 
-                'Latency' : times, 
-                'Consistency_RMS': consistency_gfp,
-                'Consistency': consistency_post,
-                'RMS_Trial': gfp_post_trial, 
-                'RMS_Evoked': gfp_post_evoked, 
-                'ERP': erp,
-            }
-            
-            # Append the dictionary to the list
-            tcts.append(tct_dict)   
+                #erp = epochs[cond].get_data(coi, tmin=tmin, tmax=tmax).squeeze().mean(1).mean()*1e3
+                erp = region_epochs.get_data(tmin=tmin, tmax=tmax).squeeze().mean(1).mean()*1e3
+                
+                # Create a new dictionary for the current channel and stimulation
+                tct_dict = {
+                    'Subject': subject,
+                    'Night': night,
+                    'Condition': cond, 
+                    'Mode': cond.split('_')[0], 
+                    'Latency' : latency, 
+                    'Region' : region_names, 
+                    'Consistency_RMS': consistency_gfp,
+                    'Consistency': consistency_post,
+                    'RMS_Trial': gfp_post_trial, 
+                    'RMS_Evoked': gfp_post_evoked, 
+                    'ERP': erp,
+                }
+                
+                # Append the dictionary to the list
+                tcts.append(tct_dict)   
         
     # Convert to df
     df = pd.DataFrame(tcts)
@@ -393,7 +441,9 @@ def analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='spearman'):
 def analyze_sleep_nmes_epochs_pci(epochs, subject, night):  
     # Extract PCI
     pcis = []
-    for times in ((0.025, .225), (0.2, .4), (0.025, 0.8), (0.025, 1.5)):
+    #for times in ((0.025, .225), (0.2, .4), (0.025, 0.8), (0.025, 1.5)):
+    for times in ((0.025, .225), (0, .3), (0.2, .4), (0.025, 0.8), (0.18, .28),
+                  (0.35, .60), (1, 1.5), (0.025, 1.5)):
         tmin, tmax = times
         par = {'baseline_window':(-3, -1.5), 
                'response_window':(tmin, tmax), 
@@ -413,19 +463,6 @@ def analyze_sleep_nmes_epochs_pci(epochs, subject, night):
                                      weights=[1, -1])
             pci_ = pci.calc_PCIst(evk.get_data()*1e3, evk.times, **par)
             
-            from numpy import apply_along_axis as apply
-            def lziv(x):
-                import antropy as ant
-                """Binarize the EEG signal and calculate the Lempel-Ziv complexity.
-                """
-                return ant.lziv_complexity(x > np.median(x), normalize=True)
-            
-            amp = amp_by_time(evk.get_data()*1e3, 
-                              fs=evk.info['sfreq'])
-            
-            tmin_idx, tmax_idx = evk.time_as_index([tmin, tmax])
-            lziv_ = apply(lziv, axis=1, arr=amp[:, tmin_idx:tmax_idx])
-    
             # Create a new dictionary for the current channel and stimulation
             pci_dict = {
                 'Subject': subject,
@@ -434,8 +471,6 @@ def analyze_sleep_nmes_epochs_pci(epochs, subject, night):
                 'Mode': mode, 
                 'Latency': times, 
                 'PCI': pci_,
-                'Lempel_Ziv' : lziv_, 
-                'LZ_Chans' : [evk.ch_names], 
             }
             
             # Append the dictionary to the list
@@ -443,6 +478,53 @@ def analyze_sleep_nmes_epochs_pci(epochs, subject, night):
             
     # Convert to df
     df = pd.DataFrame(pcis) 
+    
+    return df
+
+def analyze_sleep_nmes_epochs_lziv(epochs, subject, night):
+    from numpy import apply_along_axis as apply
+    def lziv(x):
+        import antropy as ant
+        """Binarize the EEG signal and calculate the Lempel-Ziv complexity.
+        """
+        return ant.lziv_complexity(x > np.median(x), normalize=True)
+
+    # Placeholder for all Lziv data
+    lzivs = []
+
+    for chan in ('C3', 'Fz'):
+        for stim in ('stim', 'sham'):
+            if 'nmes' in list(epochs.event_id.keys())[0]:
+                mode = 'nmes'
+            else:
+                mode = 'pn'
+
+            eps = epochs[f'{mode}_{stim}_{chan.lower()}']
+            eps.resample(256)
+            eps_data = eps.get_data('csd') * 1e3
+
+            amp = np.concatenate([np.expand_dims(amp_by_time(eps_data[i, :, :], fs=eps.info['sfreq']), 0) 
+                                  for i in range(len(eps_data))], axis=0)
+
+            tmin_idx, tmax_idx = eps.time_as_index([-2, 2])
+            lziv_ = apply(lziv, axis=-1, arr=amp[:, :, tmin_idx:tmax_idx])
+
+            # Flatten and create DataFrame for current channel and stimulation
+            lziv_df = pd.DataFrame({
+                'Subject': [subject] * len(eps.ch_names[0:64]),
+                'Night': [night] * len(eps.ch_names[0:64]),
+                'Target_chan': [chan] * len(eps.ch_names[0:64]),
+                'Stim': [stim] * len(eps.ch_names[0:64]), 
+                'Mode': [mode] * len(eps.ch_names[0:64]), 
+                'Chan': eps.ch_names[0:64],
+                'Lempel_Ziv': lziv_.mean(axis=0), 
+            })
+            
+            # Append the DataFrame to the list
+            lzivs.append(lziv_df)
+    
+    # Concatenate all DataFrames in the list
+    df = pd.concat(lzivs, ignore_index=True)
     
     return df
 
@@ -557,7 +639,7 @@ def analyze_sleep_nmes_epochs_ndPAC_new(epochs, subject, night, method='tensorpa
     
     return df
 
-def analyze_sleep_nmes_epochs_ndPAC(epochs, subject, night, method='tensorpac'):
+def analyze_sleep_nmes_epochs_ndPAC_old(epochs, subject, night, method='tensorpac'):
     # Initialize the list to hold all ndPAC data
     ndPACs = []
     for cond in epochs.event_id.keys():
@@ -665,8 +747,8 @@ def analyze_sleep_nmes_epochs_ndPAC(epochs, subject, night, method='tensorpac'):
 def analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=False):
     erpacs = []
     for cond in epochs.event_id.keys():
-        epoch = epochs[cond].copy().crop(tmin=-2.75, tmax=2.75)
-        edges = int(0.75*epoch.info['sfreq'])
+        epoch = epochs[cond].copy()
+        edges = int(1*epoch.info['sfreq'])
         if 'c3' in cond:
             coi = 'C3'
         elif 'fz' in cond:
@@ -680,7 +762,7 @@ def analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=False):
         # ERPAC (+/- 2 sec to avoid filter edge)
         sf = epoch.info['sfreq']
         data_erpac = epoch.get_data(picks=coi).squeeze()*1e3
-        erp = EventRelatedPac(f_pha=[0.5, 1.5], f_amp=np.arange(4.75, 25.75, 0.5), 
+        erp = EventRelatedPac(f_pha=[0.5, 1.5], f_amp=np.arange(3.75, 24.75, 0.5), 
                               verbose=False)  # f_pha = 0.8 Hz
         #freqs = erp.f_amp.mean(1).astype(str)
         pha = erp.filter(sf, data_erpac, ftype='phase', edges=edges)
@@ -972,6 +1054,7 @@ if __name__ == '__main__':
     df_gc_all = []
     df_tct_all = []
     df_pci_all = []
+    df_lziv_all = []
     df_erpac_all = []
     df_ndpac_all = []
     df_tfr_all = []
@@ -984,72 +1067,76 @@ if __name__ == '__main__':
         # 1a. Load & process epoched 
         epochs = mne.read_epochs(file)
         
-        # 1b. If mode is 'pinknoise', then timeshift 100 ms 
+        # 1b. If mode is 'pinknoise', then timeshift 100 ms -> not anymore
         mode = list(epochs.event_id)[0].split('_')[0]
-        if mode == 'pn':
-            epochs.shift_time(-.1)    
+        # if mode == 'pn':   
         #     evk = mne.combine_evoked([epochs['pn_stim_fz'].average(), 
         #                               epochs['pn_sham_fz'].average()],
-        #                              weights=[1, -1])
-        #     evk.plot('Fz', xlim=(0, .5), titles=f'{subject} {mode} - Fz')
+        #                               weights=[1, -1])
+        #     evk.plot('Fz', highlight=(0, .5), titles=f'{subject} {mode} - Fz')
         # else:
         #     evk = mne.combine_evoked([epochs['nmes_stim_fz'].average(), 
         #                               epochs['nmes_sham_fz'].average()],
-        #                              weights=[1, -1])
+        #                               weights=[1, -1])
         #     evk.plot('C3', xlim=(0, .5), titles=f'{subject} {mode} - C3')
             
         # 1c. Combine epochs with metainfo
         epochs_all.append([subject, night, mode, epochs])
         
-        # # 2a. Extract stimulation targeting phases 
-        # df_phase = analyze_sleep_nmes_epochs_phase(epochs, subject, night)
-        # df_phase_all.append(df_phase)
+        # 2a. Extract stimulation targeting phases 
+        df_phase = analyze_sleep_nmes_epochs_phase(epochs, subject, night)
+        df_phase_all.append(df_phase)
         
-        # # 3a. Extract epoch-wise power & aperiodic params
-        # df_power, df_fooof = analyze_sleep_nmes_epochs_power(epochs, subject, night, plot=False)
-        # df_power_all.append(df_power)
-        # df_fooof_all.append(df_fooof)
+        # 3a. Extract epoch-wise power & aperiodic params
+        df_power, df_fooof = analyze_sleep_nmes_epochs_power(epochs, subject, night, plot=False)
+        df_power_all.append(df_power)
+        df_fooof_all.append(df_fooof)
         
-        # # 4a. Spatio Spectral Decomposition (SSD) Analysis
-        # ssd = []  
+        # 4a. Spatio Spectral Decomposition (SSD) Analysis
+        ssd = []  
         
-        # # 4b. Time reversed multivariate Granger causality 
-        # df_gc = analyze_sleep_nmes_epochs_granger(epochs, subject, night, plot=True)
-        # df_gc_all.append(df_gc)
+        # 4b. Time reversed multivariate Granger causality 
+        df_gc = analyze_sleep_nmes_epochs_granger(epochs, subject, night, plot=True)
+        df_gc_all.append(df_gc)
         
-        # # 5a. TCT
-        # df_tct = analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='pearson')
-        # df_tct_all.append(df_tct)
+        # 5a. TCT
+        df_tct = analyze_sleep_nmes_epochs_tct(epochs, subject, night, method='pearson')
+        df_tct_all.append(df_tct)
         
-        # # 6a. Extract PCI 
-        # df_pci = analyze_sleep_nmes_epochs_pci(epochs, subject, night)
-        # df_pci_all.append(df_pci)
+        # 6a. Extract PCI 
+        df_pci = analyze_sleep_nmes_epochs_pci(epochs, subject, night)
+        df_pci_all.append(df_pci)
         
-        # # 7a. Extract TFR
-        # df_tfr = analyze_sleep_nmes_epochs_tfr(epochs, subject, night, 
-        #                                         freq_range=(5, 25), 
-        #                                         steps=0.5,  
-        #                                         baseline=(-3, -2),
-        #                                         mode='zscore',
-        #                                         length=(-2, 2), 
-        #                                         plot=True, 
-        #                                         cmap='Spectral_r')
-        # df_tfr_all.append(df_tfr) 
+        # 6b. Extract Lempel-Ziv
+        df_lziv = analyze_sleep_nmes_epochs_lziv(epochs, subject, night)
+        df_lziv_all.append(df_lziv)
         
-        # # 8a. Coupling Analysis (ERPAC)
-        # df_erpac = analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=True)
-        # df_erpac_all.append(df_erpac)   
+        # 7a. Extract TFR
+        df_tfr = analyze_sleep_nmes_epochs_tfr(epochs, subject, night, 
+                                                # freq_range=(5, 25), 
+                                                freq_range=(4, 25),
+                                                steps=0.5,  
+                                                baseline=(-3, -2),
+                                                mode='zscore',
+                                                length=(-2, 2), 
+                                                plot=True, 
+                                                cmap='Spectral_r')
+        df_tfr_all.append(df_tfr) 
         
-        # # 8b. Coupling Analysis (ndPAC) 
-        # df_ndpac = analyze_sleep_nmes_epochs_ndPAC_new(epochs, subject, night, method='hilbert')
-        # df_ndpac_all.append(df_ndpac) 
+        # 8a. Coupling Analysis (ERPAC)
+        df_erpac = analyze_sleep_nmes_epochs_erpac(epochs, subject, night, plot=True)
+        df_erpac_all.append(df_erpac)   
         
-        # # 9. Extract inst HR
-        # df_inst_hr = analyze_sleep_nmes_hr(epochs, subject, night)
-        # df_inst_hr_all.append(df_inst_hr)
+        # 8b. Coupling Analysis (ndPAC) 
+        df_ndpac = analyze_sleep_nmes_epochs_ndPAC_new(epochs, subject, night, method='hilbert')
+        df_ndpac_all.append(df_ndpac) 
         
-        # # delete to save memory
-        # del epochs, df_phase, df_power, df_tct, df_pci, df_tfr, df_ndpac, df_erpac
+        # 9. Extract inst HR
+        df_inst_hr = analyze_sleep_nmes_hr(epochs, subject, night)
+        df_inst_hr_all.append(df_inst_hr)
+        
+        # delete to save memory
+        del epochs, df_phase, df_power, df_tct, df_pci, df_lziv, df_tfr, df_ndpac, df_erpac
         
     # . Convert epochs into dataframe 
     epochs_all_df = pd.DataFrame(epochs_all, 
@@ -1091,13 +1178,17 @@ if __name__ == '__main__':
 
     # . Convert pci into dataframe 
     df_pci_all_df = pd.concat(df_pci_all).reset_index(drop=True)
-    df_pci_all_df.to_csv(stats_path + 'df_pci.csv')
+    df_pci_all_df.to_pickle(stats_path + 'df_pci.p')
+    
+    # . Convert lziv into dataframe  
+    df_lziv_all_df = pd.concat(df_lziv_all).reset_index(drop=True)
+    df_lziv_all_df.to_pickle(stats_path + 'df_lziv.p')
     
     # . Combine TFRs
     df_tfrs_all = pd.concat(df_tfr_all).reset_index(drop=True)
     df_tfrs_all.to_pickle(stats_path + 'df_tfr.p') 
     
-    # . Combine ERPACs/ndPACS
+    # # . Combine ERPACs/ndPACS
     df_erpacs_all = pd.concat(df_erpac_all).reset_index(drop=True)
     df_erpacs_all.to_pickle(stats_path + 'df_erpac.p')
     

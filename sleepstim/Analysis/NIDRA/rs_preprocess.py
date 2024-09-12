@@ -201,7 +201,7 @@ def preprocess_rs_data(filename, save_path, figure_path, save=True):
         # Save into path
         if save:
             raw_csd.save(save_path + f'{subject}_{night}_{session}_rs_csd-raw.fif', overwrite=True)
-            epochs.save(save_path + f'{subject}_{night}_{session}_rs-epo.fif', overwrite=True)
+            epochs.save(save_path + f'{subject}_{night}_{session}_rs-Deltaepo.fif', overwrite=True)
             epochs_csd.save(save_path + f'{subject}_{night}_{session}_rs_csd-epo.fif', overwrite=True)
             
         ## 9. Plot cleaned data

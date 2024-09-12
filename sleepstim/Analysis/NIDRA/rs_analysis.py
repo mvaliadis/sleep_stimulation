@@ -91,16 +91,48 @@ def analyze_rs_data(file, figure_path, plot=False):
                                            bands=[(1, 4, 'Delta'), (4, 8, 'Theta'),
                                                   (8, 12, 'Alpha'), (12, 30, 'Beta'),
                                                   (30, 45, 'Gamma')])
+        
+        
+        # FOOOF data                 
+        fm = fooof.FOOOFGroup(max_n_peaks=5)
+        fm.fit(freqs, psds.mean(0), freq_range=(1, 45)) 
+        # fooof_plot(fm, cond) 
+        
+        # Extract aperiodic components for all channel
+        power_df['Offset'] = fm.get_params(name='aperiodic_params', col='offset')
+        spect_exponent = fm.get_params(name='aperiodic_params', col='exponent')
+        power_df['Aperiodic'] = spect_exponent 
+    
+        # Extract oscillatory component of signal
+        fooofed_spectrum_ = [fm.get_fooof(ind=idx, regenerate=True).fooofed_spectrum_ for idx in range(len(fm))]
+        ap_fit = [fm.get_fooof(ind=idx, regenerate=True)._ap_fit for idx in range(len(fm))]
+        oscillatory_component = np.subtract(fooofed_spectrum_, ap_fit)
+
+        # Calculate fooofed oscillatory spectrum bandpower
+        bandpower_osc = yasa.bandpower_from_psd(oscillatory_component, 
+                                                fm.freqs, 
+                                                ch_names=epo_spectrum.ch_names,
+                                                bands=[(1, 4, 'Delta'), (4, 8, 'Theta'), 
+                                                       (8, 12, 'Alpha'), (12, 30, 'Beta'), 
+                                                       (30, 45, 'Gamma')], relative=False)
+        # Append to dicts
         power_df.insert(0, 'Subject', subject)
         power_df.insert(1, 'Night', night)
         power_df.insert(2, 'Condition', cond)
         power_df.insert(3, 'Session', session)
         power_df.insert(4, 'Mode', mode)
+        power_df['Delta_log'] = np.log(power_df['Delta'])
+        power_df['Theta_log'] = np.log(power_df['Theta'])
+        power_df['Alpha_log'] = np.log(power_df['Alpha'])
+        power_df['Beta_log'] = np.log(power_df['Beta'])
+        power_df['Gamma_log'] = np.log(power_df['Gamma'])
+        power_df['Delta_Osc'] = bandpower_osc['Delta']
+        power_df['Theta_Osc'] = bandpower_osc['Theta']
+        power_df['Alpha_Osc'] = bandpower_osc['Alpha']
+        power_df['Beta_Osc'] = bandpower_osc['Beta']
+        power_df['Gamma_Osc'] = bandpower_osc['Gamma']
         
-        # FOOOF data                 
-        fm = fooof.FOOOFGroup(max_n_peaks=5)
-        fm.fit(freqs, psds.mean(0), freq_range=(1, 45)) 
-        
+
         df_fooof_dict ={
             'Subject': subject,
             'Night': night, 
@@ -110,10 +142,7 @@ def analyze_rs_data(file, figure_path, plot=False):
             'fooof' : [fm],
             'Spectra_mne' : [epo_spectrum], 
             }
-        
-        # Extract aperiodic components for all channel
-        power_df['Offset'] = fm.get_params(name='aperiodic_params', col='offset')
-        power_df['Aperiodic'] = fm.get_params(name='aperiodic_params', col='exponent')           
+                  
     
         # Define and plot frequency bands of interest
         if plot:

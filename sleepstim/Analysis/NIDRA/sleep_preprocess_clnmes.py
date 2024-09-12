@@ -163,9 +163,9 @@ def preprocess_sleep_nmes_data(filename, save_path, save=True):
         night = 'pinknoise'
     else:
         night = 'nmes'
-        # del xdf_file, eego
-        # gc.collect()     
-        # return []
+        del xdf_file, eego
+        gc.collect()     
+        return []
         
     if night == 'nmes':
         # Extract timestamps of nmes sham markers

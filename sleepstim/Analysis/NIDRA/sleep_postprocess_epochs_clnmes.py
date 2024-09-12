@@ -208,8 +208,8 @@ def postprocess_sleep_nmes_epochs(file, save_path, fig_path, save=True):
     epochs = mne.read_epochs(file)
     epochs.filter(0.5, None) #30
     
-    # 1b. Get stim condition
-    mode = list(epochs.event_id)[0].split('_')[0]
+    # # 1b. Get stim condition
+    # mode = list(epochs.event_id)[0].split('_')[0]
     
     # 2. Identify bads once again
     bads, _ = nk.eeg_badchannels(epochs.get_data(picks='eeg', units='uV').mean(0))
@@ -280,12 +280,8 @@ def postprocess_sleep_nmes_epochs(file, save_path, fig_path, save=True):
     # 5c. Autoreject for epoch wise interpolation - DNU
     # ar = AutoReject(picks='eeg', n_jobs=-1)
     # clean_epochs = ar.fit_transform(clean_epochs) 
-        
-    # 6a. Apply time shift correction for pinknoise
-    if mode == 'pn':
-        clean_epochs.shift_time(-.1)
-        
-    # 6b. Apply baseline correction
+               
+    # 6. Apply baseline correction
     clean_epochs.apply_baseline(baseline=(-3, -1.5))
     
     # 7. Appy surface Laplacian interpretation
@@ -389,6 +385,8 @@ if __name__ == '__main__':
     for file in tqdm(glob.glob(path)):
         if 'csd' not in file and 'lm' not in file:
             print(file)
+            # epochs = mne.read_epochs(file, preload=False)
+            # print(list(epochs.event_id)[0])
             postprocess_sleep_nmes_epochs(file, save_path, fig_path, save=True)
    
     new_path = '/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/*_csd-epo.fif'
