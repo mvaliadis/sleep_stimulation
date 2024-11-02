@@ -81,8 +81,8 @@ def process_pvt(file):
                               'Night': night, 
                               'Mode': mode})
         
-        # drop RTs over 5 seconds
-        df_rt = df_rt[df_rt.RT <= 5000]
+        # drop RTs over 2.5 seconds
+        df_rt = df_rt[df_rt.RT <= 2500]
         
         return df_rt
     

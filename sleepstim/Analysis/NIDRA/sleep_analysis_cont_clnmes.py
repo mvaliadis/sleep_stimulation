@@ -53,6 +53,99 @@ def graveyard(path_to_eeg='/media/administrator/Sleep_Data/Processed/LaKu_1_1-ra
     spectral_pipe.plot_psds(picks=["C3"])
     spectral_pipe.plot_topomap_collage()           
 
+def analyze_sleep_nmes_so_spindles_update(file, stats_path, hypno_path, thresh=25, ref='csd'):
+    # 0a. Get subject, night info
+    subject, night, ref = file.split('/')[-1].split('-')[0].split('_')
+    
+    # 0b. Check if this subject night has already been processed
+    if ref == 'csd':
+        spindles_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_spindles.csv')
+    elif ref == 'lm':
+        spindles_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_spindles_lm.csv')
+    
+    if os.path.exists(spindles_output_path):
+        print(f"Updating spindle data for {subject} {night}")
+    else:
+        print(f"Processing spindle data for {subject} {night}")
+    
+    # 1a. Load continuous data 
+    raw = mne.io.read_raw_fif(file, preload=False) 
+    
+    # 1b. Get stimulation condition from epoch events
+    if ref == 'csd':
+        events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_csd-epo.fif', 
+                                 return_event_id=True)
+    elif ref == 'lm':
+        events = mne.read_events(f'/media/administrator/Sleep_Data/Processed/Sleep/Final/Epochs/{subject}_{night}_lm-epo.fif', 
+                                 return_event_id=True)
+    
+    if 'pn_sham_c3' in events[-1]:
+        mode = 'pn'
+    elif 'nmes_sham_c3' in events[-1]:
+        mode = 'nmes'
+    
+    # 2. Load hypnogram
+    hypno = np.load(hypno_path + f'{subject}_{night}_hypno.npy')
+    
+    # 3. SO/Spindle detection
+    if ref == 'csd':
+        data = raw.get_data('csd') * 1e3
+    elif ref == 'lm':
+        data = raw.get_data('eeg') * 1e6
+
+    # Detect spindles (update this step)
+    # spindle = yasa.spindles_detect(
+    #     data=data,
+    #     sf=raw.info['sfreq'],
+    #     hypno=hypno,
+    #     ch_names=raw.ch_names[0:64],
+    #     include=(2, 3),  # N2, N3 sleep stages
+    #     freq_sp=(10, 16),  # Broaden spindle frequency range
+    #     freq_broad=(1, 40),  # Broaden broadband frequency range
+    #     duration=(0.3, 3),  # Expand spindle duration
+    #     thresh={'rel_pow': 0.1, 'corr': None, 'rms': 1.5},  # Lower detection thresholds
+    #     remove_outliers=True
+    # )
+    
+    spindle = yasa.spindles_detect(data=data,
+                                    sf=raw.info['sfreq'],
+                                    hypno=hypno,
+                                    ch_names=raw.ch_names[0:64],
+                                    include=(2, 3),
+                                    freq_sp=(12, 16),
+                                    freq_broad=(1, 30),
+                                    duration=(0.5, 2), 
+                                    thresh={'rel_pow':0.1,'corr':None,'rms':1.5},
+                                    remove_outliers=True,
+                                    )  
+
+    sp_summary = spindle.summary(grp_chan=True, grp_stage=True)
+    sp_summary.insert(0, 'Subject', subject)
+    sp_summary.insert(1, 'Night', night)
+    sp_summary.insert(2, 'Mode', mode)
+
+    # Check if slow-wave (SW) data is already available and needs to be updated
+    sw_output_path = os.path.join(stats_path, f'Events/{subject}_{night}_sw.csv')
+    if os.path.exists(sw_output_path):
+        sw_summary = pd.read_csv(sw_output_path, index_col=0)
+        
+        # Detect co-occurring SW/spindle events and update SW summary
+        sw_summary['CooccurringSpindle'] = sw_summary.apply(
+            lambda row: spindle.summary(grp_chan=True, grp_stage=True)['Count'].sum(), axis=1
+        )
+        sw_summary.reset_index().to_csv(sw_output_path, index=False)
+    else:
+        print(f"SW data not found for {subject} {night}, only updating spindles.")
+
+    # Write spindle summary to CSV
+    sp_summary.reset_index().to_csv(spindles_output_path, index=False)
+    print(f"Processed and updated spindles for {subject} {night}")
+
+    # Clean up variables
+    del raw, events, spindle
+    
+    return sw_summary, sp_summary
+
 def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path, thresh=25, ref='csd'):
     # 0a. Get subject, night info
     subject, night, ref = file.split('/')[-1].split('-')[0].split('_')
@@ -131,17 +224,29 @@ def analyze_sleep_nmes_so_spindles(file, stats_path, hypno_path, thresh=25, ref=
     # yasa.topoplot(sw_summary.loc[3].Density)
     
     # Detect spindles
+    # spindle = yasa.spindles_detect(data=data,
+    #                                sf=raw.info['sfreq'],
+    #                                hypno=hypno,
+    #                                ch_names=raw.ch_names[0:64],
+    #                                include=(2, 3),
+    #                                freq_sp=(12, 16),
+    #                                freq_broad=(1, 30),
+    #                                duration=(0.5, 2), 
+    #                                thresh={'rel_pow':0.1,'corr':None,'rms':1.5},
+    #                                remove_outliers=True,
+    #                                )  
+    
     spindle = yasa.spindles_detect(data=data,
                                    sf=raw.info['sfreq'],
                                    hypno=hypno,
                                    ch_names=raw.ch_names[0:64],
                                    include=(2, 3),
-                                   freq_sp=(12, 16),
-                                   freq_broad=(1, 30),
-                                   duration=(0.5, 2), 
+                                   freq_sp=(10, 16),
+                                   freq_broad=(1, 40),
+                                   duration=(0.3, 3), 
                                    thresh={'rel_pow':0.1,'corr':None,'rms':1.5},
                                    remove_outliers=True,
-                                   )  
+                                   )
         
     sp_summary = spindle.summary(grp_chan=True, grp_stage=True)
     # yasa.topoplot(sp_summary.loc[2].Density)
@@ -794,6 +899,8 @@ if __name__ == '__main__':
         # Extract SO and Spindle summaries
         sw_summary, sp_summary = analyze_sleep_nmes_so_spindles(file, stats_path, 
                                                                 hypno_path, ref='csd')
+        # sw_summary, sp_summary = analyze_sleep_nmes_so_spindles_update(file, stats_path,
+        #                                                                hypno_path, ref='csd')
         
         # HRV analysis
         df_hrv = analyze_sleep_hrv_power(file, stats_path, figure_path, nrem_block=True, 
@@ -830,20 +937,36 @@ if __name__ == '__main__':
     df_spindles.to_csv(stats_path + 'df_spindles.csv')
     df_sw = pd.concat(slowwaves).reset_index(drop=True)
     df_sw.to_csv(stats_path + 'df_sw.csv')
-    df_hrvs = pd.concat(hrvs).reset_index(drop=True)
+    
+
+    # concatenate only common columns
+    def concat_common(df):
+        # Get columns from the first DataFrame
+        first_columns = df[0].columns
+    
+        # Find common columns across all DataFrames in their original order
+        common_columns = [col for col in first_columns if all(col in df_.columns for df_ in df)]
+    
+        # Concatenate DataFrames using only the common columns in the order they appear in the first DataFrame
+        df_concat = pd.concat([df_[common_columns] for df_ in df], ignore_index=True)
+        
+        return df_concat
+
+    df_hrvs = concat_common(hrvs)
     df_hrvs.to_csv(stats_path + 'df_sleep_hrv.csv')
     
 #%%
-# Correlation in NREM sleep
-cols = ["CooccurringSpindle", "ndPAC", "HR", "HRV_RMSSD", "HRV_LFHF","Delta", "Theta", "Alpha", "Sigma"]
-df_hrvs.set_index('Stage').loc[2][cols].corr(method="spearman").round(2)#.iloc[:2]
+# # Correlation in NREM sleep
+# cols = ["CooccurringSpindle", "ndPAC", "HR", "HRV_RMSSD", "HRV_SDNN", 
+#         "HRV_LFHF","Delta", "Theta", "Alpha", "Sigma"]
+# corrs = df_hrvs.set_index('Stage').loc[2][cols].corr(method="spearman").iloc[:2]
 
-# HRV Stats
-for col in df_hrvs.columns[1:93]:
-    try:
-        summary = df_hrvs.rm_anova(dv=col, within=['Stage','Mode'], subject='Subject')
-        if summary['p-GG-corr'][2] < 0.05:
-            print(col)
-            print(summary)
-    except:
-        continue
+# # HRV Stats
+# for col in df_hrvs.columns[1:100]:
+#     try:
+#         summary = df_hrvs.rm_anova(dv=col, within=['Stage','Mode'], subject='Subject')
+#         if summary['p-GG-corr'][2] < 0.05:
+#             print(col)
+#             print(summary)
+#     except:
+#         continue

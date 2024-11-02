@@ -17,11 +17,205 @@ from functools import reduce
 import operator
 import scipy
 import fooof
+import yasa
 
 # Define the path to the summaries
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics'
 
 # Functions
+def topoplot(
+    data,
+    montage="standard_1020",
+    vmin=None,
+    vmax=None,
+    mask=None,
+    title=None,
+    cmap=None,
+    n_colors=100,
+    cbar_title=None,
+    cbar_ticks=None,
+    show_cbar=True,
+    figsize=(6, 6),
+    dpi=80,
+    fontsize=14,
+    axes=None,
+    **kwargs,
+):
+    """
+    Topoplot.
+
+    This is a wrapper around :py:func:`mne.viz.plot_topomap`.
+
+    For more details, please refer to this `example notebook
+    <https://github.com/raphaelvallat/yasa/blob/master/notebooks/15_topoplot.ipynb>`_.
+
+    .. versionadded:: 0.4.1
+
+    Parameters
+    ----------
+    data : :py:class:`pandas.Series`
+        A pandas Series with the values to plot. The index MUST be the channel
+        names (e.g. ['C4', 'F4'] or ['C4-M1', 'C3-M2']).
+    montage : str
+        The name of the montage to use. Valid montages can be found at
+        :py:func:`mne.channels.make_standard_montage`.
+    vmin, vmax : float
+        The minimum and maximum values of the colormap. If None, these will be
+        defined based on the min / max values of ``data``.
+    mask : :py:class:`pandas.Series`
+        A pandas Series indicating the significant electrodes. The index MUST
+        be the channel names (e.g. ['C4', 'F4'] or ['C4-M1', 'C3-M2']).
+    title : str
+        The plot title.
+    cmap : str
+        A matplotlib color palette. A list of color palette can be found at:
+        https://seaborn.pydata.org/tutorial/color_palettes.html
+    n_colors : int
+        The number of colors to discretize the color palette.
+    cbar_title : str
+        The title of the colorbar.
+    cbar_ticks : list
+        The ticks of the colorbar.
+    figsize : tuple
+       Width, height in inches.
+    dpi : int
+        The resolution of the plot.
+    fontsize : int
+        Global font size of all the elements of the plot.
+    **kwargs : dict
+        Other arguments that are passed to :py:func:`mne.viz.plot_topomap`.
+
+    Returns
+    -------
+    fig : :py:class:`matplotlib.figure.Figure`
+        Matplotlib Figure
+
+    Examples
+    --------
+
+    1. Plot all-positive values
+
+    .. plot::
+
+        >>> import yasa
+        >>> import pandas as pd
+        >>> data = pd.Series([4, 8, 7, 1, 2, 3, 5],
+        ...                  index=['F4', 'F3', 'C4', 'C3', 'P3', 'P4', 'Oz'],
+        ...                  name='Values')
+        >>> fig = yasa.topoplot(data, title='My first topoplot')
+
+    2. Plot correlation coefficients (values ranging from -1 to 1)
+
+    .. plot::
+
+        >>> import yasa
+        >>> import pandas as pd
+        >>> data = pd.Series([-0.5, -0.7, -0.3, 0.1, 0.15, 0.3, 0.55],
+        ...                  index=['F3', 'Fz', 'F4', 'C3', 'Cz', 'C4', 'Pz'])
+        >>> fig = yasa.topoplot(data, vmin=-1, vmax=1, n_colors=8,
+        ...                     cbar_title="Pearson correlation")
+    """
+    from matplotlib.colors import ListedColormap
+    
+    # Increase font size while preserving original
+    old_fontsize = plt.rcParams["font.size"]
+    plt.rcParams.update({"font.size": fontsize})
+    plt.rcParams.update({"savefig.bbox": "tight"})
+    plt.rcParams.update({"savefig.transparent": "True"})
+
+    # Make sure we don't do any in-place modification
+    assert isinstance(data, pd.Series), "Data must be a Pandas Series"
+    data = data.copy()
+
+    # Add mask, if present
+    if mask is not None:
+        assert isinstance(mask, pd.Series), "mask must be a Pandas Series"
+        assert mask.dtype.kind in "bi", "mask must be True/False or 0/1."
+    else:
+        mask = pd.Series(1, index=data.index, name="mask")
+
+    # Convert to a dataframe (col1 = values, col2 = mask)
+    data = data.to_frame().join(mask, how="left")
+
+    # Preprocess channel names: C4-M1 --> C4
+    data.index = data.index.str.split("-").str.get(0)
+
+    # Define electrodes coordinates
+    Info = mne.create_info(data.index.tolist(), sfreq=100, ch_types="eeg")
+    Info.set_montage(montage, match_case=False, on_missing="ignore")
+    chan = Info.ch_names
+
+    # Define vmin and vmax
+    if vmin is None:
+        vmin = data.iloc[:, 0].min()
+    if vmax is None:
+        vmax = data.iloc[:, 0].max()
+
+    # Choose and discretize colormap
+    if cmap is None:
+        if vmin < 0 and vmax <= 0:
+            cmap = "mako"
+        elif vmin < 0 and vmax > 0:
+            cmap = "Spectral_r"
+        elif vmin >= 0 and vmax > 0:
+            cmap = "rocket_r"
+
+    cmap = ListedColormap(sns.color_palette(cmap, n_colors).as_hex())
+
+    if "sensors" not in kwargs:
+        kwargs["sensors"] = True
+    if "res" not in kwargs:
+        kwargs["res"] = 256
+    if "names" not in kwargs:
+        kwargs["names"] = chan   
+    if "mask_params" not in kwargs:
+        kwargs["mask_params"] = dict(marker=None)
+
+    # Hidden feature: if names='values', show the actual values.
+    if kwargs["names"] == "values":
+        kwargs["names"] = data.iloc[:, 0][chan].round(2).to_numpy()
+
+    # Start the plot
+    with sns.axes_style("white"):
+        if axes is None:
+            fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        else:
+            fig = plt.gcf()
+            ax = axes
+        # Plot topomap
+        im, _ = mne.viz.plot_topomap(
+            data=data.iloc[:, 0][chan],
+            pos=Info,
+            vlim=(vmin, vmax), 
+            mask=data.iloc[:, 1][chan],
+            cmap=cmap,
+            show=False,
+            axes=ax,
+            **kwargs,
+            
+        )
+
+        if title is not None:
+            ax.set_title(title)
+
+        # Add colorbar
+        if cbar_title is None:
+            cbar_title = data.iloc[:, 0].name
+
+        if show_cbar == True:
+            cbar = fig.colorbar(ax.images[-1], ax=ax, orientation="vertical",
+                            ticks=None, fraction=0.05)
+            cbar.set_label(cbar_title)
+
+            #cax = fig.add_axes([0.95, 0.3, 0.02, 0.5])
+            #cbar = fig.colorbar(im, cax=cax, ticks=cbar_ticks, fraction=0.5)
+            #cbar.set_label(cbar_title)
+
+        # Revert font-size
+        plt.rcParams.update({"font.size": old_fontsize})
+        
+    return fig
+
 def drop_bads_df(df, subject_nights = [('ChrSt', 1), ('UyDe', 1), ('IsEb', 2)]):
     # Create tuples of (Subject, Night) pairs to drop
     bads_and_nights = subject_nights
@@ -155,14 +349,122 @@ def plot_psd_diff(rs_df):
         # tighten layout
         plt.tight_layout()
 
-def psd_stats(rs_df):
+def psd_stats_new(rs_df, target='Aperiodic', stat='Difference'):
+    
+    # Initialize a structure to hold contrasts for each level of the factor
+    contrasts = {}
+    
+    # Create copy of df
+    df = rs_df.copy()[rs_df.Condition == 'eyes_closed']      
+    
+    # Iterate over target groupings
+    for level in df.Mode.unique():
+        grouped = df.groupby(['Mode','Session','Subject','Chan']).mean(numeric_only=True).loc[level][target].unstack()[list(df.Chan.unique())]
+        contrasts[level] = grouped
+              
+    # Create contrast for nmes - pn spindle density
+    contrast_nmes = contrasts['nmes'].loc['post'] - contrasts['nmes'].loc['pre']
+    contrast_pn = contrasts['pn'].loc['post'] - contrasts['pn'].loc['pre']
+    if stat == 'Difference':
+        contrasts_diff = contrast_nmes - contrast_pn 
+    elif stat == 'Ratio':
+        contrasts_diff = ((contrast_nmes - contrast_pn) / contrast_pn ) * 100
+    elif stat == 'Log Ratio':
+        contrasts_diff = ((np.log1p(contrast_nmes) - np.log1p(contrast_pn)) / np.log1p(contrast_pn)) * 100
+    contrast = contrasts_diff.dropna().values
+    
+    # threshold for cluster test
+    pval = 0.05
+    dof = contrast.shape[0] - 1  # degrees of freedom for the test
+    thresh = scipy.stats.t.ppf(1 - pval / 2, dof)  # two-tailed, t distribution
+    
+    # adjacency matrix
+    Info = mne.create_info(df.Chan.unique().tolist(), sfreq=128, ch_types="eeg")
+    Info.set_montage(mne.channels.make_standard_montage('standard_1005'), match_case=False, on_missing="ignore")
+    adjacency, ch_names = mne.channels.find_ch_adjacency(Info, 'eeg')
+    
+    # Perform the permutation cluster test
+    t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+        contrast,
+        threshold=thresh,
+        adjacency=adjacency,
+        tail=0,  # two-tailed test
+        n_jobs=-1,
+        n_permutations=1024,
+        buffer_size=None,
+        out_type="mask",
+        seed=4,
+      )
+    
+    # Get significant clusters
+    if all(p > 0.05 for p in cluster_p_values):
+        df_stats = pd.DataFrame({'Chan': ch_names, 
+                                 'Power': contrast.mean(0).squeeze(), 
+                                 'T-Stat': t_obs.squeeze(),
+                                 'Null' : [False] * len(ch_names),
+                                 'Sig': [False] * len(ch_names)})
+    else:
+        df_stats = pd.DataFrame({'Chan': ch_names, 
+                                 'Power': contrast.mean(0).squeeze(), 
+                                 'T-Stat': t_obs.squeeze(), 
+                                 'Null' : [False] * len(ch_names),
+                                 'Sig': clusters[np.argmin(cluster_p_values)]
+                                 })
+    
+    # Set channel as index
+    df_stats = df_stats.set_index("Chan")
+    
+    # Plot feature and stats
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    # unit = 'Log Ratio' + f' ({target})'
+    unit = f'{stat}'
+    
+    # Get correct cmap based on sign of data
+    if all(np.sign(contrast.mean(0)) == -1.0):
+        cmap = 'Blues'
+    elif any(np.sign(contrast.mean(0)) == -1.0):
+        cmap = 'RdBu_r'
+    else:
+        cmap = 'Reds'
+    
+    # Plot topomaps
+    topoplot(df_stats['Power'], 
+             mask=df_stats['Null'], 
+             cmap=cmap,
+             names=None,
+             axes=ax[0],
+             cbar_title=unit,
+            )
+    
+    topoplot(df_stats['T-Stat'], 
+            mask=df_stats['Sig'], 
+            cmap=cmap,
+            names=None,
+            axes=ax[1],
+            mask_params=dict(markersize=6, markerfacecolor='y'), 
+            )
+    
+    # Plot cluster p-values at the bottom of the figure
+    try:
+        p_value_str = ', '.join([f'Cluster p={cluster_p_values.min():.3f}'])
+    except:
+        p_value_str = ', '.join(['No Clusters found...'])
+    fig.text(0.5, 0.01, p_value_str, ha='center', fontsize=12, color='black')
+
+    # Add figure title
+    fig.suptitle(f'{target.capitalize()} (CLNMES - CLAS)', fontsize=18)
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+    
+def psd_stats(rs_df, feature='Aperiodic'):
     contrasts = []
     for mode in rs_df.Mode.unique():
-        df_post = rs_df[rs_df.Mode==mode][rs_df.Session=='post']#[rs_df.Condition=='eyes_closed']
-        df_pre = rs_df[rs_df.Mode==mode][rs_df.Session=='pre']#[rs_df.Condition=='eyes_closed']
+        df_post = rs_df[rs_df.Mode==mode][rs_df.Session=='post'][rs_df.Condition=='eyes_closed']
+        df_pre = rs_df[rs_df.Mode==mode][rs_df.Session=='pre'][rs_df.Condition=='eyes_closed']
         
-        grouped_post = df_post.groupby(['Subject', 'Chan']).mean(numeric_only=True)['Aperiodic'].unstack()[list(rs_df.Chan.unique())]
-        grouped_pre = df_pre.groupby(['Subject', 'Chan']).mean(numeric_only=True)['Aperiodic'].unstack()[list(rs_df.Chan.unique())]
+        grouped_post = df_post.groupby(['Subject', 'Chan']).mean(numeric_only=True)[feature].unstack()[list(rs_df.Chan.unique())]
+        grouped_pre = df_pre.groupby(['Subject', 'Chan']).mean(numeric_only=True)[feature].unstack()[list(rs_df.Chan.unique())]
         
         def combine_common_subjects(grouped_post, grouped_pre):
             # Align both DataFrames to ensure only overlapping subjects are considered
@@ -185,7 +487,7 @@ def psd_stats(rs_df):
     
     clus_kwargs = {'n_permutations' : 1024,  # 1000 is the minimum
                    'threshold' : t_thresh, 
-                   'tail' : 1,               # one-tailed test (0 for two-tailed)
+                   'tail' : 0,               # one-tailed test (0 for two-tailed)
                    'n_jobs' : -1,            # increase value to speed up computations
                    'buffer_size' : None,
                    'out_type' : 'mask',      # returns a mask map instead of indices of sig. points
@@ -201,6 +503,7 @@ def psd_stats(rs_df):
        contrast,
        adjacency=adjacency,
        **clus_kwargs)
+    # print(cluster_p_values.min())
     
     fig, axes = plt.subplots(1,1)
     
@@ -209,7 +512,7 @@ def psd_stats(rs_df):
                                   cmap='Spectral_r', 
                                   #vlim=(-0.1, 0.1),
                                   #contours=0,
-                                  mask=clusters[0],
+                                  # mask=clusters[0],
                                   sensors=False, 
                                   axes=axes, 
                                   show=False, names=None)
@@ -233,8 +536,8 @@ def psd_stats_rm_anova(rs_df, target='Aperiodic', test='Cluster'):
             if target != 'Aperiodic':
                 if target.endswith('_Osc'):
                     pass
-                else:
-                    grouped_session = np.log(grouped_session)
+                # else:
+                #     grouped_session = np.log(grouped_session)
             contrasts[mode][session] = grouped_session
             if mode_common is None:
                 mode_common = set(grouped_session.index)
@@ -322,7 +625,7 @@ def plot_cluster_results(fvals, pvals, clusters_all, effect_labels, Info, target
         if len(pval) == 0 or all(pval > 0.05):
             im, cn = mne.viz.plot_topomap(fval.squeeze(), 
                                           pos=Info, 
-                                          contours=0,
+                                          # contours=0,
                                           mask=None,
                                           mask_params=dict(markersize=6, markerfacecolor='y'),
                                           sensors=False, 
@@ -331,7 +634,7 @@ def plot_cluster_results(fvals, pvals, clusters_all, effect_labels, Info, target
         else:
             im, cn = mne.viz.plot_topomap(fval.squeeze(), 
                                           pos=Info, 
-                                          contours=0,
+                                          # contours=0,
                                           mask=clusters[pval.argmin()].squeeze(),
                                           mask_params=dict(markersize=6, markerfacecolor='y'),
                                           sensors=False, 
@@ -414,6 +717,10 @@ fooof_plot(fg_pece, 'CLAS (Evening)')
 rs_df = pd.read_csv(os.path.join(stats_path, 'df_rs.csv'), index_col=0)
 rs_df = drop_bads_df(rs_df)
 
+# Log transform data
+feat_log = ['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma', 'TotalAbsPow']
+rs_df[feat_log] = np.log(rs_df[feat_log])
+
 # Interaction stats:
 psd_stats_rm_anova(rs_df, target='Aperiodic', test='Cluster')
 
@@ -426,14 +733,12 @@ psd_stats_rm_anova(rs_df, target='Aperiodic', test='Cluster')
 frontocentral = ['Fz', 'FC1', 'FCz', 'FC2', 'Cz'] #, 'C1', 'C2']
 fc_df = rs_df[rs_df.Chan.isin(frontocentral)]
 # mean over fc channels
-fc_df = fc_df.groupby(['Condition','Mode','Subject','Session']).mean()
+fc_df = fc_df.groupby(['Condition','Mode','Subject','Session']).mean(numeric_only=True)
 # only eyes open condition
 fc_df = fc_df.reset_index() #loc['eyes_closed'].reset_index()
 fc_df['Session'] = fc_df['Session'].replace({'pre': 'Evening', 'post': 'Morning'})
  
 # 3. FC theta plots
-# Convert scale to log here
-fc_df['Theta'] = np.log(fc_df['Theta'])
 fc_df = nan_imputation_missing_data(fc_df).reset_index(drop=True)
 
 # Create a figure with two subplots side by side
@@ -471,16 +776,23 @@ plt.show()
 
 fc_df.rm_anova(dv='Theta', subject='Subject', within=['Mode','Session'])
 
-
 #%%
 # 4. Convert dataframe to numpy for post and pre
-rs_df_array_post = prepare_df_to_numpy(rs_df[np.logical_and(rs_df.Condition=='eyes_open',
+rs_df = rs_df.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+rs_df_array_post = prepare_df_to_numpy(rs_df[np.logical_and(rs_df.Condition=='eyes_closed',
                                                             rs_df.Session=='post')], 
                                  features=['Delta', 'Theta', 'Alpha', 'Beta', 'Aperiodic'])
 
-rs_df_array_pre = prepare_df_to_numpy(rs_df[np.logical_and(rs_df.Condition=='eyes_open',
+rs_df_array_pre = prepare_df_to_numpy(rs_df[np.logical_and(rs_df.Condition=='eyes_closed',
                                                            rs_df.Session=='pre')], 
                                  features=['Delta', 'Theta', 'Alpha', 'Beta', 'Aperiodic'])
+
+change_rs_df  = ((np.log1p(rs_df_array_post) - np.log1p(rs_df_array_pre)) 
+                 / np.log1p(rs_df_array_pre)) * 100
+change_rs_df  = rs_df_array_post - rs_df_array_pre
+
+aperiodic = change_rs_df[:,:,-1]
+yasa.topoplot(pd.DataFrame(aperiodic.mean(0), index=rs_df.Chan.unique()).squeeze())
 
 #%%
 # Load HRV data from RS 

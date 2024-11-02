@@ -28,7 +28,7 @@ allArrays = []
 stageArrays = []
 
 for idx, fname in enumerate(files):
-    
+    print(f'Processing dataset: {fname}')
     datArray, stageArray = process_raw_EDF(fname)
      
     ## compute PSD with welch's method + yasa absolute/relative power extraction 
@@ -77,12 +77,12 @@ for idx, fname in enumerate(tqdm(files)):
     # data = data.reshape(nepochs, nchans*nbands, order='F')
     
     # more extesive feature extraction
-    # data2 = feature_extraction(datArray, sf=128)
-    # data2['subject'] = [fname.split('-')[-1]] * len(data2)
+    data2 = feature_extraction(datArray, sf=128)
+    data2['subject'] = [fname.split('-')[-1]] * len(data2)
     
     # ecg/hrv feature extraction
-    data_ecg = ecg_feature_extraction(datArray[:,-1,:], sf=128, method='neurokit2')
-    data_ecg['subject'] = [fname.split('-')[-1]] * len(data_ecg)
+    # data_ecg = ecg_feature_extraction(datArray[:,-1,:], sf=128, method='neurokit2')
+    # data_ecg['subject'] = [fname.split('-')[-1]] * len(data_ecg)
     # data_ecg['stage'] = data_sleepecg['stage']
     
     # data_sleepecg = ecg_feature_extraction(datArray[:,-1,:], sf=128, method='sleepecg')
@@ -98,8 +98,8 @@ for idx, fname in enumerate(tqdm(files)):
     
     # save as pickle files
     #pickle.dump(data, open(fname + "_allArrays.p", "wb"))
-    #pickle.dump(data2, open(fname + "_allArrays_df.p", "wb"))
-    pickle.dump(data_ecg, open(fname + "_allArrays_hrv_df.p", "wb"))
+    pickle.dump(data2, open(fname + "_allArrays_df_new.p", "wb"))
+    #pickle.dump(data_ecg, open(fname + "_allArrays_hrv_df.p", "wb"))
     #pickle.dump(data2_dfs, open(fname + "_allArrays_numpy.p", "wb"))
     #pickle.dump(stageArray, open(fname + "_stageArrays.p", "wb"))
 

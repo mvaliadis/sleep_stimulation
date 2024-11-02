@@ -1316,12 +1316,8 @@ def erpac_stats(erpac, tmin, tmax, target, mode, times=(-2, 2)):
 df_inst_hr =  pd.read_csv(stats_path + 'df_inst_hr.csv', index_col=0)
 df_inst_hr = drop_bads_df(df_inst_hr)
 df_inst_hr = df_inst_hr.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
-df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HR_Ratio_Change')
-df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HRV_RMSSD_Ratio_Change')
-df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HRV_SDNN_Ratio_Change')
 
 def plot_hr_changes(df, metric='HR_Ratio_Change'):
-    # df = df_inst_hr.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
     df['Target_Chan'] = df['Target_Chan'].str.replace('_', ' ').str.capitalize()
 
     g = sns.catplot(
@@ -1341,7 +1337,7 @@ def plot_hr_changes(df, metric='HR_Ratio_Change'):
                     dodge=True, palette="pastel", 
                     size=10, alpha=0.5, linewidth=1)
     
-    g.set_axis_labels("", "Heart Rate Change (%)", fontsize=14)
+    g.set_axis_labels("", "Ratio Change (%)", fontsize=14)
     g.set_titles("{col_name} Target ({row_name})", size=16)
     g.fig.suptitle(f"{metric}", fontsize=16, weight='bold') 
     plt.show()
@@ -1350,6 +1346,15 @@ def plot_hr_changes(df, metric='HR_Ratio_Change'):
     df.rm_anova(within=['Mode','Target_Chan'], 
                 subject='Subject', dv=metric)
   
+df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HR_Ratio_Change')
+plot_hr_changes(df_inst_hr, metric='HR_Ratio_Change')
+
+df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HRV_RMSSD_Ratio_Change')
+plot_hr_changes(df_inst_hr, metric='HRV_RMSSD_Ratio_Change')
+
+df_inst_hr.rm_anova(within=['Mode','Target_Chan'], subject='Subject', dv='HRV_SDNN_Ratio_Change')
+plot_hr_changes(df_inst_hr, metric='HRV_SDNN_Ratio_Change')
+
 #%%
 ## 1. Phase targeting analysis
 df_phase = pd.read_csv(os.path.join(stats_path, 'df_phase.csv'), index_col=0)

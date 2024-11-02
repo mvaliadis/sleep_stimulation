@@ -16,6 +16,7 @@ import numpy as np
 import seaborn as sns
 from statsmodels.stats.multitest import multipletests
 import mne
+import os
 
 ## Helper functions
 def plot_mode_condition(data, dv, ax, title):
@@ -98,6 +99,229 @@ def nan_imputation_missing_data(df):
     
     return combined_df   
 
+def topoplot(
+    data,
+    montage="standard_1020",
+    vmin=None,
+    vmax=None,
+    mask=None,
+    title=None,
+    cmap=None,
+    n_colors=100,
+    cbar_title=None,
+    cbar_ticks=None,
+    show_cbar=True,
+    figsize=(6, 6),
+    dpi=80,
+    fontsize=14,
+    axes=None,
+    **kwargs,
+):
+    """
+    Topoplot.
+
+    This is a wrapper around :py:func:`mne.viz.plot_topomap`.
+
+    For more details, please refer to this `example notebook
+    <https://github.com/raphaelvallat/yasa/blob/master/notebooks/15_topoplot.ipynb>`_.
+
+    .. versionadded:: 0.4.1
+
+    Parameters
+    ----------
+    data : :py:class:`pandas.Series`
+        A pandas Series with the values to plot. The index MUST be the channel
+        names (e.g. ['C4', 'F4'] or ['C4-M1', 'C3-M2']).
+    montage : str
+        The name of the montage to use. Valid montages can be found at
+        :py:func:`mne.channels.make_standard_montage`.
+    vmin, vmax : float
+        The minimum and maximum values of the colormap. If None, these will be
+        defined based on the min / max values of ``data``.
+    mask : :py:class:`pandas.Series`
+        A pandas Series indicating the significant electrodes. The index MUST
+        be the channel names (e.g. ['C4', 'F4'] or ['C4-M1', 'C3-M2']).
+    title : str
+        The plot title.
+    cmap : str
+        A matplotlib color palette. A list of color palette can be found at:
+        https://seaborn.pydata.org/tutorial/color_palettes.html
+    n_colors : int
+        The number of colors to discretize the color palette.
+    cbar_title : str
+        The title of the colorbar.
+    cbar_ticks : list
+        The ticks of the colorbar.
+    figsize : tuple
+       Width, height in inches.
+    dpi : int
+        The resolution of the plot.
+    fontsize : int
+        Global font size of all the elements of the plot.
+    **kwargs : dict
+        Other arguments that are passed to :py:func:`mne.viz.plot_topomap`.
+
+    Returns
+    -------
+    fig : :py:class:`matplotlib.figure.Figure`
+        Matplotlib Figure
+
+    Examples
+    --------
+
+    1. Plot all-positive values
+
+    .. plot::
+
+        >>> import yasa
+        >>> import pandas as pd
+        >>> data = pd.Series([4, 8, 7, 1, 2, 3, 5],
+        ...                  index=['F4', 'F3', 'C4', 'C3', 'P3', 'P4', 'Oz'],
+        ...                  name='Values')
+        >>> fig = yasa.topoplot(data, title='My first topoplot')
+
+    2. Plot correlation coefficients (values ranging from -1 to 1)
+
+    .. plot::
+
+        >>> import yasa
+        >>> import pandas as pd
+        >>> data = pd.Series([-0.5, -0.7, -0.3, 0.1, 0.15, 0.3, 0.55],
+        ...                  index=['F3', 'Fz', 'F4', 'C3', 'Cz', 'C4', 'Pz'])
+        >>> fig = yasa.topoplot(data, vmin=-1, vmax=1, n_colors=8,
+        ...                     cbar_title="Pearson correlation")
+    """
+    from matplotlib.colors import ListedColormap
+    
+    # Increase font size while preserving original
+    old_fontsize = plt.rcParams["font.size"]
+    plt.rcParams.update({"font.size": fontsize})
+    plt.rcParams.update({"savefig.bbox": "tight"})
+    plt.rcParams.update({"savefig.transparent": "True"})
+
+    # Make sure we don't do any in-place modification
+    assert isinstance(data, pd.Series), "Data must be a Pandas Series"
+    data = data.copy()
+
+    # Add mask, if present
+    if mask is not None:
+        assert isinstance(mask, pd.Series), "mask must be a Pandas Series"
+        assert mask.dtype.kind in "bi", "mask must be True/False or 0/1."
+    else:
+        mask = pd.Series(1, index=data.index, name="mask")
+
+    # Convert to a dataframe (col1 = values, col2 = mask)
+    data = data.to_frame().join(mask, how="left")
+
+    # Preprocess channel names: C4-M1 --> C4
+    data.index = data.index.str.split("-").str.get(0)
+
+    # Define electrodes coordinates
+    Info = mne.create_info(data.index.tolist(), sfreq=100, ch_types="eeg")
+    Info.set_montage(montage, match_case=False, on_missing="ignore")
+    chan = Info.ch_names
+
+    # Define vmin and vmax
+    if vmin is None:
+        vmin = data.iloc[:, 0].min()
+    if vmax is None:
+        vmax = data.iloc[:, 0].max()
+
+    # Choose and discretize colormap
+    if cmap is None:
+        if vmin < 0 and vmax <= 0:
+            cmap = "mako"
+        elif vmin < 0 and vmax > 0:
+            cmap = "Spectral_r"
+        elif vmin >= 0 and vmax > 0:
+            cmap = "rocket_r"
+
+    cmap = ListedColormap(sns.color_palette(cmap, n_colors).as_hex())
+
+    if "sensors" not in kwargs:
+        kwargs["sensors"] = True
+    if "res" not in kwargs:
+        kwargs["res"] = 256
+    if "names" not in kwargs:
+        kwargs["names"] = chan   
+    if "mask_params" not in kwargs:
+        kwargs["mask_params"] = dict(marker=None)
+
+    # Hidden feature: if names='values', show the actual values.
+    if kwargs["names"] == "values":
+        kwargs["names"] = data.iloc[:, 0][chan].round(2).to_numpy()
+
+    # Start the plot
+    with sns.axes_style("white"):
+        if axes is None:
+            fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+        else:
+            fig = plt.gcf()
+            ax = axes
+        # Plot topomap
+        im, _ = mne.viz.plot_topomap(
+            data=data.iloc[:, 0][chan],
+            pos=Info,
+            vlim=(vmin, vmax), 
+            mask=data.iloc[:, 1][chan],
+            cmap=cmap,
+            show=False,
+            axes=ax,
+            **kwargs,
+            
+        )
+
+        if title is not None:
+            ax.set_title(title)
+
+        # Add colorbar
+        if cbar_title is None:
+            cbar_title = data.iloc[:, 0].name
+
+        if show_cbar == True:
+            cbar = fig.colorbar(ax.images[-1], ax=ax, orientation="vertical",
+                            ticks=None, fraction=0.05)
+            cbar.set_label(cbar_title)
+
+            #cax = fig.add_axes([0.95, 0.3, 0.02, 0.5])
+            #cbar = fig.colorbar(im, cax=cax, ticks=cbar_ticks, fraction=0.5)
+            #cbar.set_label(cbar_title)
+
+        # Revert font-size
+        plt.rcParams.update({"font.size": old_fontsize})
+        
+    return fig
+
+def filter_pvt_outliers(df, plot=False):
+    # Group data by 'Subject' and 'Session'
+    groups = df.groupby(['Subject', 'Night'])
+    
+    # Define a function to calculate IQR and remove outliers for each group
+    def filter_group(group):
+        Q1 = group['RT'].quantile(0.25)
+        Q3 = group['RT'].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        return group[(group['RT'] >= lower_bound) & (group['RT'] <= upper_bound)]
+   
+    # Apply the function to each group and concatenate the results
+    data_filtered = groups.apply(filter_group).reset_index(drop=True)
+           
+    if plot:   
+        # Before removing outliers
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(x='Subject', y='RT', data=df)
+        plt.title('Before Removing Outliers')
+        plt.show()
+        
+        # After removing outliers
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(x='Subject', y='RT', data=data_filtered)
+        plt.title('After Removing Outliers')
+        plt.show()
+    
+    return data_filtered
 # Load data 
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
 
@@ -125,6 +349,7 @@ df_decay = drop_bads_df(df_decay)
 # 0. PVT/Sleep Macroarchitecture df
 df_pvt = pd.read_csv(stats_path + 'df_pvt.csv', index_col=0)
 df_pvt = drop_bads_df(df_pvt)
+df_pvt = filter_pvt_outliers(df_pvt, plot=False)
 df_pvt_mean = df_pvt.groupby(['Subject','Night','Mode']).mean()
 df_pvt_mean = nan_imputation_missing_data(df_pvt_mean.reset_index()).reset_index(drop=True)
 
@@ -138,7 +363,7 @@ def plot_pvt_sleep_heatmap(df_merged):
     # Select relevant columns for the heatmap
     columns_of_interest = ['RT', 'Lapses_Transformed', 'TST', 'SE', 'SME', '%REM', '%NREM', 'WASO']
     df_corr = merged_df[columns_of_interest]
-    
+        
     # Compute the correlation matrix
     corr_matrix = df_corr.corr()
     
@@ -158,9 +383,9 @@ def plot_pvt_sleep_heatmap(df_merged):
 
 # Plot correlation heatmap
 plot_pvt_sleep_heatmap(merged_df)
-
+ 
 #%%
-# 1. Sleep Macroarchitecture 
+## 1. Sleep Macroarchitecture 
 def sleep_marcroarchitecture_stats_old(df_sleep_stats):
     # Partition data into 2 stim nights    
     x = df_sleep_stats.set_index(['Mode','Subject']).loc['pn']
@@ -250,23 +475,151 @@ print(results_df)
 plt.close('all')
 
 #%%
-# 2. Slow Wave Analysis
+# 2. Spindle Analysis
+
+# Load spindle data
+df_sp = pd.read_csv(os.path.join(stats_path, 'df_spindles.csv'), index_col=0)
+df_sp = drop_bads_df(df_sp)
+df_sp.rename(columns={'Channel':'Chan'}, inplace=True)
+df_sp = df_sp.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+
+# yasa.topoplot(df_sp[df_sp.Stage==2].groupby(['Mode','Chan']).mean(numeric_only=True).Density.loc['nmes'] -
+#               df_sp[df_sp.Stage==2].groupby(['Mode','Chan']).mean(numeric_only=True).Density.loc['pn'])
+
+def SO_spindle_stats(df_sp, target='Density', oscillation='spindle', stage=2):
+    
+    # Initialize a structure to hold contrasts for each level of the factor
+    contrasts = {}
+    
+    # Create copy of df
+    if stage != None:
+        df = df_sp[df_sp.Stage==stage].copy().reset_index(drop=True)
+    else:
+        df = df_sp.copy()      
+    
+    # Drop subject DoGi
+    df = df[df.Subject!='DoGi']
+    
+    for level in df.Mode.unique():
+        grouped = df.groupby(['Mode','Subject','Chan']).mean(numeric_only=True).loc[level][target].unstack()[list(df.Chan.unique())]
+        contrasts[level] = grouped
+              
+    # Create contrast for nmes - pn spindle density
+    contrasts_diff = (np.log1p(contrasts['nmes']) - np.log1p(contrasts['pn']) 
+                      / np.log1p(contrasts['pn'])) * 100
+    # contrasts_diff = contrasts['nmes'] - contrasts['pn']
+    # contrast = scipy.stats.zscore(contrasts['nmes'].values, axis=-1) - scipy.stats.zscore(contrasts['pn'].values, axis=-1)
+    contrast = contrasts_diff.values
+    # s_na, ch_na = np.where(np.isnan(contrast))
+    # contrast[s_na[0], ch_na[0]] = 0
+    
+    # threshold for cluster test
+    pval = 0.05
+    dof = contrast.shape[0] - 1  # degrees of freedom for the test
+    thresh = scipy.stats.t.ppf(1 - pval / 2, dof)  # two-tailed, t distribution
+    
+    # adjacency matrix
+    Info = mne.create_info(df.Chan.unique().tolist(), sfreq=128, ch_types="eeg")
+    Info.set_montage(mne.channels.make_standard_montage('standard_1005'), match_case=False, on_missing="ignore")
+    adjacency, ch_names = mne.channels.find_ch_adjacency(Info, 'eeg')
+    
+    # Perform the permutation cluster test
+    t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+        contrast,
+        threshold=thresh,
+        adjacency=adjacency,
+        tail=0,  # two-tailed test
+        n_jobs=-1,
+        n_permutations=1024,
+        buffer_size=None,
+        out_type="mask",
+        seed=4,
+      )
+    
+    # Get significant clusters
+    if all(p > 0.05 for p in cluster_p_values):
+        df_stats = pd.DataFrame({'Chan': ch_names, 
+                                 'Power': contrast.mean(0).squeeze(), 
+                                 'T-Stat': t_obs.squeeze(),
+                                 'Null' : [False] * len(ch_names),
+                                 'Sig': [False] * len(ch_names)})
+    else:
+        df_stats = pd.DataFrame({'Chan': ch_names, 
+                                 'Power': contrast.mean(0).squeeze(), 
+                                 'T-Stat': t_obs.squeeze(), 
+                                 'Null' : [False] * len(ch_names),
+                                 'Sig': clusters[np.argmin(cluster_p_values)]
+                                 # 'Sig': clusters[0]
+                                 })
+    
+    # Set channel as index
+    df_stats = df_stats.set_index("Chan")
+    
+    # Plot feature and stats
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    unit = 'Log Ratio' + f' ({target})'
+    
+    # Plot topomaps
+    topoplot(df_stats['Power'], 
+             mask=df_stats['Null'], 
+             cmap='Reds',
+             names=None,
+             axes=ax[0],
+             cbar_title=unit,
+            )
+    
+    topoplot(df_stats['T-Stat'], 
+            mask=df_stats['Sig'], 
+            cmap='Reds',
+            names=None,
+            axes=ax[1],
+            mask_params=dict(markersize=6, markerfacecolor='y'), 
+            )
+    
+    # Plot cluster p-values at the bottom of the figure
+    p_value_str = ', '.join([f'Cluster p={cluster_p_values.min():.3f}'])
+    fig.text(0.5, 0.01, p_value_str, ha='center', fontsize=12, color='black')
+
+    # Add figure title
+    if oscillation == 'SO':
+        fig.suptitle(f'Slow Wave {target.capitalize()} (CLNMES - CLAS)', fontsize=18)
+    elif oscillation == 'spindle':
+        fig.suptitle(f'Spindle {target.capitalize()} (CLNMES - CLAS)', fontsize=18)
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.show()
+
+# spindle stats
+SO_spindle_stats(df_sp, target='Density', oscillation='spindle', stage=2)
+SO_spindle_stats(df_sp, target='Density', oscillation='spindle', stage=None)
+
+# spindle stats with channels averaged
+# df_avg_sp = df_sp.set_index('Stage').loc[2].groupby(['Mode','Subject']).mean(numeric_only=True).reset_index()
+# pg.plot_paired(df_avg_sp, dv='Density', within='Mode', subject='Subject', boxplot=False)
+# df_avg_sp.rm_anova(dv='Density', subject='Subject', within='Mode')
+
+#%%
+# 3. Slow Wave Analysis
 variables = ['Count', 'Density', 'Duration','ValNegPeak', 
              'ValPosPeak', 'PTP', 'Slope', 'Frequency',
              'PhaseAtSigmaPeak', 'ndPAC', 'CooccurringSpindle','DistanceSpindleToSW']
-for col in variables:
-    yasa.topoplot(df_sws.groupby(['Mode','Channel']).mean()[col].loc['nmes'])
-    yasa.topoplot(df_sws.groupby(['Mode','Channel']).mean()[col].loc['pn'])
-
-#%%
+    
 # Load slow wave and spindle data
 df_sw = pd.read_csv(stats_path + 'df_sw.csv', index_col=0)
 df_sw = drop_bads_df(df_sw)
 df_sw.rename(columns={'Channel':'Chan'}, inplace=True) 
+df_sw = df_sw.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+
+# SO stats
+SO_spindle_stats(df_sw, target='Density', oscillation='SO', stage=2)
+SO_spindle_stats(df_sw, target='Density', oscillation='SO', stage=3)
+SO_spindle_stats(df_sw, target='Density', oscillation='SO', stage=None)
+
+# df_avg_sw = df_sw.set_index('Stage').loc[3].groupby(['Mode','Subject']).mean(numeric_only=True).reset_index()
 
 def group_microarchiteture_stats(df_sw, stage=2, feature='ndPAC'):
 
-    df_sw = df_sw.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
+    # df_sw = df_sw.groupby('Subject').filter(lambda x: set(x['Mode']) >= {'pn', 'nmes'})
     df_sw = df_sw[df_sw.Stage==stage]
     
     df_nmes = df_sw[(df_sw.Mode == 'nmes')]
@@ -284,12 +637,20 @@ def group_microarchiteture_stats(df_sw, stage=2, feature='ndPAC'):
                             aggfunc='mean').reindex(columns=unique_channels, level=1).values  
         -                    
         df_pn.pivot_table(index='Subject', 
-                            columns='Chan',
-                            values=feature, 
-                            aggfunc='mean').reindex(columns=unique_channels, level=1).values
+                          columns='Chan',
+                          values=feature, 
+                          aggfunc='mean').reindex(columns=unique_channels, level=1).values
     ) 
+        # /  df_pn.pivot_table(index='Subject', 
+        #                      columns='Chan',
+        #                      values=feature, 
+        #                      aggfunc='mean').reindex(columns=unique_channels, level=1).values) * 100
+     
+        
     
     contrast[1, 17] = 0
+    
+    # contrast = scipy.stats.zscore(contrast, axis=-1)
                                                                               
     # Adjacency matrix
     adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif')
@@ -392,7 +753,8 @@ for stim in df_ndpac.Stim.unique():
 
 
 # Pivot table to restructure data for difference calculation
-df_pivot = df_ndpac.pivot_table(index=['Mode','Subject','Night','Chan'], columns='Session',
+df_pivot = df_ndpac.pivot_table(index=['Mode','Subject','Night','Chan'], 
+                                columns='Session',
                                 values=['SigmaPeakTime', 'PhaseAtSigmaPeak', 'ndPAC'])
 
 # Calculate the difference (post - pre)

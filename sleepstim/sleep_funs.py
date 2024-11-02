@@ -23,6 +23,7 @@ import scipy.stats as stats
 from sklearn.metrics import roc_auc_score, auc, roc_curve
 import pickle
 #import liesl
+import fooof
 import yasa
 import random
 import pyxdf
@@ -164,6 +165,13 @@ def unravel_hypnogram(stages, stagelens):
     return hypnogram 
 
 
+def lziv(x):
+    import antropy as ant
+    """Binarize the EEG signal and calculate the Lempel-Ziv complexity.
+    """
+    return ant.lziv_complexity(x > np.median(x), normalize=True)
+    
+
 def feature_extraction(epochs, sf, line_noise_freq=(59, 61),
                        ch_names=['C3', 'C4', 'M1', 'M2', 'EOG', 'EMG']):
     """
@@ -227,16 +235,39 @@ def feature_extraction(epochs, sf, line_noise_freq=(59, 61),
             
         # extract and add spectral fit
         sp_exp = []
+        sp_exp_fooof = []
         for i in range(epochs.shape[0]):
             try:
+                ## IRASA-ing
                 s = yasa.irasa(epochs[i, idx,:], sf=sf, ch_names=ch, band=(1, 30),
                                return_fit=True, win_sec=2/1, verbose='error')[-1]['Slope'].to_numpy()[0] 
+                
+                ## Fooof-ing
+                # PSD window size argument
+                nperseg = (2 / 1) * sf
+
+                # Compute the modified periodogram (Welch)
+                freqs, psd = welch(epochs[i, idx, :], sf, nperseg=nperseg, average='median')
+                               
+                # FOOOF data
+                fg = fooof.FOOOF(max_n_peaks=5)
+                fg.fit(freqs, psd, freq_range=(1, 30)) 
+                
+                # Spectral exponent
+                s_fooof = fg.get_params(name='aperiodic_params', col='exponent')
+                
             except:
                 s = np.nan
+                s_fooof = np.nan
+                
             sp_exp.append(s)
+            sp_exp_fooof.append(s_fooof)
             
         sp_exp = np.asarray(sp_exp)
-        feat["Spectral_exp"] = sp_exp
+        sp_exp_fooof = np.asarray(sp_exp_fooof)
+        
+        feat["Spectral_exp_irasa"] = sp_exp
+        feat["Spectral_exp_fooof"] = sp_exp_fooof
             
         # Add power ratios for EEG
         delta = feat["Delta"]
@@ -248,8 +279,18 @@ def feature_extraction(epochs, sf, line_noise_freq=(59, 61),
         # Calculate entropy and fractal dimension features
         feat["Perm"] = np.apply_along_axis(ant.perm_entropy, axis=-1, arr=epochs[:, idx, :],
                                            normalize=True)
-        feat["Higuchi"] = np.apply_along_axis(ant.higuchi_fd, axis=-1, arr=epochs[:, idx, :])
+        # feat["Higuchi"] = np.apply_along_axis(ant.higuchi_fd, axis=-1, arr=epochs[:, idx, :]) # Doesnt run anymore
+        feat["Higuchi"] = np.apply_along_axis(lambda x: ant.higuchi_fd(x.flatten(), kmax=10), 
+                                              axis=-1, arr=epochs[:, idx, :])
         feat["Petrosian"] = ant.petrosian_fd(epochs[:, idx, :], axis=-1)
+        
+        # Analytical transformation 
+        from neurodsp.timefrequency import amp_by_time
+        amp = np.asarray([amp_by_time(epochs[j, idx, :], fs=sf) for j in range(epochs.shape[0])])
+
+        # Apply Lempel-Ziv
+        feat['lziv'] = np.apply_along_axis(lziv, axis=-1, arr=epochs[:, idx, :])
+        feat['lziv_power'] = np.apply_along_axis(lziv, axis=-1, arr=amp)
 
         # Create a pandas DataFrame from the dictionary
         df_features = pd.DataFrame.from_dict(feat).reset_index()

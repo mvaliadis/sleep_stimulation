@@ -11,7 +11,8 @@ import pandas as pd
 import os
 import pingouin as pg
 import matplotlib.pyplot as plt
-
+import seaborn as sns
+    
 def drop_bads_df(df, subject_nights=[('ChrSt', 1), ('UyDe', 1), ('IsEb', 2)]):
     from functools import reduce
     import operator
@@ -97,19 +98,51 @@ def nan_imputation_missing_data(df):
     
     return combined_df
 
+def filter_pvt_outliers(df, plot=False):
+    # Group data by 'Subject' and 'Session'
+    groups = df.groupby(['Subject', 'Night'])
+    
+    # Define a function to calculate IQR and remove outliers for each group
+    def filter_group(group):
+        Q1 = group['RT'].quantile(0.25)
+        Q3 = group['RT'].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - 1.5 * IQR
+        upper_bound = Q3 + 1.5 * IQR
+        return group[(group['RT'] >= lower_bound) & (group['RT'] <= upper_bound)]
+   
+    # Apply the function to each group and concatenate the results
+    data_filtered = groups.apply(filter_group).reset_index(drop=True)
+           
+    if plot:   
+        # Before removing outliers
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(x='Subject', y='RT', data=df)
+        plt.title('Before Removing Outliers')
+        plt.show()
+        
+        # After removing outliers
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(x='Subject', y='RT', data=data_filtered)
+        plt.title('After Removing Outliers')
+        plt.show()
+    
+    return data_filtered
+    
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
 
 #%%
 ## 0. PVT analysis
 df_pvt = pd.read_csv(os.path.join(stats_path, 'df_pvt.csv'), index_col=0)
 df_pvt = drop_bads_df(df_pvt)
+df_pvt = filter_pvt_outliers(df_pvt, plot=False)
 df_pvt_mean = df_pvt.groupby(['Subject','Night','Mode']).mean()
 df_pvt_mean = nan_imputation_missing_data(df_pvt_mean.reset_index()).reset_index(drop=True)
 
 # Plot
-pvt_plot(df_pvt_mean, dv='RT')
-pvt_plot(df_pvt_mean, dv='Lapse_Probability')
-pvt_plot(df_pvt_mean, dv='Lapses_Transformed')
+# pvt_plot(df_pvt_mean, dv='RT')
+# pvt_plot(df_pvt_mean, dv='Lapse_Probability')
+# pvt_plot(df_pvt_mean, dv='Lapses_Transformed')
 
 # Stats
 res_RT = pg.wilcoxon(x=df_pvt_mean.groupby(['Mode','Subject']).mean().loc['nmes'].RT,
