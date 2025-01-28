@@ -19,6 +19,7 @@ import scipy
 import yasa
 import statsmodels.api as sm
 import neurokit2 as nk 
+from matplotlib.lines import Line2D
 mne.set_log_level('ERROR')
 
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
@@ -123,6 +124,60 @@ def phase_targeting_plot(df):
     #plt.tight_layout()
     plt.show()
     
+def phase_targeting_plot_new(df):
+    # Set up a 2x2 grid for Target Site (x-axis) and Stimulation Condition (y-axis)
+    fig, axes = plt.subplots(nrows=2, ncols=2, figsize=(14, 10), subplot_kw={'aspect': 'equal'})
+
+    # Define the target sites and stimulation conditions
+    target_sites = ['C3', 'Fz']
+    conditions = ['nmes', 'pn']
+
+    # Iterate over target sites and stimulation conditions to place plots
+    for row, condition in enumerate(conditions):
+        for col, site in enumerate(target_sites):
+            # Filter data for the current combination of target site and condition
+            df_subset = df[(df['Target_Chan'] == site) & (df['Mode'] == condition)]
+
+            # Access the correct subplot based on row and column
+            ax = axes[row, col]
+
+            # Plot both sham and stim within the same subplot for comparison
+            for stim_type, group in df_subset.groupby('Stim'):
+                pg.plot_circmean(group['CircMean'], square=True, ax=ax,
+                                 kwargs_markers={'color': 'tab:blue' if stim_type == 'sham' else 'tab:green', 
+                                                 'marker': 'o', 'mfc': 'none', 'ms': 10},
+                                 kwargs_arrow={'width': 0.01, 'head_width': 0.1, 'head_length': 0.1,
+                                               'fc': 'tab:blue' if stim_type == 'sham' else 'tab:green', 
+                                               'ec': 'tab:blue' if stim_type == 'sham' else 'tab:green'})
+
+            # Set title for each subplot to indicate Target Site
+            ax.set_title(f"{site}", pad=30)
+
+            # Disable x and y ticks for clarity
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    # Add sub-axis labels for each Stimulation Condition
+    fig.text(0.08, 0.75, 'CLNMES', va='center', rotation='vertical', fontsize=16)
+    fig.text(0.08, 0.3, 'CLAS', va='center', rotation='vertical', fontsize=16)
+
+    # Add main axis labels for the entire figure
+    fig.text(0.5, 0.04, 'Target Site', ha='center', fontsize=18)
+    fig.text(0.04, 0.5, 'Stimulation Condition', va='center', rotation='vertical', fontsize=18)
+
+    # Adjust layout for better spacing between columns
+    plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1, hspace=0.6, wspace=0.25)
+
+    # Create custom legend for "stim" and "sham" conditions
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', label='Sham', markerfacecolor='tab:blue', markersize=10, markeredgecolor='tab:blue'),
+        Line2D([0], [0], marker='o', color='w', label='Stim', markerfacecolor='tab:green', markersize=10, markeredgecolor='tab:green')
+    ]
+    fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=2, frameon=False, fontsize=14)
+
+    # Display the plot
+    plt.show()    
+
 def phase_targeting_stats(df):
     # Initialize an empty list to store the results
     results = []
@@ -1361,7 +1416,9 @@ df_phase = pd.read_csv(os.path.join(stats_path, 'df_phase.csv'), index_col=0)
 df_phase = drop_bads_df(df_phase)
 
 # Plot
-phase_plot = phase_targeting_plot(df_phase)
+with sns.plotting_context('talk'):
+    #phase_plot = phase_targeting_plot(df_phase)
+    phase_plot = phase_targeting_plot_new(df_phase)
 
 # Stats
 phase_stats = phase_targeting_stats(df_phase)
