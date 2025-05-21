@@ -5,10 +5,13 @@ Created on Fri Apr  3 08:29:12 2020
 @author: neuro
 """
 
+import os
+os.environ['LD_LIBRARY_PATH'] = '/usr/lib/x86_64-linux-gnu:' + os.environ.get('LD_LIBRARY_PATH', '')
+
 import numpy as np
 from scipy import signal
 import matplotlib.pyplot as plt
-from sleepstim.sleep_funs import (load_xdf, channel_parser)
+#from sleepstim.sleep_funs import (load_xdf, channel_parser)
 #from mne.filter import filter_data, notch_filter
 # from scipy import signal
 # import scipy
@@ -23,7 +26,6 @@ import fooof
 import pandas as pd
 from scipy.linalg import eigh, eig
 import itertools
-import os
 import glob
 import statistics
 from tqdm import tqdm
@@ -32,6 +34,7 @@ import pingouin as pg
 mne.set_log_level("CRITICAL")
 sns.set(style='darkgrid', font_scale=1.2)
 
+#%%
 def surface_laplacian_pre(inst, sphere='auto', lambda2=1e-3,
                           stiffness=4, n_legendre_terms=50):
     picks = mne.pick_types(inst.info, meg=False, eeg=True, exclude=[])
@@ -791,14 +794,14 @@ def group_stats(gavs, obj, title=None):
     im1, _ = mne.viz.plot_topomap(contrast.mean(0), 
                                   pos=gavs.info,
                                   axes=ax[0], show=0, cmap='RdBu_r',
-                                  names=None, show_names=False)
+                                  names=None)
     cbar1 = fig.colorbar(im1, fraction=0.05, ax=ax[0])   
     cbar1.ax.set_ylabel(unit, rotation=270)
     plt.tight_layout()
     im2, _ = mne.viz.plot_topomap(t_obs, 
                                   pos=gavs.info, mask=df_stats['Sig'],
                                   axes=ax[1], show=0, cmap='RdBu_r',
-                                  names=None, show_names=False, 
+                                  names=None,  
                                   mask_params=dict(markersize=8, markerfacecolor='y'))
     cbar2 = fig.colorbar(im2, fraction=0.05, ax=ax[1])   
     cbar2.ax.set_ylabel('t-stat', rotation=270)
@@ -807,8 +810,8 @@ def group_stats(gavs, obj, title=None):
     plt.show()
     
 def pre_process_so_local_gavs():
-    path = '/media/administrator/data/Study_2_data/processed_data/*.fif'
-    fig_path = '/media/administrator/data/Study_2_data/figures/group/'
+    path = '/media/administrator/data/Study_2_data/Testing/processed_data/*.fif'
+    fig_path = '/media/administrator/data/Study_2_data/Testing/figures/group/'
     df = pd.DataFrame(columns=['Subject','Target_Chan','Condition',
                                'Peak','Reference','Trials','Epochs'])
                                #'Spatial_patterns', 'Spatial_complexity'])
@@ -853,16 +856,27 @@ def pre_process_so_local_gavs():
             # yasa.topoplot(pd.Series(weighted_patterns[:,0], epochs.ch_names), cmap='Spectral_r')
             
             
-            df = df.append({'Subject': f.split('/')[-1].split('_')[0],
-                            'Target_Chan': f.split('/')[-1].split('_')[2],
-                            'Condition': f.split('/')[-1].split('_')[1],
-                            'Peak': f.split('/')[-1].split('_')[3],
-                            'Reference': f.split('/')[-1].split('_')[-2],
-                            'Trials': int(len(epochs)),
-                            'Epochs': epochs.average()},
-                            #'Spatial_patterns': weighted_patterns[:, 0:32],
-                            #'Spatial_complexiy': metric}, 
-                            ignore_index=True)
+            # df = df.append({'Subject': f.split('/')[-1].split('_')[0],
+            #                 'Target_Chan': f.split('/')[-1].split('_')[2],
+            #                 'Condition': f.split('/')[-1].split('_')[1],
+            #                 'Peak': f.split('/')[-1].split('_')[3],
+            #                 'Reference': f.split('/')[-1].split('_')[-2],
+            #                 'Trials': int(len(epochs)),
+            #                 'Epochs': epochs.average()},
+            #                 #'Spatial_patterns': weighted_patterns[:, 0:32],
+            #                 #'Spatial_complexiy': metric}, 
+            #                 ignore_index=True)
+            
+            new_row = pd.DataFrame({
+                'Subject': [f.split('/')[-1].split('_')[0]],
+                'Target_Chan': [f.split('/')[-1].split('_')[2]],
+                'Condition': [f.split('/')[-1].split('_')[1]],
+                'Peak': [f.split('/')[-1].split('_')[3]],
+                'Reference': [f.split('/')[-1].split('_')[-2]],
+                'Trials': [int(len(epochs))],
+                'Epochs': [epochs.average()]
+            })
+            df = pd.concat([df, new_row], ignore_index=True)            
         
     # remove nights with too few trials
     df = df[df.Trials>=50].reset_index(drop=True)
@@ -883,7 +897,8 @@ def pre_process_so_local_gavs():
                             time_format = "%0.2f s")
         times = np.asarray([-0.50, -0.25, 0, .015])
  
-        gavs.plot_topomap(times=times, title=f'{item[0][0]} {item[0][1]} {item[0][2]}')
+        gavs.plot_topomap(times=times)
+        plt.suptitle(f'{item[0][0]} {item[0][1]} {item[0][2]}')
         plt.savefig(fig_path + f'{item[0][0]}_{item[0][1]}_{item[0][2]}_group_topo.png')
                   
         gavs.plot_joint(times, ts_args = ts_args, topomap_args = topomap_args,
@@ -902,6 +917,65 @@ def pre_process_so_local_gavs():
     return df, df_evoked 
 
 def create_subj_comp_evoked(df):
+    subject = list(dict.fromkeys(list(df.Subject)))
+    condition = list(dict.fromkeys(list(df.Condition)))
+    peaks = list(dict.fromkeys(list(df.Peak)))
+    refs = list(dict.fromkeys(list(df.Reference)))
+    rows = []  # list to accumulate new rows
+    
+    for sub in subject:
+        sub_res = df[df.Subject == sub]
+        for cond in condition:
+            cond_sub_res = sub_res[sub_res.Condition == cond]
+            for peak in peaks:
+                p_cond_sub_res = cond_sub_res[cond_sub_res.Peak == peak]
+                for ref in refs:
+                    ref_p_cond_sub_res = p_cond_sub_res[p_cond_sub_res.Reference == ref]
+                    ## Create comparision object
+                    # c3 c4 comparison  
+                    try:
+                        gav_comp_c3_c4 = mne.combine_evoked(
+                            [list(ref_p_cond_sub_res[ref_p_cond_sub_res.Target_Chan=='C3'].Epochs)[0], 
+                             list(ref_p_cond_sub_res[ref_p_cond_sub_res.Target_Chan=='C4'].Epochs)[0]],
+                            weights=[1, -1])
+                    except Exception as e:
+                        gav_comp_c3_c4 = 0
+                        
+                    # c3 fz comparison  
+                    try:
+                        gav_comp_c3_fz = mne.combine_evoked(
+                            [list(ref_p_cond_sub_res[ref_p_cond_sub_res.Target_Chan=='C3'].Epochs)[0], 
+                             list(ref_p_cond_sub_res[ref_p_cond_sub_res.Target_Chan=='Fz'].Epochs)[0]],
+                            weights=[1, -1])
+                    except Exception as e:
+                        gav_comp_c3_fz = 0
+                                        
+                    # fz c4 comparison  
+                    try:
+                        gav_comp_fz_c4 = mne.combine_evoked(
+                            [list(ref_p_cond_sub_res[ref_p_cond_sub_res.Target_Chan=='Fz'].Epochs)[0], 
+                             list(ref_p_cond_sub_res[ref_p_cond_sub_res.Target_Chan=='C4'].Epochs)[0]],
+                            weights=[1, -1])
+                    except Exception as e:
+                        gav_comp_fz_c4 = 0
+                        
+                    # log subject and comparison results
+                    new_row = {
+                        'Subject': sub, 
+                        'Condition': cond,
+                        'Peak': peak,
+                        'Reference': ref,
+                        'Difference_c3_c4': gav_comp_c3_c4,
+                        'Difference_c3_fz': gav_comp_c3_fz,
+                        'Difference_fz_c4': gav_comp_fz_c4
+                    }
+                    
+                    rows.append(new_row)
+        
+    comp_df = pd.DataFrame(rows)
+    return comp_df
+
+def create_subj_comp_evoked_dnu(df):
     subject = list(dict.fromkeys(list(df.Subject)))
     condition = list(dict.fromkeys(list(df.Condition)))
     peaks = list(dict.fromkeys(list(df.Peak)))
@@ -971,7 +1045,9 @@ def group_stats_contrast(df_evoked, gavs, path=None, title=None, save=True):
                 try:
                     adjacency, ch_names = mne.channels.find_ch_adjacency(gavs.info, ch_type='eeg')
                     it_mean = item.get_data(units='uV', tmin=-0.01).mean(1)
-                    it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True).groupby(["channel"], sort=False).mean()
+                    #it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True).groupby(["channel"], sort=False).mean()
+                    it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True)\
+                        .groupby("channel", sort=False, observed=False).mean(numeric_only=True)
                     it_mean_df['subject'] = f'Subject_{k}'
                     unit='uV'
                     eps_df.append(it_mean_df)
@@ -979,7 +1055,9 @@ def group_stats_contrast(df_evoked, gavs, path=None, title=None, save=True):
                 except:
                     adjacency, ch_names = mne.channels.find_ch_adjacency(gavs.info, ch_type=None)
                     it_mean = item.get_data(tmin=-0.01).mean(1)*1e3
-                    it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True).groupby(["channel"], sort=False).mean()
+                    #it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True).groupby(["channel"], sort=False).mean()
+                    it_mean_df = item.copy().crop(tmin=-0.01).to_data_frame(long_format=True)\
+                        .groupby("channel", sort=False, observed=False).mean(numeric_only=True)
                     it_mean_df['subject'] = f'Subject_{k}'
                     unit='mV/m2'
                     eps_df.append(it_mean_df)
@@ -1037,14 +1115,14 @@ def group_stats_contrast(df_evoked, gavs, path=None, title=None, save=True):
             im1, _ = mne.viz.plot_topomap(contrast.mean(0), 
                                           pos=gavs.info,
                                           axes=ax[0], show=0, cmap='RdBu_r',
-                                          names=None, show_names=False)
+                                          names=None)
             cbar1 = fig.colorbar(im1, fraction=0.05, ax=ax[0])   
             cbar1.ax.set_ylabel(unit, rotation=270)
             plt.tight_layout()
             im2, _ = mne.viz.plot_topomap(t_obs, 
                                           pos=gavs.info, mask=df_stats['Sig'],
                                           axes=ax[1], show=0, cmap='RdBu_r',
-                                          names=None, show_names=False, 
+                                          names=None,  
                                           mask_params=dict(markersize=8, markerfacecolor='y'))
             cbar2 = fig.colorbar(im2, fraction=0.05, ax=ax[1])   
             cbar2.ax.set_ylabel('t-stat', rotation=270)
@@ -1052,7 +1130,7 @@ def group_stats_contrast(df_evoked, gavs, path=None, title=None, save=True):
             im3, _ = mne.viz.plot_topomap(ds, pos=gavs.info, 
                                           mask=None, #df_stats['Max_stat'],
                                           axes=ax[2], show=0, cmap='RdBu_r',
-                                          names=None, show_names=False, 
+                                          names=None, 
                                           mask_params=dict(markersize=8, markerfacecolor='y'))
             cbar3 = fig.colorbar(im3, fraction=0.05, ax=ax[2])   
             cbar3.ax.set_ylabel("Cohen's d", rotation=270)
@@ -1064,7 +1142,7 @@ def group_stats_contrast(df_evoked, gavs, path=None, title=None, save=True):
             plt.close('all')
         
         df_ranova_save = pd.concat(df_rmanova)
-        df_ranova_save.to_csv('/media/administrator/data/Study_2_data/stats/rmanova.csv')
+        df_ranova_save.to_csv('/media/administrator/data/Study_2_data/Testing/stats/rmanova.csv')
         
 def group_stats_topo_correlations(df, p_path):
     ## Validation stats with topomap correlations 
@@ -1130,17 +1208,29 @@ def group_stats_topo_correlations(df, p_path):
             print(f' Within: {mega[within_index][0]}, Between: {mega[between_index][0]}')
             
             
-            df_corr = df_corr.append(pd.DataFrame({'Subject_Cond': unity,
-                                                    'Target': [mega[within_index][0][0] + '_' + mega[between_index][0][0]]*len(unity),
-                                                    'Target_means': [mega[within_index][0][0]]*len(unity),
-                                                    'Within': [mega[between_index][0][0]]*len(unity), 
-                                                    'Peak': [mega[within_index][0][1]]*len(unity),
-                                                    'Reference': [mega[within_index][0][2]]*len(unity),
-                                                    'Spearman_rho': comparison, 
-                                                    'Fishers_ztransformed_rho': list(fishers_comparison)}))
+    #         df_corr = df_corr.append(pd.DataFrame({'Subject_Cond': unity,
+    #                                                 'Target': [mega[within_index][0][0] + '_' + mega[between_index][0][0]]*len(unity),
+    #                                                 'Target_means': [mega[within_index][0][0]]*len(unity),
+    #                                                 'Within': [mega[between_index][0][0]]*len(unity), 
+    #                                                 'Peak': [mega[within_index][0][1]]*len(unity),
+    #                                                 'Reference': [mega[within_index][0][2]]*len(unity),
+    #                                                 'Spearman_rho': comparison, 
+    #                                                 'Fishers_ztransformed_rho': list(fishers_comparison)}))
+            new_df = pd.DataFrame({
+                            'Subject_Cond': unity,
+                            'Target': [mega[within_index][0][0] + '_' + mega[between_index][0][0]] * len(unity),
+                            'Target_means': [mega[within_index][0][0]] * len(unity),
+                            'Within': [mega[between_index][0][0]] * len(unity), 
+                            'Peak': [mega[within_index][0][1]] * len(unity),
+                            'Reference': [mega[within_index][0][2]] * len(unity),
+                            'Spearman_rho': comparison, 
+                            'Fishers_ztransformed_rho': list(fishers_comparison)
+                        })
+            df_corr = pd.concat([df_corr, new_df], ignore_index=True)
+
     # reomve duplicates
     df_corr = df_corr.groupby(['Subject_Cond', 'Target', 'Target_means',
-                                'Peak', 'Reference']).mean().reset_index()
+                                'Peak', 'Reference']).mean(numeric_only=True).reset_index()
             
     # mark within versus between
     comparisons = []
@@ -1153,7 +1243,7 @@ def group_stats_topo_correlations(df, p_path):
     
     # mark when within is bigger than between --> descriptive stat
     df_corr_stacked = df_corr.groupby(['Subject_Cond','Peak',
-                                        'Reference','Target_means']).mean().reset_index()
+                                        'Reference','Target_means']).mean(numeric_only=True).reset_index()
     statuses = []
     for (sub, peak, ref, target), df_ in df_corr.groupby(['Subject_Cond','Peak',
                                                           'Reference','Target_means']):
@@ -1167,7 +1257,7 @@ def group_stats_topo_correlations(df, p_path):
         else:
             statuses.append(False)
     df_corr_stacked['Within_v_Between'] = statuses
-    wb = df_corr_stacked.groupby(['Peak','Reference','Target_means']).mean()['Within_v_Between']
+    wb = df_corr_stacked.groupby(['Peak','Reference','Target_means']).mean(numeric_only=True)['Within_v_Between']
     print(wb)
     
     # stack into within and between columns for t-test stats and paired plots
@@ -1182,7 +1272,7 @@ def group_stats_topo_correlations(df, p_path):
     for j, [(peak, ref, targets), (df_)] in enumerate(df_corr.groupby(['Peak','Reference','Target_means'])):
         print(j, peak, ref, targets)
         df_new_ = df_.groupby(['Subject_Cond','Target_means', 'Peak', 
-                               'Reference','Comparison']).mean().reset_index()
+                               'Reference','Comparison']).mean(numeric_only=True).reset_index()
         # mark when within is bigger than between --> descriptive stat
         statuses = []
         for (sub, peak, ref, target), df_ in df_new_.groupby(['Subject_Cond','Peak',
@@ -1208,7 +1298,7 @@ def group_stats_topo_correlations(df, p_path):
                                   subject='Subject_Cond', padjust=None, data=df_new_)
         pg.plot_paired(df_new_, dv='Fishers_ztransformed_rho', within='Comparison',
                        subject='Subject_Cond', order=None, boxplot=True,
-                       boxplot_in_front=True, orient='v', figsize=(4, 4), dpi=100, 
+                       boxplot_in_front=True, orient='v',  
                        ax=axs.flatten()[j], colors=['green', 'grey', 'indianred'], 
                        pointplot_kwargs={'scale': 0.6, 'marker': '.'}, 
                        boxplot_kwargs={'color': 'lightslategrey', 'width': 0.2})   
@@ -1220,7 +1310,7 @@ def group_stats_topo_correlations(df, p_path):
     plt.show()
     res = pd.concat(ttests).reset_index(drop=True)
     res.to_csv(p_path + 'topo_ttests.csv')
-    fig_path = '/media/administrator/data/Study_2_data/figures/group/'
+    fig_path = '/media/administrator/data/Study_2_data/Testing/figures/group/'
     plt.savefig(fig_path + 'Paired_plots_topo_correlations.png')
     
     # Stats - compute for each peak, reference, seperately
@@ -1249,19 +1339,19 @@ def group_stats_topo_correlations(df, p_path):
 #pre_process_so_local_epochs()
 
 ## 2. Run statistical test on subject vs. group correlations 
-# df, df_evoked = pre_process_so_local_gavs()
-p_path = '/media/administrator/data/Study_2_data/stats/'
+#df, df_evoked = pre_process_so_local_gavs()
+p_path = '/media/administrator/data/Study_2_data/Testing/stats/'
 # df.to_pickle(p_path + 'df.p')
 # df_evoked.to_pickle(p_path + 'df_contrast.p')
 
 ## 3. Load dataframes 
-df = pd.read_pickle('/media/administrator/data/Study_2_data/stats/df.p')
-df_evoked = pd.read_pickle('/media/administrator/data/Study_2_data/stats/df_contrast.p')
+df = pd.read_pickle('/media/administrator/data/Study_2_data/Testing/stats/df.p')
+df_evoked = pd.read_pickle('/media/administrator/data/Study_2_data/Testing/stats/df_contrast.p')
 df = df[df.Reference=='csd']
 df_evoked = df_evoked[df_evoked.Reference=='csd']
 
 ## 4. Topo correlation stats
-#group_stats_topo_correlations(df, p_path)
+group_stats_topo_correlations(df, p_path)
 
 #%%
 # #%%

@@ -24,7 +24,9 @@ mne.set_log_level('ERROR')
 
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
 
-## Helper functions
+#%%
+## Helper Functions
+
 def plot_mode_condition(data, dv, ax, title):
     # Plot paired data 
     pg.plot_paired(data=data,
@@ -1353,6 +1355,7 @@ def erpac_stats(erpac, tmin, tmax, target, mode, times=(-2, 2)):
     plt.tight_layout()
     plt.show()
     
+
 #%%
 ## Stats Pipeline
 
@@ -1430,6 +1433,121 @@ df_evoked = pd.read_pickle(os.path.join(stats_path, 'df_evokeds.p')) #'df_evoked
 df_evoked = drop_bads_df(df_evoked)
 df_evoked.set_index(['Mode','Subject','Night'], inplace=True)
  
+all_times = (0.08, 0.18, 0.29, 0.35, 0.37, 0.6, 0.9)
+mne.grand_average(list(df_evoked['Evoked_stim_c3'].loc['pn'])).plot_topomap(all_times,
+                                                                         ncols=7,
+                                                                         nrows="auto")
+plt.xlabel('CLAS : Motor Target')
+mne.grand_average(list(df_evoked['Contrast_c3'].loc['nmes'])).plot_topomap(all_times,
+                                                                         ncols=7,
+                                                                         nrows="auto")
+plt.xlabel('CLNMES : Motor Target')
+mne.grand_average(list(df_evoked['Contrast_fz'].loc['pn'])).plot_topomap(all_times,
+                                                                         ncols=7,
+                                                                         nrows="auto")
+plt.xlabel('CLAS : Frontal Target')
+mne.grand_average(list(df_evoked['Contrast_fz'].loc['nmes'])).plot_topomap(all_times,
+                                                                         ncols=7,
+                                                                         nrows="auto")
+plt.xlabel('CLNMES : Frontal Target')
+
+#%%
+# -------------------------
+# Settings and Data
+# -------------------------
+
+with sns.plotting_context("talk"):
+    # -------------------------
+    # Settings and Data
+    # -------------------------
+    # Define the desired time points (in seconds)
+    all_times = (0.08, 0.18, 0.29, 0.35, 0.37, 0.6, 0.9)
+    n_times = len(all_times)
+
+    # Choose the target channel to highlight (e.g., 'C3')
+    target_channel = 'Fz'
+
+    # Compute your grand average evoked for one condition.
+    # (Replace with your actual evoked objects; here we assume it's CSD-transformed.)
+    evoked = mne.grand_average(list(df_evoked['Evoked_stim_fz'].loc['pn']))
+
+    # -------------------------
+    # Create a Full Mask for the Target Channel
+    # -------------------------
+    n_channels = len(evoked.info['ch_names'])
+    n_total_times = evoked.data.shape[1]
+    mask_full = np.zeros((n_channels, n_total_times), dtype=bool)
+
+    # For each desired time, find the closest index in evoked.times.
+    time_idx = [np.argmin(np.abs(evoked.times - t)) for t in all_times]
+
+    # Find the index for the target channel.
+    try:
+        chan_idx = evoked.info['ch_names'].index(target_channel)
+    except ValueError:
+        raise ValueError(f"Target channel {target_channel} not found in evoked.info['ch_names'].")
+
+    # Set the mask True for the target channel at each selected time index.
+    for t_idx in time_idx:
+        mask_full[chan_idx, t_idx] = True
+
+    # Define the appearance of the mask marker (an unfilled circle)
+    mask_params = dict(markersize=15, markerfacecolor='g')
+
+    # -------------------------
+    # Create a Custom Subplot Grid with Custom Width Ratios
+    # -------------------------
+    # Total columns: 1 (vertical title) + n_times (topomaps) + 1 (colorbar)
+    total_cols = n_times + 2
+    # Set custom width ratios: slim for vertical title and colorbar
+    gridspec_kw = {'width_ratios': [0.3] + [1] * n_times + [0.3]}
+
+    # Create the subplot grid.
+    fig, axes = plt.subplots(nrows=1, ncols=total_cols,
+                             figsize=(3 * total_cols, 4),
+                             gridspec_kw=gridspec_kw)
+
+    # -------------------------
+    # Add a Vertical Title in the First Column
+    # -------------------------
+    title_ax = axes[0]
+    title_ax.axis('off')
+    title_ax.text(0.5, 0.5, 'CLAS Frontal Target',
+                  ha='center', va='center', rotation=90,
+                  fontsize=18)  # Increase fontsize here
+
+    # -------------------------
+    # Prepare Axes for Topomaps and Colorbar
+    # -------------------------
+    # The remaining axes (columns 1 to total_cols-1) are used by plot_topomap.
+    # MNE expects a list of axes of length (n_times + 1):
+    # first n_times for topomaps and the last for the colorbar.
+    plot_axes = axes[1:]
+
+    # -------------------------
+    # Plot the Topomaps with the Target Channel Highlighted
+    # -------------------------
+    evoked.plot_topomap(
+        times=all_times,
+        axes=plot_axes,   # List of (n_times+1) axes
+        colorbar=True,
+        nrows=1,
+        ncols=n_times,    # One topomap per time point
+        mask=mask_full,   # Use the full mask
+        mask_params=mask_params,
+        cbar_fmt='%3.0f', # Format colorbar tick labels as integers (no trailing decimals)
+        show=False       # We'll show after further adjustments
+    )
+
+    # -------------------------
+    # Increase the Colorbar Tick Label Size
+    # -------------------------
+    cbar_ax = plot_axes[-1]
+    cbar_ax.tick_params(axis='y', labelsize=20)  # Increase tick label fontsize
+
+    plt.tight_layout()
+    plt.show()
+    
 #%%
 ## 3. Time frequency analyses
 df_tfr = pd.read_pickle(os.path.join(stats_path, 'df_tfr.p'))
@@ -1439,27 +1557,268 @@ df_tfr = drop_bads_df(df_tfr)
 ## 4. ndPAC analysis
 df_ndpac = pd.read_csv(os.path.join(stats_path, 'df_ndpac.csv'), index_col=0)
 df_ndpac = drop_bads_df(df_ndpac)
-
 df_ndpac = df_ndpac[df_ndpac.Session=='Post'].reset_index(drop=True)
 
-# df_ndpac.set_index(['Mode','Stim','Target_Chan','Chan']).loc['nmes','stim','c3']
-d =  (df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['nmes','stim','c3'].ndPAC  
-    - df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['nmes','sham','c3'].ndPAC)
+# d =  (df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean(numeric_only=True).loc['nmes','stim','c3'].ndPAC  
+#     - df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean(numeric_only=True).loc['nmes','sham','c3'].ndPAC)
      
-yasa.topoplot(d)
+# yasa.topoplot(d)
 
-d = (df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['pn','stim','c3'].ndPAC  
-     - df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean().loc['pn','sham','c3'].ndPAC)
+# d2 = (df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean(numeric_only=True).loc['pn','stim','c3'].ndPAC  
+#      - df_ndpac.groupby(['Mode','Stim','Target_Chan','Chan']).mean(numeric_only=True).loc['pn','sham','c3'].ndPAC)
      
-yasa.topoplot(d)
-plt.show()
+# yasa.topoplot(d)
+# yasa.topoplot(d - d2)
+# plt.show()
+
+def interpolate_topo(topo_data, ch_names, montage, sfreq=1000):
+    """
+    Interpolate missing sensor values using MNE's spherical spline interpolation.
+
+    Parameters
+    ----------
+    topo_data : array-like, shape (n_channels,)
+        Sensor values (may contain NaNs).
+    ch_names : list of str
+        List of sensor names corresponding to topo_data.
+    montage : instance of mne.channels.DigMontage
+        Montage for sensor locations.
+    sfreq : int, optional
+        Sampling frequency (only needed for creating an Evoked object).
+
+    Returns
+    -------
+    interpolated : array, shape (n_channels,)
+        Interpolated sensor values.
+    """
+    info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types='eeg')
+    info.set_montage(montage)
+    # Create an Evoked object (single time point)
+    data = np.array(topo_data)[:, np.newaxis]
+    evoked = mne.EvokedArray(data, info)
+    # Mark channels with NaN as bad
+    bads = [ch for ch, val in zip(ch_names, topo_data) if np.isnan(val)]
+    evoked.info['bads'] = bads
+    evoked.interpolate_bads(reset_bads=True)
+    return evoked.data[:, 0]
+
+def compute_ndpac_contrast(df, mode, target_chan):
+    """
+    Compute the ndPAC contrast (stim - sham) for a given mode and target channel,
+    while preserving the Subject and Chan information.
+
+    Parameters
+    ----------
+    df : DataFrame
+        The ndPAC dataframe containing at least the columns:
+        'Subject', 'Mode', 'Stim', 'Target_Chan', 'Chan', and 'ndPAC'
+    mode : str
+        The mode to filter (e.g., 'nmes' or 'pn').
+    target_chan : str
+        The target channel to filter (e.g., 'c3' or 'fz').
+
+    Returns
+    -------
+    contrast : Series
+        A Series with a MultiIndex (Subject, Chan) containing the computed contrast.
+    """
+    # Filter for the given mode and target channel
+    df_sub = df[(df['Mode'] == mode) & (df['Target_Chan'] == target_chan)]
+    
+    # Pivot so that each row is one Subject and one recording channel ('Chan')
+    # with columns for each Stim condition ('stim' and 'sham')
+    pivot = df_sub.pivot_table(index=['Subject', 'Chan'],
+                               columns='Stim',
+                               values='ndPAC')
+    # Drop rows that are missing either condition
+    pivot = pivot.dropna()
+    
+    # Compute the contrast: stim - sham
+    contrast = pivot['stim'] - pivot['sham']
+    return contrast
+
+def compute_double_contrast_interpolated(df, mode1, mode2, target_chan, montage, sfreq=1000):
+    """
+    Compute the double contrast for a given target channel by subtracting the contrast
+    for two modes (e.g., nmes and pn), restrict to subjects & sensors common to both,
+    pivot the result into a subjects-by-sensors DataFrame, and interpolate missing sensor values.
+
+    The double contrast is defined as:
+        Double Contrast = (Contrast for mode1) - (Contrast for mode2)
+
+    Parameters
+    ----------
+    df : DataFrame
+        The ndPAC dataframe with columns:
+        'Subject', 'Mode', 'Stim', 'Target_Chan', 'Chan', and 'ndPAC'
+    mode1 : str
+        The first mode (e.g., 'nmes').
+    mode2 : str
+        The second mode (e.g., 'pn').
+    target_chan : str
+        The target channel to filter (e.g., 'c3' or 'fz').
+    montage : instance of mne.channels.DigMontage
+        The montage for EEG sensor locations.
+    sfreq : int, optional
+        Sampling frequency for creating the Evoked object (default is 1000).
+
+    Returns
+    -------
+    double_contrast_interpolated : DataFrame
+        A DataFrame (subjects × sensors) containing the interpolated double contrast.
+    """
+    # Compute contrast for each mode
+    contrast1 = compute_ndpac_contrast(df, mode1, target_chan)
+    contrast2 = compute_ndpac_contrast(df, mode2, target_chan)
+    
+    # Find the intersection of the full MultiIndex (Subject, Chan)
+    common_idx = contrast1.index.intersection(contrast2.index)
+    contrast1_common = contrast1.loc[common_idx]
+    contrast2_common = contrast2.loc[common_idx]
+    
+    # Compute the double contrast: mode1 - mode2
+    double_contrast = contrast1_common - contrast2_common
+    
+    # Pivot so that rows = Subjects and columns = sensors (Chan)
+    double_contrast_df = double_contrast.unstack('Chan')
+    
+    # Define a helper function to interpolate a single subject's topography.
+    def interpolate_subject_topo(row):
+        """
+        Given a row (a subject's sensor values), interpolate missing values.
+        """
+        ch_names = row.index.tolist()
+        topo = row.values
+        # If there are no NaNs, return the row as-is.
+        if not np.isnan(topo).any():
+            return row
+        # Otherwise, interpolate missing sensor values.
+        interpolated = interpolate_topo(topo, ch_names, montage, sfreq)
+        return pd.Series(interpolated, index=ch_names)
+    
+    # Apply interpolation for each subject.
+    double_contrast_interpolated = double_contrast_df.apply(interpolate_subject_topo, axis=1)
+    
+    return double_contrast_interpolated
+
+# -----------------------------
+# Example usage:
+# -----------------------------
+# Assume df_ndpac is your dataframe and you have a montage.
+# For instance, if using the standard 10-20 montage:
+montage = mne.channels.make_standard_montage('standard_1005')
+
+# Compute the interpolated double contrast for target channel 'c3'
+# with mode1 = 'nmes' and mode2 = 'pn'
+dc_c3_interpolated = compute_double_contrast_interpolated(df_ndpac, 'nmes', 'pn', 'c3', montage)
+dc_fz_interpolated = compute_double_contrast_interpolated(df_ndpac, 'nmes', 'pn', 'fz', montage)
+
+dc_c3_interpolated = dc_c3_interpolated.reindex(columns=ch_names)
+dc_fz_interpolated = dc_fz_interpolated.reindex(columns=ch_names)
+
+
+def group_ndpac_double_stats(C3_evokeds, Fz_evokeds, times=(-0.02, 0.02), zscore=False):
+    # copy dataframe
+    df_evoked_ = df_evoked.copy()
+
+    # prepare adjacency matrix (only takes eeg)
+    adj_epochs = mne.read_epochs('/media/administrator/Sleep_Data/Processed/Sleep/Intermediate/LuPf_1_1-epo.fif').crop(-2, 2)
+    adjacency, ch_names = mne.channels.find_ch_adjacency(adj_epochs.info, 'eeg')
+
+    # extract evoked data 
+    for con, name in zip([C3_evokeds, Fz_evokeds], ['C3 Double Contrast', 'Fz Double Contrast']):
+        evk = con.copy()
+        gavs = mne.grand_average(list(evk)).crop(tmin=times[0], tmax=times[1])
+        evk_np = np.concatenate([np.expand_dims(evk[idx].copy().crop(tmin=times[0], tmax=times[1]).get_data(), 0)*1e3 
+                                for idx in range(len(evk))], 0)
+        contrast = np.swapaxes(evk_np, 2, 1)
+
+        # zscore, if desired
+        if zscore:           
+            contrast = scipy.stats.zscore(contrast, axis=-1)
+            unit = 'z-score'
+        else:
+            unit = 'mV/m²'
+
+        # Threshold for cluster test
+        pval = 0.05 
+        dof = contrast.shape[0] - 1  # degrees of freedom for the test
+        thresh = scipy.stats.t.ppf(1 - pval / 2, dof)  # two-tailed, t distribution
+
+        # spatial permuation cluster test
+        t_obs, clusters, cluster_p_values, h0 = mne.stats.permutation_cluster_1samp_test(
+            contrast,                            # numpy array for contrast [n_subjects, n_voltage, n_channels]
+            n_permutations=1024,                 # 1000 is the minimum
+            threshold=thresh,                    # threshold for cluster formation
+            tail=0,                              # two-tailed test (1 or -1 for one-tailed)
+            n_jobs=-1,                           # increase value to speed up computations
+            adjacency=adjacency,                 # sparse matrix for channel adjacency as computed above
+            buffer_size=None,
+            out_type='mask',                     # returns a mask map instead of indices of sig. points
+            seed=1503
+        )           
+
+        if all(p > 0.05 for p in cluster_p_values):
+            print('No significant clusters found')
+            df_stats = pd.DataFrame({'Chan': ch_names, 
+                                     'T-Stat': t_obs.squeeze(), 
+                                     'Sig': [False] * len(ch_names)})  # Assuming 64 channels
+            mask = [False] * len(ch_names)
+        else:
+            min_p_value = min(cluster_p_values)
+            print(f"P-Value: {min_p_value}")
+            df_stats = pd.DataFrame({'Chan': ch_names, 
+                                     'T-Stat': t_obs.squeeze(), 
+                                     'Sig': clusters[np.argmin(cluster_p_values)]}
+                                    ) 
+            mask = clusters[np.argmin(cluster_p_values)][0]
+
+
+        df_stats = df_stats.set_index("Chan")
+
+        # Plot the results
+        fig, ax = plt.subplots(1, 2, figsize=(8,6))
+
+        im1, _ = mne.viz.plot_topomap(contrast.mean(0).squeeze(), 
+                                    pos=adj_epochs.info,
+                                    axes=ax[0], 
+                                    cmap='RdBu_r',
+                                    show=False, 
+                                    names=None)
+        cbar1 = fig.colorbar(im1, fraction=0.05, ax=ax[0])   
+        cbar1.ax.set_ylabel(unit, rotation=270)
+        plt.tight_layout()
+
+        if all(p > 0.05 for p in cluster_p_values): 
+            im2, _ = mne.viz.plot_topomap(t_obs.squeeze(), 
+                                        pos=adj_epochs.info,
+                                        axes=ax[1], 
+                                        cmap='RdBu_r',
+                                        names=None,
+                                        show=False,  
+                                    )
+        else:
+            im2, _ = mne.viz.plot_topomap(t_obs.squeeze(), 
+                            pos=adj_epochs.info,
+                            axes=ax[1], 
+                            mask=mask,
+                            cmap='RdBu_r',
+                            names=None,
+                            show=False,  
+                            mask_params=dict(markersize=8, markerfacecolor='y')
+                            )
+        cbar2 = fig.colorbar(im2, fraction=0.05, ax=ax[1])   
+        cbar2.ax.set_ylabel('t-stat', rotation=270)
+        plt.tight_layout()
+        plt.suptitle(name, fontsize=18)
+        plt.show()
 
 #%%
 ## 5. ERPAC analysis
 df_erpac = pd.read_pickle(os.path.join(stats_path, 'df_erpac.p'))
 df_erpac = drop_bads_df(df_erpac)
 
-plot_ergpac_diff(df_erpac, times=(-0.5, 2))
+plot_ergpac_diff(df_erpac, times=(-0.5, 2), do_stats=True)
         
 #%%
 # Extract grand averages for pinknoise stimulation
@@ -1644,7 +2003,7 @@ plt.show()
 
 #%%
 # ERP Stats
-erp_stats(df_evoked, length=[0, 2], thresh_method='ttest')
+erp_stats(df_evoked, length=[-2, 2], thresh_method='ttest')
 
 #%%
 ## . Granger Analysis
