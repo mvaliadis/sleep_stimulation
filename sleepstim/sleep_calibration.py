@@ -13,7 +13,8 @@ from os import chdir
 import liesl
 import reiz.marker
 import reiz
-from sleepstim.sleep_funs import SO_detection, sleep_staging, subject_param_pull
+from sleepstim.core.stimulation import SO_detection, subject_param_pull
+from sleepstim.core.classification import sleep_staging
 import matplotlib.pyplot as plt
 from reiz import clock
 import numpy as np

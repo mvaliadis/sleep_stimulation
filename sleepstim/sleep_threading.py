@@ -7,7 +7,7 @@ Created on Mon Feb 17 09:36:25 2020
 from os import chdir
 import liesl
 import reiz.marker
-from sleepstim.sleep_funs import PinkNoise
+from sleepstim.core.stimulation import PinkNoise
 import matplotlib.pyplot as plt
 from reiz import clock
 import numpy as np

@@ -19,7 +19,8 @@ from mne_connectivity import spectral_connectivity
 import scipy.stats as stats 
 import mne 
 import neurokit2 as nk
-from sleepstim.sleep_funs import (downsample_scaled, load_xdf)
+from sleepstim.core.dsp import downsample_scaled
+from sleepstim.core.io import load_xdf
 from sleepstim.Analysis.Resting_State.rs_preproc import subject_cond_parser
 from sleepstim.Analysis.TMS.tms_funcs import tkeo
 import yasa 

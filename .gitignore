@@ -1,0 +1,29 @@
+# Python cache files
+__pycache__/
+*.pyc
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Common data directories
+data/
+recordings/
+
+# Specific files to not ignore
+!eego-1020/waveguard64.txt
+!eego-1020/license.txt
+
+# Data files that should not be ignored by default
+# If specific instances of these files need to be ignored,
+# add them to the lines above or create more specific rules.
+# For example, to ignore a specific csv file in the data directory:
+# data/specific_file_to_ignore.csv
+!*.edf
+!*.xdf
+!*.csv
+!*.npy
+!*.p

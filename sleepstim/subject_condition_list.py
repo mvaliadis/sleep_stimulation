@@ -9,7 +9,7 @@ Created on Tue Mar  3 10:17:18 2020
 import numpy as np
 import random
 import csv
-from sleepstim.generate_subject_code import generate_subject_code as sc
+from sleepstim.core.utils import generate_subject_code as sc
 
 
 def generate_subject_condition(subjects, conditions, save_path):
