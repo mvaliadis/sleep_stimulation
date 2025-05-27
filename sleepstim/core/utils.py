@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""
-Core utility functions for sleepstim project.
-"""
+"""Core utility functions providing miscellaneous helper tools for the sleepstim project."""
 
 import numpy as np
 import mne # For mne.channels.make_standard_montage
 import logging # For transition_matrix
 from random import SystemRandom # Added import
+from functools import reduce # Added import
+import operator # Added import
+import pandas as pd # Added import for drop_bads_df
 
 sr = SystemRandom() # create an instance of the SystemRandom class - module level instance
 
@@ -60,78 +61,33 @@ def transition_matrix(transitions):
         return np.array([])
         
     max_state = np.max(unique_states)
-    # Ensure states are 0-indexed for matrix creation, or map them.
-    # For simplicity, assuming states are 0 to N-1.
-    # If states can be non-contiguous (e.g., 0, 2, 4), this needs adjustment.
-    # The original code assumed states = len(np.unique(transitions)), which works if states are 0,1,2,...N-1
-    # A more robust way might be to use max_state + 1 if states are 0-indexed.
-    
-    # Original logic:
-    # states_count = len(np.unique(transitions)) 
-    # if states_count == 5:
-    #     trans_matrix = [[0]*states_count for _ in range(states_count)] 
-    # else:
-    #     trans_matrix = [[0]*5 for _ in range(5)] # Default to 5x5 if not 5 unique states? This seems odd.
-    #     logging.warning(f'One of the datasets contains only {states_count} sleep stages, but a 5x5 matrix was created.')
 
-    # Revised logic for dynamic sizing based on max_state, assuming 0-indexed states:
-    num_states_dynamic = int(max_state + 1) # Ensure it's an int for matrix dimensions
+    num_states_dynamic = int(max_state + 1) 
     trans_matrix = np.zeros((num_states_dynamic, num_states_dynamic), dtype=int)
     
-    # extract instances of each state
-    # Ensure transitions is integer type for indexing
     transitions_int = transitions.astype(int)
-    for (i,j) in zip(transitions_int[:-1], transitions_int[1:]): # Iterate up to second to last
-        if i < num_states_dynamic and j < num_states_dynamic: # Bounds check
+    for (i,j) in zip(transitions_int[:-1], transitions_int[1:]): 
+        if i < num_states_dynamic and j < num_states_dynamic: 
             trans_matrix[i][j] += 1
         
     return trans_matrix
 
 def transition_matrix_prob(trans_matrix):
-    # convert occurences to a transitional probability matrix to indicate the 
-    # probability of transitioning from one state to the next
     if trans_matrix.size == 0:
         return np.array([])
         
     row_sums = trans_matrix.sum(axis=1, keepdims=True)
-    # Avoid division by zero for states with no transitions from them
-    # Replace 0s in row_sums with 1s to avoid division by zero, result will be 0 for these rows.
     probs = np.divide(trans_matrix, row_sums, out=np.zeros_like(trans_matrix, dtype=float), where=row_sums!=0)
 
     return np.round(probs.astype(float), 4)
 
 def thresholdcrossings(x, threshold):
-    """Find indices of threshold-crossings in a 1D array. 
-    
-    This function can be utilized to determine zero crossing as well as any 
-    negative or postive crossing. 
-
-    Parameters
-    ----------
-    x : np.array
-        One dimensional data vector.
-    threshold : float or int
-        The threshold value to check crossings against.
-
-    Returns
-    -------
-    idx_zc : np.array
-        Indices of threshold-crossings (indices are for the point *before* the crossing)
-    """
     pos = x > threshold
-    npos = ~pos # This is equivalent to x <= threshold
-    # Find where the sign of (x - threshold) changes
-    # (pos[:-1] & npos[1:]) captures positive to non-positive crossings
-    # (npos[:-1] & pos[1:]) captures non-positive to positive crossings
+    npos = ~pos 
     return ((pos[:-1] & npos[1:]) | (npos[:-1] & pos[1:])).nonzero()[0]
 
 def generate_subject_code(length, 
                       valid_chars=None):
-    """ generate_subject_code(length, check_char) -> subject code
-        length: the length of the created subject code
-        check_char: a Boolean function used to check the validity of a char
-    """
-    # sr instance is now at module level
     if valid_chars==None:
         valid_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         valid_chars += "0123456789"
@@ -139,12 +95,61 @@ def generate_subject_code(length,
     code = ""
     counter = 0
     while counter < length:
-        rnum = sr.randint(0, 128) # SystemRandom.randint is [a,b] inclusive
-        # Ensure rnum is within valid ASCII range for chr() if that's intended,
-        # or handle potential errors if rnum can be outside typical printable ASCII.
-        # For now, assuming 0-128 is fine for chr().
+        rnum = sr.randint(0, 128) 
         char = chr(rnum)
         if char in valid_chars:
-            code += char # Use chr(rnum) as per original
+            code += char 
             counter += 1
     return code
+
+def drop_bads_df(df, subject_col='subject', night_col='night', subject_nights_to_drop=[('ChrSt', 1), ('UyDe', 1), ('IsEb', 2)]):
+    """
+    Removes specified subject-night combinations from a DataFrame.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame. Must contain columns for subject identifiers and night numbers.
+    subject_col : str, optional
+        The name of the column in `df` that contains subject identifiers. Defaults to 'subject'.
+    night_col : str, optional
+        The name of the column in `df` that contains night numbers. Defaults to 'night'.
+    subject_nights_to_drop : list of tuples, optional
+        A list of (subject, night) tuples to be removed. 
+        Example: [('ChrSt', 1), ('UyDe', 1)]
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with the specified rows removed.
+    """
+    if df.empty:
+        return df
+
+    # Ensure the night numbers in subject_nights_to_drop match the dtype of the night_col in df
+    # If night_col is string, convert night numbers in subject_nights_to_drop to string.
+    # If night_col is int/float, convert night numbers in subject_nights_to_drop to that type.
+    example_night_val = df[night_col].iloc[0]
+    if isinstance(example_night_val, str):
+        processed_subject_nights = [(subj, str(night)) for subj, night in subject_nights_to_drop]
+    elif isinstance(example_night_val, (int, np.integer)):
+        processed_subject_nights = [(subj, int(night)) for subj, night in subject_nights_to_drop]
+    elif isinstance(example_night_val, (float, np.floating)):
+        processed_subject_nights = [(subj, float(night)) for subj, night in subject_nights_to_drop]
+    else:
+        processed_subject_nights = subject_nights_to_drop # Keep as is if type is unknown or mixed
+
+    # Create masks for each condition to drop
+    masks = []
+    for subj, night_val in processed_subject_nights:
+        masks.append(((df[subject_col] == subj) & (df[night_col] == night_val)))
+    
+    # Combine the individual masks with a logical OR
+    if masks:
+        combined_mask = reduce(operator.or_, masks)
+        # Apply the mask to filter out the rows
+        df_filtered = df[~combined_mask]
+    else: # No conditions to drop
+        df_filtered = df.copy()
+    
+    return df_filtered

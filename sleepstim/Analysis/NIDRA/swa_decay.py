@@ -161,6 +161,8 @@ def swa_decay(data, hypno, *, sf=None, ch_names=None, include=(2, 3), freq_swa=(
     # Convert to dataframe
     return pd.DataFrame(df_decay, index=ch_names)
 
+# Removed local definition of drop_bads_df, will be imported from sleepstim.core.utils
+
 #%%
 ## Additional funcs
 def swa_decay_stim(file, plot=True):
@@ -346,27 +348,7 @@ def plot_group_swa_decay(df, channel=None, log=False):
     
     plt.show()
        
-def drop_bads_df(df, subject_nights=[('ChrSt', 1), ('UyDe', 1), ('IsEb', 2)]):
-    from functools import reduce
-    import operator
-    # Ensure the night numbers are of the same type as in the DataFrame
-    # If Night is a string in the DataFrame, convert the night numbers to strings
-    subject_nights = [(subj, str(night)) if isinstance(df['Night'].iloc[0], str) else (subj, night) for subj, night in subject_nights]
-    
-    # Create masks for each condition to drop
-    masks = [((df['Subject'] == subj) & (df['Night'] == night)) for subj, night in subject_nights]
-    
-    # Combine the individual masks with a logical OR
-    if masks:
-        combined_mask = reduce(operator.or_, masks)
-    else:
-        combined_mask = pd.Series([False] * len(df))
-    
-    # Apply the mask to filter out the rows
-    df = df[~combined_mask]
-    return df
-
 # # Plot group SWA and SWE
 # df = pd.read_pickle('/media/administrator/Sleep_Data/Processed/Statistics/df_swa_decay.p')
-# df = drop_bads_df(df)
+# df = drop_bads_df(df) # This would now use the imported version
 # plot_group_swa_decay(df, channel=None)

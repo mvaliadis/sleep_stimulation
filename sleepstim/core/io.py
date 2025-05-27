@@ -15,6 +15,18 @@ import neurokit2 as nk # for nk.ecg_clean in process_raw_EDF_cfs
 from sleepstim.core.dsp import bfr_butter_filt, downsample_scaled
 
 def load_xdf(path: str):
+    """Loads XDF file streams into a dictionary.
+
+    Parameters
+    ----------
+    path : str
+        Path to the XDF file.
+
+    Returns
+    -------
+    stream_dict : dict
+        Dictionary where keys are stream names and values are stream data.
+    """
     streams, fileheader = pyxdf.load_xdf(path)
     stream_dict = {}
     for ix, stream in enumerate(streams):

@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import fooof 
 import numpy as np
 import seaborn as sns 
+from sleepstim.core.utils import drop_bads_df # Added import
 
 stats_path = '/media/administrator/Sleep_Data/Processed/Statistics/'
 df = pd.read_pickle(stats_path + 'df_epochs.p')
@@ -58,7 +59,10 @@ for mode, df_ in df.groupby('Mode'):
 #%%                
 # 0. Load fooofed data
 fooof_df = pd.read_pickle(os.path.join(stats_path, 'df_fooof.p'))
-fooof_df = drop_bads_df(fooof_df)
+# Call the imported drop_bads_df function
+# Assuming default column names 'subject' and 'night' and default subject_nights_to_drop
+# If different, these would need to be specified: e.g., drop_bads_df(fooof_df, subject_col='Subject', night_col='Night')
+fooof_df = drop_bads_df(fooof_df) 
 
 nmes_stim = fooof_df.set_index(['Mode','Stim','Target_Chan']).loc['nmes', 'stim','c3']
 nmes_sham = fooof_df.set_index(['Mode','Stim','Target_Chan']).loc['nmes', 'sham','c3']

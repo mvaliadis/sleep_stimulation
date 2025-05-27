@@ -40,9 +40,11 @@ from os import chdir as cd
 from os import listdir
 import os, shutil
 from sklearn.ensemble import IsolationForest
-from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
-                                  downsample_scaled, load_xdf, channel_parser, thresholdcrossings, 
-                                  plot_confusion_matrix)
+# Updated imports from sleepstim.core
+from sleepstim.core.dsp import bfr_butter_filt, bandpower, downsample_scaled
+from sleepstim.core.io import unravel_hypnogram_visbrain, load_xdf, channel_parser
+from sleepstim.core.utils import thresholdcrossings
+from sleepstim.core.plotting import plot_confusion_matrix
 #sns.set(style='darkgrid', font_scale=1.2)
 
 class Data_Struct:

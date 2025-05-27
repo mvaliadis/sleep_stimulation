@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Core stimulation logic for sleepstim project.
-"""
+"""Core functions for real-time sleep stage dependent auditory stimulation and parameter adjustments for the sleepstim project."""
 
 import numpy as np
 import pandas as pd
@@ -15,7 +13,10 @@ import reiz # reiz.marker and reiz.clock
 
 # Imports from other modules in this project
 from sleepstim.core.classification import stage_predictArrays, channel_failure
-from sleepstim.sleep_funs import coords # coords still from sleep_funs for now
+from sleepstim.core.utils import get_coords # Updated import for get_coords
+
+# Global variable coords is no longer imported, it will be fetched by get_coords()
+# coords = None # This can be removed if get_coords() is called within SO_detection when needed
 
 def subject_param_pull(file, subjID, evening, mean_pk2pk):
     """ This function pulls the participant parameter information from excel file to
@@ -149,10 +150,54 @@ class PinkNoise():
 
 def SO_detection(time_delay, volume, nepochsthresh = 4, minamp = -35, 
                  winshift_in_ms = 20, totalruntime = 12600):
+    """Detects slow oscillations (SO) in real-time EEG data and triggers auditory stimulation.
+
+    This function continuously monitors an LSL EEG stream, performs sleep staging based
+    on global variables, and if SWS is detected for a specified number of epochs,
+    it then attempts to detect slow oscillations on a target channel (typically C3).
+    If an SO meeting amplitude criteria is found, and no stimulation is currently blocked
+    (refractory period), it triggers auditory stimulation (e.g., pink noise)
+    timed according to the `time_delay` parameter relative to the SO detection.
+
+    Parameters
+    ----------
+    time_delay : float
+        The delay (in seconds) after SO detection to trigger the auditory stimulus.
+        Different values are used for up-state or down-state targeting.
+    volume : float
+        The volume level for the auditory stimulus (0 for sham, 1 for real stimulation).
+    nepochsthresh : int, optional
+        Number of consecutive SWS epochs required before SO detection is active. Default is 4.
+    minamp : float, optional
+        Minimum negative amplitude (microvolts) for SO detection relative to a baseline. Default is -35.
+    winshift_in_ms : int, optional
+        The interval (in milliseconds) at which the function attempts to pull new data
+        and perform detection. Default is 20.
+    totalruntime : int, optional
+        Total duration (in seconds) for which the SO detection and stimulation loop will run.
+        Default is 12600 (3.5 hours).
+
+    Global Variables
+    ----------------
+    stage_predictArrays : list
+        Expected to be populated by `sleep_staging` function, containing binary indicators
+        of SWS (1) or other stages (0).
+    channel_failure : list
+        Expected to be populated by `channel_failure_test`, indicating the status of EEG channels.
+        `channel_failure[0]` is used to check the status of the primary SO detection channel.
+    coords : array_like
+        Expected to be set by `get_coords`, containing electrode coordinates. (Currently not directly used within SO_detection itself but often part of the broader context).
+    """
     # These globals are now imported
     # global stage_predictArrays 
     # global channel_failure
-    # global coords 
+    # coords will be fetched by get_coords() inside this function if needed by uncommented code
+    # coords will be fetched by get_coords() inside this function if needed by uncommented code
+
+    # Initialize coords by calling get_coords()
+    # This is placed here in case future uncommented code needs it.
+    # The second return value (valid_channel_list) is ignored for now.
+    coords, _ = get_coords()
 
     sinfo = liesl.get_streaminfos_matching(type = 'EEG')
     if not sinfo:

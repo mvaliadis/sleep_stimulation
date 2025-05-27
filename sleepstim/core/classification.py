@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Core classification functions for sleepstim project.
-"""
+"""Core functions for sleep stage classification, including model selection and channel integrity checks for the sleepstim project."""
 
 import numpy as np
 import pickle

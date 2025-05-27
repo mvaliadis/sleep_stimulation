@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Core feature extraction functions for sleepstim project.
-"""
+"""Core functions for extracting features from EEG and other physiological signals for the sleepstim project."""
 
 import numpy as np
 import pandas as pd

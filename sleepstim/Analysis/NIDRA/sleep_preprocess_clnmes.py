@@ -21,6 +21,8 @@ from scipy import interpolate
 import pyprep
 mne.set_log_level('ERROR')
 
+from sleepstim.core.io import channel_parser
+
 def identify_bad_eegs(raw, 
                       deviation_threshold = 5.0,
                       extensive = False,
@@ -150,8 +152,8 @@ def preprocess_sleep_nmes_data(filename, save_path, save=True):
     # Extract recording data and information
     eego = xdf_file['eego']
     eego_data = eego.time_series
-    ch_names = eego.channel_labels.copy()
-    ch_types = eego.channel_types.copy()
+    # Use the imported channel_parser
+    ch_names, ch_types = channel_parser(eego['info'], eego_data)
     sfreq = int(eego.nominal_srate)
     times = eego.time_stamps.copy() 
     
@@ -262,24 +264,26 @@ def preprocess_sleep_nmes_data(filename, save_path, save=True):
     del xdf_file, eego
     gc.collect()    
     
-    # Rename certain channels
-    ch_names[ch_names.index('chan_7')] = 'ECG'
-    ch_names[ch_names.index('chan_19')] = 'EDC'
-    ch_names[ch_names.index('chan_20')] = 'EOG'
-    #ch_names[ch_names.index('chan_20')] = 'EOG_L'
-    #ch_names[ch_names.index('chan_21')] = 'EOG_R'
-    ch_names[ch_names.index('chan_22')] = 'EMG_L'
-    ch_names[ch_names.index('chan_23')] = 'EMG_R'
-    
-    # Reassign channel types
-    ch_types[0:64] = ['eeg']*64
-    ch_types[ch_names.index('ECG')] = 'ecg'
-    ch_types[ch_names.index('EDC')] = 'emg'
-    ch_types[ch_names.index('EOG')] = 'eog'
-    # ch_types[ch_names.index('EOG_L')] = 'eog'
-    # ch_types[ch_names.index('EOG_R')] = 'eog'
-    ch_types[ch_names.index('EMG_L')] = 'emg'
-    ch_types[ch_names.index('EMG_R')] = 'emg'
+    # The following lines for manual ch_names/ch_types manipulation are now
+    # handled by the imported channel_parser function.
+    # # Rename certain channels
+    # ch_names[ch_names.index('chan_7')] = 'ECG'
+    # ch_names[ch_names.index('chan_19')] = 'EDC'
+    # ch_names[ch_names.index('chan_20')] = 'EOG'
+    # #ch_names[ch_names.index('chan_20')] = 'EOG_L'
+    # #ch_names[ch_names.index('chan_21')] = 'EOG_R'
+    # ch_names[ch_names.index('chan_22')] = 'EMG_L'
+    # ch_names[ch_names.index('chan_23')] = 'EMG_R'
+    # 
+    # # Reassign channel types
+    # ch_types[0:64] = ['eeg']*64
+    # ch_types[ch_names.index('ECG')] = 'ecg'
+    # ch_types[ch_names.index('EDC')] = 'emg'
+    # ch_types[ch_names.index('EOG')] = 'eog'
+    # # ch_types[ch_names.index('EOG_L')] = 'eog'
+    # # ch_types[ch_names.index('EOG_R')] = 'eog'
+    # ch_types[ch_names.index('EMG_L')] = 'emg'
+    # ch_types[ch_names.index('EMG_R')] = 'emg'
     
     # Extract TKEO peaks from NMES stimulation
     #peaks, _ = tkeo(eego_data[:, ch_names.index('EDC')], sfreq)

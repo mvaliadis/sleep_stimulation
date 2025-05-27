@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Core DSP functions for sleepstim project.
-"""
+"""Core Digital Signal Processing (DSP) functions for filtering, referencing, and spectral analysis in the sleepstim project."""
 
 import numpy as np
 from scipy import signal, special

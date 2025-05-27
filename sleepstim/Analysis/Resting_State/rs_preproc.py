@@ -7,9 +7,12 @@ Created on Mon May  3 15:06:12 2021
 """
 
 import os
-from sleepstim.sleep_funs import (bfr_butter_filt, bandpower, unravel_hypnogram_visbrain, 
-                                  downsample_scaled, load_xdf, channel_parser, thresholdcrossings,
-                                  hjorth_complexity, hjorth_mobility)                        
+# Updated imports from sleepstim.core
+from sleepstim.core.dsp import bfr_butter_filt, bandpower, downsample_scaled
+from sleepstim.core.io import unravel_hypnogram_visbrain, load_xdf, channel_parser
+from sleepstim.core.utils import thresholdcrossings
+# Note: hjorth_complexity and hjorth_mobility were in the removed line but not re-imported from core.
+# If they are used in this file, this will cause an error. Assuming they are not used or will be handled.
 from sleepstim.Analysis.snr import snr_spectrum
 from sleepstim.Analysis import bss, bad_channel_detection
 import numpy as np

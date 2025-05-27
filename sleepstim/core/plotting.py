@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Core plotting functions for sleepstim project.
-"""
+"""Core plotting utilities for visualizing data and analysis results within the sleepstim project."""
 
 import numpy as np
 import matplotlib.pyplot as plt

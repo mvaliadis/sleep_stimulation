@@ -12,6 +12,7 @@ import numpy as np
 from collections import defaultdict
 import os 
 import matplotlib.pyplot as plt
+from sleepstim.Analysis.Behavioral.cmc import CMC # Added import
 import numpy as np
 import scipy.signal as signal 
 import scipy.stats as stats 

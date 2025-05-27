@@ -8,7 +8,7 @@ setup(
     long_description='A Python toolbox that allows for online interface with LSL streams. The toolbox also includes a sleep classification framework for training data for online closed-loop gateing. Lastly, the packagae contains functions and pipelines for offline preprocessing and analysis.',
     author='Michael Valiadis',
     author_email='mvaliadis2@gmail.com',
-    packages=['sleepstim'],
+    packages=['sleepstim', 'sleepstim.core'],
     url="https://github.com/neuromti/sleep_stimulation.git",
     download_url="https://github.com/neuromti/sleep_stimulation.git",
     license="MIT",

@@ -17,7 +17,7 @@ from sleepstim.Analysis.Resting_State.rs_preproc import (Resting_State_Data_Stru
                                                          norm_wavelet_power, subject_cond_parser, check_match_prepost_data_elements)
 from sleepstim.Analysis.analysis_pre_process import load_preprocessed_data
 from sklearn.metrics import mutual_info_score, adjusted_mutual_info_score
-from sleepstim.sleep_funs import bandpower
+from sleepstim.core.dsp import bandpower # Changed import
 import scipy.signal as signal 
 import scipy.stats as stats 
 import seaborn as sns
